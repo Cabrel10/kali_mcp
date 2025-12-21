@@ -7,7 +7,7 @@ Prevents LLM timeouts by running scans in background
 import asyncio
 import time
 import hashlib
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 from enum import Enum
 
