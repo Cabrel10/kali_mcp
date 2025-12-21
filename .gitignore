@@ -22,55 +22,24 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
-.venv
+ENV/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# API Keys & Secrets
+# Environment variables
 .env
-*.key
-*.pem
-secrets.json
-config.local.json
-*_PRIVATE*
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-scan_results.db
-test_db.db
 
 # Logs
 *.log
-logs/
-tool_logs/
-sessions/
 
-# Temporary files
-*.tmp
-temp_*
-*_backup.py
-*(Copie).py
-*_corrupted.py
-*_fixed.py
+# Local configuration
+config.yaml
 
-# OS
+# System Files
 .DS_Store
 Thumbs.db
-
-# MCP Specific
-/tmp/
-/cache/
-*.pcap
-*.cap
-
-# OpenRouter API Key (never commit)
-OPENROUTER_API_KEY
