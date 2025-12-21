@@ -1,0 +1,158 @@
+<?xml version="1.0" ?>
+<!DOCTYPE niktoscans SYSTEM "/var/lib/nikto/docs/nikto.dtd">
+<niktoscans>
+<niktoscan hoststest="0" options="-h https://165.210.32.134 -timeout 3600 -Format xml -o /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nikto_scan_165.210.32.134_20251010_124123.xml -Tuning x6" version="2.5.0" scanstart="Fri Oct 10 12:41:23 2025" scanend="Thu Jan  1 00:00:00 1970" scanelapsed=" seconds" nxmlversion="1.2">
+
+<scandetails targetip="165.210.32.134" targethostname="165.210.32.134" targetport="443" targetbanner="Microsoft-IIS/10.0" starttime="2025-10-10 12:41:24" sitename="https://165.210.32.134:443/" siteip="https://165.210.32.134:443/" hostheader="165.210.32.134" errors="0" checks="6903">
+<ssl ciphers="ECDHE-RSA-AES128-GCM-SHA256" issuers="/C=US/O=DigiCert Inc/OU=www.digicert.com/CN=GeoTrust TLS RSA CA G1" info="/C=CM/L=YAOUNDE/O=The CAMEROON TELECOMMUNICATIONS/CN=*.camtel.cm" altnames="" />
+
+<item id="999957" method="GET">
+<description><![CDATA[/: The anti-clickjacking X-Frame-Options header is not present.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/: Uncommon header 'x-requestid' found, with contents: 11c0f0fb-ec90-4fc4-966f-1ae155d5cb5b.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/: Uncommon header 'x-feserver' found, with contents: SYDEXMB06.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999970" method="GET">
+<description><![CDATA[/: The site uses TLS and the Strict-Transport-Security HTTP header is not defined.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security]]></references>
+</item>
+
+<item id="999103" method="GET">
+<description><![CDATA[/: The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[https://www.netsparker.com/web-vulnerability-scanner/vulnerabilities/missing-content-type-header/]]></references>
+</item>
+
+<item id="999986" method="GET">
+<description><![CDATA[/84636VY7.: Retrieved x-aspnet-version header: 4.0.30319.]]></description>
+<uri><![CDATA[/84636VY7.]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/84636VY7.]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/84636VY7.]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999988" method="GET">
+<description><![CDATA[/: The web server may reveal its internal or real IP in the Location header via a request to with HTTP/1.0. The value is "192.168.0.16".]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[CVE-2000-0649]]></references>
+</item>
+
+<item id="999986" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Retrieved x-powered-by header: ASP.NET.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999986" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Retrieved x-owa-version header: 15.1.2507.6.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'x-wssecurity-for' found, with contents: None.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'x-wssecurity-enabled' found, with contents: True.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'x-owa-version' found, with contents: 15.1.2507.6.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'x-oauth-enabled' found, with contents: True.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'request-id' found, with contents: 9c8eeee9-7d0f-4d06-acd9-f457cde4e75f.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/Autodiscover/Autodiscover.xml: Uncommon header 'x-soap-enabled' found, with contents: True.]]></description>
+<uri><![CDATA[/Autodiscover/Autodiscover.xml]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Autodiscover/Autodiscover.xml]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999986" method="GET">
+<description><![CDATA[/Microsoft-Server-ActiveSync: Microsoft Exchange Systems (CAS and OWA) may reveal the internal or real IP in the WWW-Authenticate header via a request to /Microsoft-Server-ActiveSync over HTTP/1.0. The value is "192.168.0.16".]]></description>
+<uri><![CDATA[/Microsoft-Server-ActiveSync]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/Microsoft-Server-ActiveSync]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/Microsoft-Server-ActiveSync]]></iplink>
+<references><![CDATA[CVE-2000-0649]]></references>
+</item>
+
+<item id="999992" method="GET">
+<description><![CDATA[Server is using a wildcard certificate: *.camtel.cm.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[https://en.wikipedia.org/wiki/Wildcard_certificate]]></references>
+</item>
+
+<item id="999993" method="GET">
+<description><![CDATA[Hostname '165.210.32.134' does not match certificate's names: *.camtel.cm.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://165.210.32.134:443/]]></namelink>
+<iplink><![CDATA[https://165.210.32.134:443/]]></iplink>
+<references><![CDATA[https://cwe.mitre.org/data/definitions/297.html]]></references>
+</item>
+
+<statistics elapsed="1540" itemsfound="18" itemstested="6903" endtime="2025-10-10 13:07:04" />
+</scandetails>
+</niktoscan>
+
+
+</niktoscans>

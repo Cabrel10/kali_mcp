@@ -1,0 +1,62 @@
+<?xml version="1.0" ?>
+<!DOCTYPE niktoscans SYSTEM "/var/lib/nikto/docs/nikto.dtd">
+<niktoscans>
+<niktoscan hoststest="0" options="-h http://testphp.vulnweb.com/ -Format xml -o /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nikto_scan_testphp.vulnweb.com__20250928_212230.xml -Tuning x 6" version="2.5.0" scanstart="Sun Sep 28 21:22:31 2025" scanend="Thu Jan  1 00:00:00 1970" scanelapsed=" seconds" nxmlversion="1.2">
+
+<scandetails targetip="44.228.249.3" targethostname="testphp.vulnweb.com" targetport="80" targetbanner="nginx/1.19.0" starttime="2025-09-28 21:22:33" sitename="http://testphp.vulnweb.com:80/" siteip="http://44.228.249.3:80/" hostheader="testphp.vulnweb.com" errors="0" checks="0">
+
+
+<item id="999986" method="GET">
+<description><![CDATA[/: Retrieved x-powered-by header: PHP/5.6.40-38+ubuntu20.04.1+deb.sury.org+1.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999957" method="GET">
+<description><![CDATA[/: The anti-clickjacking X-Frame-Options header is not present.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options]]></references>
+</item>
+
+<item id="999103" method="GET">
+<description><![CDATA[/: The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/]]></iplink>
+<references><![CDATA[https://www.netsparker.com/web-vulnerability-scanner/vulnerabilities/missing-content-type-header/]]></references>
+</item>
+
+<item id="999982" method="GET">
+<description><![CDATA[/clientaccesspolicy.xml contains a full wildcard entry.]]></description>
+<uri><![CDATA[/clientaccesspolicy.xml]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/clientaccesspolicy.xml]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/clientaccesspolicy.xml]]></iplink>
+<references><![CDATA[https://docs.microsoft.com/en-us/previous-versions/windows/silverlight/dotnet-windows-silverlight/cc197955(v=vs.95)?redirectedfrom=MSDN]]></references>
+</item>
+
+<item id="999981" method="GET">
+<description><![CDATA[/clientaccesspolicy.xml contains 12 lines which should be manually viewed for improper domains or wildcards.]]></description>
+<uri><![CDATA[/clientaccesspolicy.xml]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/clientaccesspolicy.xml]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/clientaccesspolicy.xml]]></iplink>
+<references><![CDATA[https://www.acunetix.com/vulnerabilities/web/insecure-clientaccesspolicy-xml-file/]]></references>
+</item>
+
+<item id="999975" method="GET">
+<description><![CDATA[/crossdomain.xml contains a full wildcard entry.]]></description>
+<uri><![CDATA[/crossdomain.xml]]></uri>
+<namelink><![CDATA[http://testphp.vulnweb.com:80/crossdomain.xml]]></namelink>
+<iplink><![CDATA[http://44.228.249.3:80/crossdomain.xml]]></iplink>
+<references><![CDATA[http://jeremiahgrossman.blogspot.com/2008/05/crossdomainxml-invites-cross-site.html]]></references>
+</item>
+
+<statistics elapsed="67" itemsfound="6" itemstested="0" endtime="2025-09-28 21:23:40" />
+</scandetails>
+</niktoscan>
+
+
+</niktoscans>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sun Oct 26 15:15:34 2025 as: /usr/lib/nmap/nmap -&#45;privileged -sV -sC -T3 -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/sessions/20251026_094925/nmap_sip_5060_simple.xml -p 5060 194.95.114.28 -->
+<nmaprun scanner="nmap" args="/usr/lib/nmap/nmap -&#45;privileged -sV -sC -T3 -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/sessions/20251026_094925/nmap_sip_5060_simple.xml -p 5060 194.95.114.28" start="1761491734" startstr="Sun Oct 26 15:15:34 2025" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="1" services="5060"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
+<address addr="194.95.114.28" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+</hosthint>
+<host starttime="1761491735" endtime="1761491917"><status state="up" reason="syn-ack" reason_ttl="44"/>
+<address addr="194.95.114.28" addrtype="ipv4"/>
+<hostnames>
+<hostname name="rplec.tib.eu" type="PTR"/>
+</hostnames>
+<ports><port protocol="tcp" portid="5060"><state state="open" reason="syn-ack" reason_ttl="57"/><service name="sip" method="table" conf="3"/></port>
+</ports>
+<times srtt="274173" rttvar="224467" to="1172041"/>
+</host>
+<runstats><finished time="1761491917" timestr="Sun Oct 26 15:18:37 2025" summary="Nmap done at Sun Oct 26 15:18:37 2025; 1 IP address (1 host up) scanned in 183.78 seconds" elapsed="183.78" exit="success"/><hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

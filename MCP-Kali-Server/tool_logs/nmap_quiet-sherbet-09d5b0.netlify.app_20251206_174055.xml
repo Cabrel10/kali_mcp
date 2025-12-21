@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sat Dec  6 17:40:55 2025 as: /usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_quiet-sherbet-09d5b0.netlify.app_20251206_174055.xml -oN /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_quiet-sherbet-09d5b0.netlify.app_20251206_174055.txt quiet-sherbet-09d5b0.netlify.app -->
+<nmaprun scanner="nmap" args="/usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_quiet-sherbet-09d5b0.netlify.app_20251206_174055.xml -oN /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_quiet-sherbet-09d5b0.netlify.app_20251206_174055.txt quiet-sherbet-09d5b0.netlify.app" start="1765035655" startstr="Sat Dec  6 17:40:55 2025" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="65535" services="1-65535"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
+<address addr="35.157.26.135" addrtype="ipv4"/>
+<hostnames>
+<hostname name="quiet-sherbet-09d5b0.netlify.app" type="user"/>
+</hostnames>
+</hosthint>
+<taskprogress task="SYN Stealth Scan" time="1765036226" percent="92.30" remaining="48" etc="1765036273"/>
+<host starttime="1765035657" endtime="1765036505"><status state="up" reason="syn-ack" reason_ttl="53"/>
+<address addr="35.157.26.135" addrtype="ipv4"/>
+<hostnames>
+<hostname name="quiet-sherbet-09d5b0.netlify.app" type="user"/>
+<hostname name="ec2-35-157-26-135.eu-central-1.compute.amazonaws.com" type="PTR"/>
+</hostnames>
+<ports><extraports state="filtered" count="65531">
+<extrareasons reason="no-response" count="65531" proto="tcp" ports="1-79,81-112,114-442,444-1999,2001-65535"/>
+</extraports>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="53"/><service name="http" product="Golang net/http server" servicefp="SF-Port80-TCP:V=7.95%I=9%D=12/6%Time=693450F2%P=x86_64-pc-linux-gnu%r(GetRequest,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:14\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RCMH5SV6XDJKM980FJ8Q\r\nContent-Length:\x200\r\n\r\n&quot;)%r(HTTPOptions,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:14\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RD3G7G67Q8RM85ENP5AH\r\nContent-Length:\x200\r\n\r\n&quot;)%r(RTSPRequest,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(FourOhFourRequest,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:20\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RK2XV6B523KE8RAWX55K\r\nContent-Length:\x200\r\n\r\n&quot;)%r(GenericLines,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Hello,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Help,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(SSLSessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(TerminalServerCookie,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(TLSSessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(SSLv23SessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Kerberos,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;);" method="table" conf="3"><cpe>cpe:/a:golang:go</cpe></service><script id="http-server-header" output="Netlify"><elem>Netlify</elem>
+</script><script id="fingerprint-strings" output="&#xa;  FourOhFourRequest: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:20 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RK2XV6B523KE8RAWX55K&#xa;    Content-Length: 0&#xa;  GenericLines, Hello, Help, Kerberos, RTSPRequest, SSLSessionReq, SSLv23SessionReq, TLSSessionReq, TerminalServerCookie: &#xa;    HTTP/1.1 400 Bad Request&#xa;    Content-Type: text/plain; charset=utf-8&#xa;    Connection: close&#xa;    Request&#xa;  GetRequest: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:14 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RCMH5SV6XDJKM980FJ8Q&#xa;    Content-Length: 0&#xa;  HTTPOptions: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:14 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RD3G7G67Q8RM85ENP5AH&#xa;    Content-Length: 0"><elem key="FourOhFourRequest">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:20 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RK2XV6B523KE8RAWX55K&#xa;    Content-Length: 0</elem>
+<elem key="GenericLines, Hello, Help, Kerberos, RTSPRequest, SSLSessionReq, SSLv23SessionReq, TLSSessionReq, TerminalServerCookie">&#xa;    HTTP/1.1 400 Bad Request&#xa;    Content-Type: text/plain; charset=utf-8&#xa;    Connection: close&#xa;    Request</elem>
+<elem key="GetRequest">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:14 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RCMH5SV6XDJKM980FJ8Q&#xa;    Content-Length: 0</elem>
+<elem key="HTTPOptions">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:14 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RD3G7G67Q8RM85ENP5AH&#xa;    Content-Length: 0</elem>
+</script></port>
+<port protocol="tcp" portid="113"><state state="closed" reason="reset" reason_ttl="26"/><service name="ident" method="table" conf="3"/></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="53"/><service name="http" product="Golang net/http server" servicefp="SF-Port443-TCP:V=7.95%T=SSL%I=9%D=12/6%Time=693450F9%P=x86_64-pc-linux-gnu%r(GetRequest,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:21\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RK88G279FG6TD93TNZVQ\r\nContent-Length:\x200\r\n\r\n&quot;)%r(HTTPOptions,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:22\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RM87ERVR1G4ZRW1YWYAT\r\nContent-Length:\x200\r\n\r\n&quot;)%r(FourOhFourRequest,92,&quot;HTTP/1\.0\x20400\x20Bad\x20Request\r\nDate:\x20Sat,\x2006\x20Dec\x202025\x2015:51:23\x20GMT\r\nServer:\x20Netlify\r\nX-Nf-Request-Id:\x2001KBT5RNHJ2F0DMPWF6JGCB9BY\r\nContent-Length:\x200\r\n\r\n&quot;)%r(GenericLines,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(RTSPRequest,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Hello,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Help,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(SSLSessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(TerminalServerCookie,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(TLSSessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(SSLv23SessionReq,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;)%r(Kerberos,67,&quot;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20text/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x20Request&quot;);" tunnel="ssl" method="table" conf="3"><cpe>cpe:/a:golang:go</cpe></service><script id="ssl-cert" output="Subject: commonName=*.netlify.app/organizationName=Netlify, Inc/stateOrProvinceName=California/countryName=US&#xa;Subject Alternative Name: DNS:*.netlify.app, DNS:netlify.app&#xa;Not valid before: 2025-01-31T00:00:00&#xa;Not valid after:  2026-03-03T23:59:59"><table key="subject">
+<elem key="commonName">*.netlify.app</elem>
+<elem key="countryName">US</elem>
+<elem key="localityName">San Francisco</elem>
+<elem key="organizationName">Netlify, Inc</elem>
+<elem key="stateOrProvinceName">California</elem>
+</table>
+<table key="issuer">
+<elem key="commonName">DigiCert Global G2 TLS RSA SHA256 2020 CA1</elem>
+<elem key="countryName">US</elem>
+<elem key="organizationName">DigiCert Inc</elem>
+</table>
+<table key="pubkey">
+<elem key="type">ec</elem>
+<elem key="bits">256</elem>
+<table key="ecdhparams">
+<table key="curve_params">
+<elem key="ec_curve_type">namedcurve</elem>
+<elem key="curve">prime256v1</elem>
+</table>
+</table>
+</table>
+<table key="extensions">
+<table>
+<elem key="name">X509v3 Authority Key Identifier</elem>
+<elem key="value">74:85:80:C0:66:C7:DF:37:DE:CF:BD:29:37:AA:03:1D:BE:ED:CD:17</elem>
+</table>
+<table>
+<elem key="name">X509v3 Subject Key Identifier</elem>
+<elem key="value">3E:6A:BE:6E:25:AC:12:10:AB:BE:F1:EB:A7:A9:BC:6D:88:7D:54:8F</elem>
+</table>
+<table>
+<elem key="name">X509v3 Subject Alternative Name</elem>
+<elem key="value">DNS:*.netlify.app, DNS:netlify.app</elem>
+</table>
+<table>
+<elem key="name">X509v3 Certificate Policies</elem>
+<elem key="value">Policy: 2.23.140.1.2.2&#xa;  CPS: http://www.digicert.com/CPS</elem>
+</table>
+<table>
+<elem key="name">X509v3 Key Usage</elem>
+<elem key="value">Digital Signature, Key Agreement</elem>
+<elem key="critical">true</elem>
+</table>
+<table>
+<elem key="name">X509v3 Extended Key Usage</elem>
+<elem key="value">TLS Web Server Authentication, TLS Web Client Authentication</elem>
+</table>
+<table>
+<elem key="name">X509v3 CRL Distribution Points</elem>
+<elem key="value">Full Name:&#xa;  URI:http://crl3.digicert.com/DigiCertGlobalG2TLSRSASHA2562020CA1-1.crl&#xa;&#xa;Full Name:&#xa;  URI:http://crl4.digicert.com/DigiCertGlobalG2TLSRSASHA2562020CA1-1.crl&#xa;</elem>
+</table>
+<table>
+<elem key="name">Authority Information Access</elem>
+<elem key="value">OCSP - URI:http://ocsp.digicert.com&#xa;CA Issuers - URI:http://cacerts.digicert.com/DigiCertGlobalG2TLSRSASHA2562020CA1-1.crt</elem>
+</table>
+<table>
+<elem key="name">X509v3 Basic Constraints</elem>
+<elem key="value">CA:FALSE</elem>
+<elem key="critical">true</elem>
+</table>
+<table>
+<elem key="name">CT Precertificate SCTs</elem>
+<elem key="value">Signed Certificate Timestamp:&#xa;    Version   : v1 (0x0)&#xa;    Log ID    : 0E:57:94:BC:F3:AE:A9:3E:33:1B:2C:99:07:B3:F7:90:&#xa;                DF:9B:C2:3D:71:32:25:DD:21:A9:25:AC:61:C5:4E:21&#xa;    Timestamp : Jan 31 16:43:48.238 2025 GMT&#xa;    Extensions: none&#xa;    Signature : ecdsa-with-SHA256&#xa;                30:44:02:20:4E:97:98:EA:BD:23:FE:EC:9D:69:C0:77:&#xa;                55:35:51:7A:14:07:49:70:8F:CA:EA:A9:5C:C3:B2:2D:&#xa;                C7:4D:09:72:02:20:62:B8:05:A8:BA:94:A0:2B:78:4C:&#xa;                52:5F:2A:F8:D1:FA:68:BC:0E:A9:77:0E:54:BB:60:22:&#xa;                76:2C:90:56:68:A6&#xa;Signed Certificate Timestamp:&#xa;    Version   : v1 (0x0)&#xa;    Log ID    : 64:11:C4:6C:A4:12:EC:A7:89:1C:A2:02:2E:00:BC:AB:&#xa;                4F:28:07:D4:1E:35:27:AB:EA:FE:D5:03:C9:7D:CD:F0&#xa;    Timestamp : Jan 31 16:43:48.267 2025 GMT&#xa;    Extensions: none&#xa;    Signature : ecdsa-with-SHA256&#xa;                30:45:02:21:00:CB:CB:22:B6:39:F4:43:B1:C2:B3:C7:&#xa;                12:3F:DA:17:D5:AF:89:A8:54:BB:53:7E:1B:90:B0:7F:&#xa;                9F:4C:A1:DA:CA:02:20:2E:CB:C2:ED:B0:EE:DF:99:5C:&#xa;                C2:68:61:1B:3C:8B:DD:BE:2C:E1:4D:01:BA:6F:1C:3E:&#xa;                B6:57:C9:81:EF:4E:43&#xa;Signed Certificate Timestamp:&#xa;    Version   : v1 (0x0)&#xa;    Log ID    : 49:9C:9B:69:DE:1D:7C:EC:FC:36:DE:CD:87:64:A6:B8:&#xa;                5B:AF:0A:87:80:19:D1:55:52:FB:E9:EB:29:DD:F8:C3&#xa;    Timestamp : Jan 31 16:43:48.290 2025 GMT&#xa;    Extensions: none&#xa;    Signature : ecdsa-with-SHA256&#xa;                30:44:02:20:26:73:4D:1B:84:AA:0A:7C:AE:4D:59:7C:&#xa;                82:E5:61:A3:CB:BF:16:61:FE:18:33:76:F2:64:CB:A1:&#xa;                DE:6E:9B:78:02:20:10:FD:F1:CB:F9:08:34:3A:72:49:&#xa;                9C:59:3A:E5:FF:FB:0E:B6:DC:DE:73:D1:2E:5F:9B:37:&#xa;                96:9D:CA:B9:B6:D4</elem>
+</table>
+</table>
+<elem key="sig_algo">sha256WithRSAEncryption</elem>
+<table key="validity">
+<elem key="notBefore">2025-01-31T00:00:00</elem>
+<elem key="notAfter">2026-03-03T23:59:59</elem>
+</table>
+<elem key="md5">ba36bf9a6cd32bb4fee1eaf083eefc45</elem>
+<elem key="sha1">0428c9a3bc06509c6b0b67728227c63d991b5b71</elem>
+<elem key="pem">-&#45;&#45;&#45;&#45;BEGIN CERTIFICATE-&#45;&#45;&#45;&#45;&#xa;MIIGFzCCBP+gAwIBAgIQBOh2HDFLUZ516TWBqEo4OjANBgkqhkiG9w0BAQsFADBZ&#xa;MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMTMwMQYDVQQDEypE&#xa;aWdpQ2VydCBHbG9iYWwgRzIgVExTIFJTQSBTSEEyNTYgMjAyMCBDQTEwHhcNMjUw&#xa;MTMxMDAwMDAwWhcNMjYwMzAzMjM1OTU5WjBpMQswCQYDVQQGEwJVUzETMBEGA1UE&#xa;CBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNU2FuIEZyYW5jaXNjbzEVMBMGA1UEChMM&#xa;TmV0bGlmeSwgSW5jMRYwFAYDVQQDDA0qLm5ldGxpZnkuYXBwMFkwEwYHKoZIzj0C&#xa;AQYIKoZIzj0DAQcDQgAEZMOrg6Gfm/f/5QC/Qa7N0c0cXY1NYvsO5JAzEy21RZHm&#xa;eiagXgGuJYT71YgjfhN+qdOl3mktkWnDEoZalAJCKKOCA5QwggOQMB8GA1UdIwQY&#xa;MBaAFHSFgMBmx9833s+9KTeqAx2+7c0XMB0GA1UdDgQWBBQ+ar5uJawSEKu+8eun&#xa;qbxtiH1UjzAlBgNVHREEHjAcgg0qLm5ldGxpZnkuYXBwggtuZXRsaWZ5LmFwcDA+&#xa;BgNVHSAENzA1MDMGBmeBDAECAjApMCcGCCsGAQUFBwIBFhtodHRwOi8vd3d3LmRp&#xa;Z2ljZXJ0LmNvbS9DUFMwDgYDVR0PAQH/BAQDAgOIMB0GA1UdJQQWMBQGCCsGAQUF&#xa;BwMBBggrBgEFBQcDAjCBnwYDVR0fBIGXMIGUMEigRqBEhkJodHRwOi8vY3JsMy5k&#xa;aWdpY2VydC5jb20vRGlnaUNlcnRHbG9iYWxHMlRMU1JTQVNIQTI1NjIwMjBDQTEt&#xa;MS5jcmwwSKBGoESGQmh0dHA6Ly9jcmw0LmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEds&#xa;b2JhbEcyVExTUlNBU0hBMjU2MjAyMENBMS0xLmNybDCBhwYIKwYBBQUHAQEEezB5&#xa;MCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wUQYIKwYBBQUH&#xa;MAKGRWh0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEdsb2JhbEcy&#xa;VExTUlNBU0hBMjU2MjAyMENBMS0xLmNydDAMBgNVHRMBAf8EAjAAMIIBfAYKKwYB&#xa;BAHWeQIEAgSCAWwEggFoAWYAdQAOV5S8866pPjMbLJkHs/eQ35vCPXEyJd0hqSWs&#xa;YcVOIQAAAZS9P0aOAAAEAwBGMEQCIE6XmOq9I/7snWnAd1U1UXoUB0lwj8rqqVzD&#xa;si3HTQlyAiBiuAWoupSgK3hMUl8q+NH6aLwOqXcOVLtgInYskFZopgB2AGQRxGyk&#xa;EuyniRyiAi4AvKtPKAfUHjUnq+r+1QPJfc3wAAABlL0/RqsAAAQDAEcwRQIhAMvL&#xa;IrY59EOxwrPHEj/aF9WviahUu1N+G5Cwf59ModrKAiAuy8LtsO7fmVzCaGEbPIvd&#xa;vizhTQG6bxw+tlfJge9OQwB1AEmcm2neHXzs/DbezYdkprhbrwqHgBnRVVL76esp&#xa;3fjDAAABlL0/RsIAAAQDAEYwRAIgJnNNG4SqCnyuTVl8guVho8u/FmH+GDN28mTL&#xa;od5um3gCIBD98cv5CDQ6ckmcWTrl//sOttzec9EuX5s3lp3KubbUMA0GCSqGSIb3&#xa;DQEBCwUAA4IBAQAfKrVCjtNdOobCHm+TqJ+v+IDjMccHae6fWB5xygVuSmbWsPMD&#xa;euU/d6KIDrsg07ZPucQOC4JO5sh8IGV1hpkb4MigbQ/6HYda732hONEjZIo5elZj&#xa;Imam8PoI/mrk15YVY92sT0ZcQZ63bqzMIV47EDJFGIM1T/SpLEFB2mkclCViU3YI&#xa;FSSzCNkqXL0lyrSluJhiFYiLJGez2lYblMlXmvw1USfCNdK5oBcpSbfsgeipN8EO&#xa;3d0zJN8ANhG02ivcPj+ENu3qx5ayECtfOiRC0qca3Y/Scn8jwH+mpTqd8yi8Yba9&#xa;HnxRhDswDplOYc86CBbWJz8P76RddXIRyoWN&#xa;-&#45;&#45;&#45;&#45;END CERTIFICATE-&#45;&#45;&#45;&#45;&#xa;</elem>
+</script><script id="http-server-header" output="Netlify"><elem>Netlify</elem>
+</script><script id="http-title" output="Site doesn&apos;t have a title."></script><script id="ssl-date" output="TLS randomness does not represent time"></script><script id="fingerprint-strings" output="&#xa;  FourOhFourRequest: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:23 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RNHJ2F0DMPWF6JGCB9BY&#xa;    Content-Length: 0&#xa;  GenericLines, Hello, Help, Kerberos, RTSPRequest, SSLSessionReq, SSLv23SessionReq, TLSSessionReq, TerminalServerCookie: &#xa;    HTTP/1.1 400 Bad Request&#xa;    Content-Type: text/plain; charset=utf-8&#xa;    Connection: close&#xa;    Request&#xa;  GetRequest: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:21 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RK88G279FG6TD93TNZVQ&#xa;    Content-Length: 0&#xa;  HTTPOptions: &#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:22 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RM87ERVR1G4ZRW1YWYAT&#xa;    Content-Length: 0"><elem key="FourOhFourRequest">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:23 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RNHJ2F0DMPWF6JGCB9BY&#xa;    Content-Length: 0</elem>
+<elem key="GenericLines, Hello, Help, Kerberos, RTSPRequest, SSLSessionReq, SSLv23SessionReq, TLSSessionReq, TerminalServerCookie">&#xa;    HTTP/1.1 400 Bad Request&#xa;    Content-Type: text/plain; charset=utf-8&#xa;    Connection: close&#xa;    Request</elem>
+<elem key="GetRequest">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:21 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RK88G279FG6TD93TNZVQ&#xa;    Content-Length: 0</elem>
+<elem key="HTTPOptions">&#xa;    HTTP/1.0 400 Bad Request&#xa;    Date: Sat, 06 Dec 2025 15:51:22 GMT&#xa;    Server: Netlify&#xa;    X-Nf-Request-Id: 01KBT5RM87ERVR1G4ZRW1YWYAT&#xa;    Content-Length: 0</elem>
+</script></port>
+<port protocol="tcp" portid="2000"><state state="open" reason="syn-ack" reason_ttl="58"/><service name="cisco-sccp" method="table" conf="3"/></port>
+</ports>
+<os><portused state="open" proto="tcp" portid="80"/>
+<portused state="closed" proto="tcp" portid="113"/>
+</os>
+<trace port="113" proto="tcp">
+<hop ttl="1" ipaddr="192.168.43.215" rtt="7.06"/>
+</trace>
+<times srtt="50309" rttvar="27357" to="159737"/>
+</host>
+<runstats><finished time="1765036505" timestr="Sat Dec  6 17:55:05 2025" summary="Nmap done at Sat Dec  6 17:55:05 2025; 1 IP address (1 host up) scanned in 849.79 seconds" elapsed="849.79" exit="success"/><hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

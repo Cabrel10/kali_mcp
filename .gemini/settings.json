@@ -1,0 +1,16 @@
+{
+  "context": {
+    "fileName": "GEMINI.md"
+  },
+  "mcpServers": {
+    "kali-tools": {
+      "command": "/home/morningstar/miniconda3/envs/trading_env/bin/python3",
+      "args": [
+        "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/kali_mcp_server.py"
+      ],
+      "cwd": "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server",
+      "timeout": 900000,
+      "trust": true
+    }
+  }
+}
