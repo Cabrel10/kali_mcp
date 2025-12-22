@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sun Dec 21 14:10:35 2025 as: /usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX nmap_exxspecial.com_20251221_131040.xml -oN nmap_exxspecial.com_20251221_131040.txt exxspecial.com -->
+<nmaprun scanner="nmap" args="/usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX nmap_exxspecial.com_20251221_131040.xml -oN nmap_exxspecial.com_20251221_131040.txt exxspecial.com" start="1766319035" startstr="Sun Dec 21 14:10:35 2025" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="65535" services="1-65535"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
+<address addr="172.67.136.160" addrtype="ipv4"/>
+<hostnames>
+<hostname name="exxspecial.com" type="user"/>
+</hostnames>
+</hosthint>
+<taskprogress task="SYN Stealth Scan" time="1766319354" percent="2.17" remaining="14312" etc="1766333666"/>
+<taskprogress task="SYN Stealth Scan" time="1766319420" percent="2.33" remaining="16064" etc="1766335484"/>
+<taskprogress task="SYN Stealth Scan" time="1766319430" percent="2.38" remaining="16158" etc="1766335588"/>
+<taskprogress task="SYN Stealth Scan" time="1766319565" percent="2.92" remaining="17580" etc="1766337144"/>
+<taskprogress task="SYN Stealth Scan" time="1766319643" percent="3.25" remaining="18061" etc="1766337703"/>

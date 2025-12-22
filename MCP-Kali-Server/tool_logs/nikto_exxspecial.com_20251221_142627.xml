@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE niktoscans SYSTEM "/var/lib/nikto/docs/nikto.dtd">
+<niktoscans>
+<niktoscan hoststest="0" options="-h exxspecial.com -Format xml -o /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nikto_exxspecial.com_20251221_142627.xml -Tuning x6 -ssl -timeout 10 -maxtime 840" version="2.5.0" scanstart="Sun Dec 21 14:26:28 2025" scanend="Thu Jan  1 02:00:00 1970" scanelapsed=" seconds" nxmlversion="1.2">
+
+<scandetails targetip="172.67.136.160" targethostname="exxspecial.com" targetport="443" targetbanner="cloudflare" starttime="2025-12-21 14:26:29" sitename="https://exxspecial.com:443/" siteip="https://172.67.136.160:443/" hostheader="exxspecial.com" errors="0" checks="6903">
+<ssl ciphers="TLS_AES_256_GCM_SHA384" issuers="/C=US/O=Google Trust Services/CN=WE1" info="/CN=exxspecial.com" altnames="" />
+
+<item id="999986" method="GET">
+<description><![CDATA[/: Retrieved access-control-allow-origin header: *.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="999957" method="GET">
+<description><![CDATA[/: The anti-clickjacking X-Frame-Options header is not present.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options]]></references>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[/: Uncommon header 'server-timing' found, with multiple values: (cfCacheStatus;desc="DYNAMIC",cfEdge;dur=8,cfOrigin;dur=194,).]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[]]></references>
+</item>
+
+<item id="011799" method="GET">
+<description><![CDATA[/: An alt-svc header was found which is advertising HTTP/3. The endpoint is: ':443'. Nikto cannot test HTTP/3 over QUIC.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/alt-svc]]></references>
+</item>
+
+<item id="999103" method="GET">
+<description><![CDATA[/: The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[https://www.netsparker.com/web-vulnerability-scanner/vulnerabilities/missing-content-type-header/]]></references>
+</item>
+
+<item id="999961" method="GET">
+<description><![CDATA[/: Cookie system_session created without the secure flag.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies]]></references>
+</item>
+
+<item id="95" method="GET">
+<description><![CDATA[/: Cookie system_session created without the httponly flag.]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies]]></references>
+</item>
+
+<item id="999996" method="GET">
+<description><![CDATA[/robots.txt: contains 9 entries which should be manually viewed.]]></description>
+<uri><![CDATA[/robots.txt]]></uri>
+<namelink><![CDATA[https://exxspecial.com:443/robots.txt]]></namelink>
+<iplink><![CDATA[https://172.67.136.160:443/robots.txt]]></iplink>
+<references><![CDATA[https://developer.mozilla.org/en-US/docs/Glossary/Robots.txt]]></references>
+</item>
+
+<statistics elapsed="549" itemsfound="8" itemstested="6903" endtime="2025-12-21 14:35:38" />
+</scandetails>
+</niktoscan>
+
+
+</niktoscans>

@@ -1,0 +1,27 @@
+# Nmap 7.95 scan initiated Sun Dec 21 14:25:46 2025 as: /usr/lib/nmap/nmap --privileged -sV -sC -T3 -p 80,443 -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.xml -oN /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.txt exxspecial.com
+Nmap scan report for exxspecial.com (172.67.136.160)
+Host is up (0.18s latency).
+Other addresses for exxspecial.com (not scanned): 104.21.78.191 2606:4700:3031::ac43:88a0 2606:4700:3036::6815:4ebf
+
+PORT    STATE SERVICE  VERSION
+80/tcp  open  http     Cloudflare http proxy
+| http-title: Connexion
+|_Requested resource was /login
+|_http-server-header: cloudflare
+| http-robots.txt: 1 disallowed entry 
+|_/
+|_http-cors: GET POST OPTIONS
+443/tcp open  ssl/http Cloudflare http proxy
+|_http-cors: GET POST OPTIONS
+|_http-server-header: cloudflare
+| ssl-cert: Subject: commonName=exxspecial.com
+| Subject Alternative Name: DNS:exxspecial.com, DNS:*.exxspecial.com
+| Not valid before: 2025-11-20T14:15:12
+|_Not valid after:  2026-02-18T15:13:40
+| http-title: Connexion
+|_Requested resource was /login
+| http-robots.txt: 1 disallowed entry 
+|_/
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+# Nmap done at Sun Dec 21 14:26:18 2025 -- 1 IP address (1 host up) scanned in 31.90 seconds

@@ -1,0 +1,33 @@
+{
+  "tool": "web_tech_detect",
+  "timestamp": "20251221_141023",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_141014",
+  "inputs": {
+    "url": "https://exxspecial.com"
+  },
+  "outputs": {
+    "status": "success",
+    "url": "https://exxspecial.com",
+    "server": "Unknown",
+    "powered_by": "Unknown",
+    "technologies": [],
+    "headers": {
+      "date": "Sun, 21 Dec 2025 12:10:23 GMT",
+      "content-type": "text/html",
+      "server": "cloudflare",
+      "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "*",
+      "location": "/login",
+      "set-cookie": "system_session=3UrOVinJWEflG1IdqShHtCBMkZ0cQwaN; path=/",
+      "strict-transport-security": "max-age=31536000",
+      "alt-svc": "h3=\":443\"; ma=86400",
+      "cf-cache-status": "DYNAMIC",
+      "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=8VHGgA3lR79DHJLKcCMDVpSGZUFhE%2BWWyqZoBqZM9VKEAlHbAkInnmPLP7l1iQDBXE%2BhMGOZAzg%2BQNtLormsBwISotiAIWyklMsXAL2Q\"}]}",
+      "cf-ray": "9b1746a56cb9bedd-LHR"
+    },
+    "raw_whatweb": ""
+  }
+}

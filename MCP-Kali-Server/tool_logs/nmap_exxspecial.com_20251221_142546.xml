@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sun Dec 21 14:25:46 2025 as: /usr/lib/nmap/nmap -&#45;privileged -sV -sC -T3 -p 80,443 -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.xml -oN /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.txt exxspecial.com -->
+<nmaprun scanner="nmap" args="/usr/lib/nmap/nmap -&#45;privileged -sV -sC -T3 -p 80,443 -oX /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.xml -oN /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.txt exxspecial.com" start="1766319946" startstr="Sun Dec 21 14:25:46 2025" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="2" services="80,443"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
+<address addr="172.67.136.160" addrtype="ipv4"/>
+<hostnames>
+<hostname name="exxspecial.com" type="user"/>
+</hostnames>
+</hosthint>
+<host starttime="1766319947" endtime="1766319978"><status state="up" reason="echo-reply" reason_ttl="47"/>
+<address addr="172.67.136.160" addrtype="ipv4"/>
+<hostnames>
+<hostname name="exxspecial.com" type="user"/>
+</hostnames>
+<ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="47"/><service name="http" product="Cloudflare http proxy" method="probed" conf="10"/><script id="http-title" output="Connexion&#xa;Requested resource was /login"><elem key="title">Connexion</elem>
+<elem key="redirect_url">/login</elem>
+</script><script id="http-server-header" output="cloudflare"><elem>cloudflare</elem>
+</script><script id="http-robots.txt" output="1 disallowed entry &#xa;/"/><script id="http-cors" output="GET POST OPTIONS"/></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="46"/><service name="http" product="Cloudflare http proxy" tunnel="ssl" method="probed" conf="10"/><script id="http-cors" output="GET POST OPTIONS"/><script id="http-server-header" output="cloudflare"><elem>cloudflare</elem>
+</script><script id="ssl-cert" output="Subject: commonName=exxspecial.com&#xa;Subject Alternative Name: DNS:exxspecial.com, DNS:*.exxspecial.com&#xa;Not valid before: 2025-11-20T14:15:12&#xa;Not valid after:  2026-02-18T15:13:40"><table key="subject">
+<elem key="commonName">exxspecial.com</elem>
+</table>
+<table key="issuer">
+<elem key="commonName">WE1</elem>
+<elem key="countryName">US</elem>
+<elem key="organizationName">Google Trust Services</elem>
+</table>
+<table key="pubkey">
+<elem key="type">ec</elem>
+<elem key="bits">256</elem>
+<table key="ecdhparams">
+<table key="curve_params">
+<elem key="ec_curve_type">namedcurve</elem>
+<elem key="curve">prime256v1</elem>
+</table>
+</table>
+</table>
+<table key="extensions">
+<table>
+<elem key="name">X509v3 Key Usage</elem>
+<elem key="value">Digital Signature</elem>
+<elem key="critical">true</elem>
+</table>
+<table>
+<elem key="name">X509v3 Extended Key Usage</elem>
+<elem key="value">TLS Web Server Authentication</elem>
+</table>
+<table>
+<elem key="name">X509v3 Basic Constraints</elem>
+<elem key="value">CA:FALSE</elem>
+<elem key="critical">true</elem>
+</table>
+<table>
+<elem key="name">X509v3 Subject Key Identifier</elem>
+<elem key="value">78:F2:6A:54:11:55:FC:9F:8F:13:08:F5:4C:F0:C6:8A:CC:1B:E2:71</elem>
+</table>
+<table>
+<elem key="name">X509v3 Authority Key Identifier</elem>
+<elem key="value">90:77:92:35:67:C4:FF:A8:CC:A9:E6:7B:D9:80:79:7B:CC:93:F9:38</elem>
+</table>
+<table>
+<elem key="name">Authority Information Access</elem>
+<elem key="value">OCSP - URI:http://o.pki.goog/s/we1/Igg&#xa;CA Issuers - URI:http://i.pki.goog/we1.crt</elem>
+</table>
+<table>
+<elem key="name">X509v3 Subject Alternative Name</elem>
+<elem key="value">DNS:exxspecial.com, DNS:*.exxspecial.com</elem>
+</table>
+<table>
+<elem key="name">X509v3 Certificate Policies</elem>
+<elem key="value">Policy: 2.23.140.1.2.1</elem>
+</table>
+<table>
+<elem key="name">X509v3 CRL Distribution Points</elem>
+<elem key="value">Full Name:&#xa;  URI:http://c.pki.goog/we1/7ifRWgQvmOI.crl&#xa;</elem>
+</table>
+<table>
+<elem key="name">CT Precertificate SCTs</elem>
+<elem key="value">Signed Certificate Timestamp:&#xa;    Version   : v1 (0x0)&#xa;    Log ID    : 16:83:2D:AB:F0:A9:25:0F:0F:F0:3A:A5:45:FF:C8:BF:&#xa;                C8:23:D0:87:4B:F6:04:29:27:F8:E7:1F:33:13:F5:FA&#xa;    Timestamp : Nov 20 15:15:12.817 2025 GMT&#xa;    Extensions: none&#xa;    Signature : ecdsa-with-SHA256&#xa;                30:45:02:20:68:F7:3E:E5:F4:39:49:97:C0:91:89:EB:&#xa;                06:40:F3:FF:0E:0D:01:DB:3E:6C:33:33:E4:4B:88:A2:&#xa;                00:72:3A:CB:02:21:00:B0:2C:F4:05:90:E4:4B:45:C1:&#xa;                DC:7E:29:48:4D:2A:64:67:31:AB:CB:F7:4E:D0:7F:15:&#xa;                A5:00:0E:06:EA:6A:59&#xa;Signed Certificate Timestamp:&#xa;    Version   : v1 (0x0)&#xa;    Log ID    : 0E:57:94:BC:F3:AE:A9:3E:33:1B:2C:99:07:B3:F7:90:&#xa;                DF:9B:C2:3D:71:32:25:DD:21:A9:25:AC:61:C5:4E:21&#xa;    Timestamp : Nov 20 15:15:12.748 2025 GMT&#xa;    Extensions: none&#xa;    Signature : ecdsa-with-SHA256&#xa;                30:45:02:21:00:AF:88:EB:35:64:F2:11:CD:87:D3:FC:&#xa;                99:3E:86:B2:53:62:25:9F:26:04:59:4F:38:96:16:5E:&#xa;                52:C2:FC:02:4C:02:20:27:EA:BD:BC:92:D9:A3:F7:28:&#xa;                0E:E7:17:DA:80:62:07:79:ED:37:4F:99:BA:C1:5A:31:&#xa;                72:44:E8:60:3B:9F:7D</elem>
+</table>
+</table>
+<elem key="sig_algo">ecdsa-with-SHA256</elem>
+<table key="validity">
+<elem key="notBefore">2025-11-20T14:15:12</elem>
+<elem key="notAfter">2026-02-18T15:13:40</elem>
+</table>
+<elem key="md5">72e31f9df01dd12a9f56659b20e7cf6b</elem>
+<elem key="sha1">f589e5c483b76778ed5607c617cef2582a1a3825</elem>
+<elem key="pem">-&#45;&#45;&#45;&#45;BEGIN CERTIFICATE-&#45;&#45;&#45;&#45;&#xa;MIIDrTCCA1OgAwIBAgIQIghjbOg/vqET1y6qXPUIGjAKBggqhkjOPQQDAjA7MQsw&#xa;CQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZpY2VzMQwwCgYD&#xa;VQQDEwNXRTEwHhcNMjUxMTIwMTQxNTEyWhcNMjYwMjE4MTUxMzQwWjAZMRcwFQYD&#xa;VQQDEw5leHhzcGVjaWFsLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABDj7&#xa;S10oVa09In/j30OCCoiejYFAe0gXuHO5ppglngxoWpn438x0diH4FN8S5WPHIP8T&#xa;zKxuszTiLRoubVCtq62jggJZMIICVTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAww&#xa;CgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQUePJqVBFV/J+PEwj1&#xa;TPDGiswb4nEwHwYDVR0jBBgwFoAUkHeSNWfE/6jMqeZ72YB5e8yT+TgwXgYIKwYB&#xa;BQUHAQEEUjBQMCcGCCsGAQUFBzABhhtodHRwOi8vby5wa2kuZ29vZy9zL3dlMS9J&#xa;Z2cwJQYIKwYBBQUHMAKGGWh0dHA6Ly9pLnBraS5nb29nL3dlMS5jcnQwKwYDVR0R&#xa;BCQwIoIOZXh4c3BlY2lhbC5jb22CECouZXh4c3BlY2lhbC5jb20wEwYDVR0gBAww&#xa;CjAIBgZngQwBAgEwNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL2MucGtpLmdvb2cv&#xa;d2UxLzdpZlJXZ1F2bU9JLmNybDCCAQQGCisGAQQB1nkCBAIEgfUEgfIA8AB2ABaD&#xa;LavwqSUPD/A6pUX/yL/II9CHS/YEKSf45x8zE/X6AAABmqHVdzEAAAQDAEcwRQIg&#xa;aPc+5fQ5SZfAkYnrBkDz/w4NAds+bDMz5EuIogByOssCIQCwLPQFkORLRcHcfilI&#xa;TSpkZzGry/dO0H8VpQAOBupqWQB2AA5XlLzzrqk+MxssmQez95Dfm8I9cTIl3SGp&#xa;JaxhxU4hAAABmqHVduwAAAQDAEcwRQIhAK+I6zVk8hHNh9P8mT6GslNiJZ8mBFlP&#xa;OJYWXlLC/AJMAiAn6r28ktmj9ygO5xfagGIHee03T5m6wVoxckToYDuffTAKBggq&#xa;hkjOPQQDAgNIADBFAiEA4vBJGPdRou8V2EVTmVGe8tm3AQvrTm4P6MJPG9yVGvUC&#xa;IGjW3TLk3uvVuapSAjw+2JczdYXBZJvXdbOp/5ol+DU7&#xa;-&#45;&#45;&#45;&#45;END CERTIFICATE-&#45;&#45;&#45;&#45;&#xa;</elem>
+</script><script id="http-title" output="Connexion&#xa;Requested resource was /login"><elem key="title">Connexion</elem>
+<elem key="redirect_url">/login</elem>
+</script><script id="http-robots.txt" output="1 disallowed entry &#xa;/"/></port>
+</ports>
+<times srtt="181677" rttvar="113641" to="636241"/>
+</host>
+<runstats><finished time="1766319978" timestr="Sun Dec 21 14:26:18 2025" summary="Nmap done at Sun Dec 21 14:26:18 2025; 1 IP address (1 host up) scanned in 31.90 seconds" elapsed="31.90" exit="success"/><hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

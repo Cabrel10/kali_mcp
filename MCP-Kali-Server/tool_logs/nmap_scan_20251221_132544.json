@@ -1,0 +1,31 @@
+{
+  "tool": "nmap_scan",
+  "timestamp": "20251221_132544",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_131040",
+  "inputs": {
+    "target": "exxspecial.com",
+    "scan_type": "comprehensive",
+    "ports": null,
+    "scripts": null,
+    "intensity": "medium",
+    "timeout": 900
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "exxspecial.com",
+    "scan_type": "comprehensive",
+    "output_file": "nmap_exxspecial.com_20251221_131040.xml",
+    "execution_time": 900,
+    "summary": {
+      "hosts_up": 0,
+      "open_ports": 0,
+      "services_detected": 0
+    },
+    "open_ports": [],
+    "services": [],
+    "os_detection": [],
+    "hosts": [],
+    "raw_output": "Starting Nmap 7.95 ( https://nmap.org ) at 2025-12-21 13:10 EET\n",
+    "errors": "TIMEOUT: Command exceeded 900 seconds"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "tool": "nmap_scan",
+  "timestamp": "20251221_142535",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_141014",
+  "inputs": {
+    "target": "exxspecial.com",
+    "scan_type": "comprehensive",
+    "ports": null,
+    "scripts": null,
+    "intensity": "medium",
+    "timeout": 900
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "exxspecial.com",
+    "scan_type": "comprehensive",
+    "output_file": "nmap_exxspecial.com_20251221_131040.xml",
+    "execution_time": 900,
+    "summary": {
+      "hosts_up": 0,
+      "open_ports": 0,
+      "services_detected": 0
+    },
+    "open_ports": [],
+    "services": [],
+    "os_detection": [],
+    "hosts": [],
+    "raw_output": "Starting Nmap 7.95 ( https://nmap.org ) at 2025-12-21 14:10 EET\nStats: 0:05:18 elapsed; 0 hosts completed (1 up), 1 undergoing SYN Stealth Scan\nSYN Stealth Scan Timing: About 2.17% done; ETC: 18:14 (3:58:32 remaining)\nStats: 0:06:24 elapsed; 0 hosts completed (1 up), 1 undergoing SYN Stealth Scan\nSYN Stealth Scan Timing: About 2.33% done; ETC: 18:44 (4:27:44 remaining)\nStats: 0:06:35 elapsed; 0 hosts completed (1 up), 1 undergoing SYN Stealth Scan\nSYN Stealth Scan Timing: About 2.38% done; ETC: 18:46 (4:29:18 remaining)\nStats: 0:08:50 elapsed; 0 hosts completed (1 up), 1 undergoing SYN Stealth Scan\nSYN Stealth Scan Timing: About 2.92% done; ETC: 19:12 (4:52:59 remaining)\nStats: 0:10:07 elapsed; 0 hosts completed (1 up), 1 undergoing SYN Stealth Scan\nSYN Stealth Scan Timing: About 3.25% done; ETC: 19:21 (5:01:00 remaining)\n",
+    "errors": "TIMEOUT: Command exceeded 900 seconds"
+  }
+}

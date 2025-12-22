@@ -7,12 +7,14 @@ Handles parallel execution of shell commands with timeout management
 import asyncio
 import subprocess
 import random
+import os
+import signal
+import psutil
 from typing import Tuple, List, Dict, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import TacticalConfig
-
 
 class AsyncExecutor:
     """
@@ -73,13 +75,14 @@ class AsyncExecutor:
             exec_env['HTTPS_PROXY'] = proxy
         
         try:
-            # Create subprocess
+            # Create subprocess with new process group
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 shell=shell,
-                env=exec_env if exec_env else None
+                env=exec_env if exec_env else None,
+                preexec_fn=os.setsid  # Create new process group
             )
             
             # Wait for completion with timeout
@@ -96,16 +99,24 @@ class AsyncExecutor:
                 )
                 
             except asyncio.TimeoutError:
-                # Kill process on timeout
+                # 🔴 KILL BRUTAL - Kill process group and all children
                 try:
-                    process.kill()
-                    await process.wait()
-                except:
+                    # Kill entire process group
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    # Process already terminated
                     pass
+                except Exception:
+                    # Fallback to regular kill
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except:
+                        pass
                 
                 return (
                     "",
-                    f"Command timed out after {timeout} seconds",
+                    f"⏱️ KILLED after {timeout}s timeout",
                     -1
                 )
         

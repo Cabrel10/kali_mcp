@@ -3,10 +3,10 @@
     "fileName": "GEMINI.md"
   },
   "mcpServers": {
-    "kali-tools": {
+    "kali-tactical-elite": {
       "command": "/home/morningstar/miniconda3/envs/trading_env/bin/python3",
       "args": [
-        "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/kali_mcp_server.py"
+        "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/kali_mcp_server_optimized.py"
       ],
       "cwd": "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server",
       "timeout": 900000,

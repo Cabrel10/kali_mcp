@@ -1,0 +1,1 @@
+# Nmap 7.95 scan initiated Sun Dec 21 14:10:35 2025 as: /usr/lib/nmap/nmap --privileged -sV -sC -O -A --version-all -T3 -p- -oX nmap_exxspecial.com_20251221_131040.xml -oN nmap_exxspecial.com_20251221_131040.txt exxspecial.com

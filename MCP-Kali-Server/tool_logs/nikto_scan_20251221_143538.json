@@ -1,0 +1,91 @@
+{
+  "tool": "nikto_scan",
+  "timestamp": "20251221_143538",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_141014",
+  "inputs": {
+    "target": "exxspecial.com",
+    "tuning": "x6",
+    "plugins": null,
+    "ssl": true
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "exxspecial.com",
+    "output_file": "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nikto_exxspecial.com_20251221_142627.xml",
+    "execution_time": 550.734646,
+    "summary": {
+      "total_findings": 8,
+      "critical": 0,
+      "high": 0
+    },
+    "vulnerabilities": [
+      {
+        "id": "999986",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: Retrieved access-control-allow-origin header: *.",
+        "references": []
+      },
+      {
+        "id": "999957",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: The anti-clickjacking X-Frame-Options header is not present.",
+        "references": []
+      },
+      {
+        "id": "999100",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: Uncommon header 'server-timing' found, with multiple values: (cfCacheStatus;desc=\"DYNAMIC\",cfEdge;dur=8,cfOrigin;dur=194,).",
+        "references": []
+      },
+      {
+        "id": "011799",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: An alt-svc header was found which is advertising HTTP/3. The endpoint is: ':443'. Nikto cannot test HTTP/3 over QUIC.",
+        "references": []
+      },
+      {
+        "id": "999103",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type.",
+        "references": []
+      },
+      {
+        "id": "999961",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: Cookie system_session created without the secure flag.",
+        "references": []
+      },
+      {
+        "id": "95",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/",
+        "description": "/: Cookie system_session created without the httponly flag.",
+        "references": []
+      },
+      {
+        "id": "999996",
+        "osvdb": null,
+        "method": "GET",
+        "uri": "/robots.txt",
+        "description": "/robots.txt: contains 9 entries which should be manually viewed.",
+        "references": []
+      }
+    ],
+    "critical_findings": [],
+    "high_findings": [],
+    "errors": "+ ERROR: Error limit (20) reached for host, giving up. Last error: opening stream: can't connect: SSL negotiation failed: error:0A000410:SSL routines::ssl/tls alert handshake failure at /var/lib/nikto/plugins/LW2.pm line 5254.\n at /var/lib/nikto/plugins/LW2.pm line 5254.\n;  at /var/lib/nikto/plugins/LW2.pm line 5254."
+  }
+}

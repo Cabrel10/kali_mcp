@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sun Dec 21 12:54:21 2025 as: /usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX nmap_exxspecial.com_20251221_125418.xml -oN nmap_exxspecial.com_20251221_125418.txt exxspecial.com -->
+<nmaprun scanner="nmap" args="/usr/lib/nmap/nmap -&#45;privileged -sV -sC -O -A -&#45;version-all -T3 -p- -oX nmap_exxspecial.com_20251221_125418.xml -oN nmap_exxspecial.com_20251221_125418.txt exxspecial.com" start="1766314461" startstr="Sun Dec 21 12:54:21 2025" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="65535" services="1-65535"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
+<address addr="172.67.136.160" addrtype="ipv4"/>
+<hostnames>
+<hostname name="exxspecial.com" type="user"/>
+</hostnames>
+</hosthint>

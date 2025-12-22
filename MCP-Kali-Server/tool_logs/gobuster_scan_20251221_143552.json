@@ -1,0 +1,29 @@
+{
+  "tool": "gobuster_scan",
+  "timestamp": "20251221_143552",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_141014",
+  "inputs": {
+    "url": "https://exxspecial.com",
+    "mode": "dir",
+    "wordlist": "/usr/share/wordlists/dirb/common.txt",
+    "extensions": "php,html,txt,js,json,xml,bak,old,asp,aspx",
+    "threads": 20
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "https://exxspecial.com",
+    "mode": "dir",
+    "wordlist": "/usr/share/wordlists/dirb/common.txt",
+    "output_file": "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/gobuster_dir_https_exxspecial.com_20251221_143551.txt",
+    "execution_time": 0.043532,
+    "summary": {
+      "total_found": 0,
+      "interesting": 0,
+      "auth_required": 0
+    },
+    "findings": [],
+    "interesting_paths": [],
+    "auth_required_paths": [],
+    "errors": "2025/12/21 14:35:52 status-codes (\"200,204,301,302,307,401,403\") and status-codes-blacklist (\"404\") are both set - please set only one. status-codes-blacklist is set by default so you might want to disable it by supplying an empty string"
+  }
+}

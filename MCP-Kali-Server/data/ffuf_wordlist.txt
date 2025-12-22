@@ -1,0 +1,10 @@
+/api
+/admin
+/forgot-password
+/dashboard
+/panel
+/config
+/backup
+/test
+/dev
+/debug

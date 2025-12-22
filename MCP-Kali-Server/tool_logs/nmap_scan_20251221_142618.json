@@ -1,0 +1,121 @@
+{
+  "tool": "nmap_scan",
+  "timestamp": "20251221_142618",
+  "session_id": "exxspecial_com_assessment_20251221_131309_20251221_141014",
+  "inputs": {
+    "target": "exxspecial.com",
+    "scan_type": "basic",
+    "ports": "80,443",
+    "scripts": null,
+    "intensity": "medium",
+    "timeout": 900
+  },
+  "outputs": {
+    "status": "success",
+    "target": "exxspecial.com",
+    "scan_type": "basic",
+    "output_file": "/home/morningstar/Bureau/kali_mcp/MCP-Kali-Server/tool_logs/nmap_exxspecial.com_20251221_142546.xml",
+    "execution_time": 31.935261,
+    "summary": {
+      "hosts_up": 1,
+      "open_ports": 2,
+      "services_detected": 2
+    },
+    "open_ports": [
+      "80/tcp",
+      "443/tcp"
+    ],
+    "services": [
+      {
+        "port": "80",
+        "service": "http",
+        "product": "Cloudflare http proxy",
+        "version": null
+      },
+      {
+        "port": "443",
+        "service": "http",
+        "product": "Cloudflare http proxy",
+        "version": null
+      }
+    ],
+    "os_detection": [],
+    "hosts": [
+      {
+        "addresses": [
+          {
+            "addr": "172.67.136.160",
+            "type": "ipv4"
+          }
+        ],
+        "hostnames": [
+          "exxspecial.com"
+        ],
+        "ports": [
+          {
+            "port": "80",
+            "protocol": "tcp",
+            "state": "open",
+            "service": "http",
+            "product": "Cloudflare http proxy",
+            "version": null,
+            "scripts": [
+              {
+                "id": "http-title",
+                "output": "Connexion\nRequested resource was /login"
+              },
+              {
+                "id": "http-server-header",
+                "output": "cloudflare"
+              },
+              {
+                "id": "http-robots.txt",
+                "output": "1 disallowed entry \n/"
+              },
+              {
+                "id": "http-cors",
+                "output": "GET POST OPTIONS"
+              }
+            ],
+            "extrainfo": null
+          },
+          {
+            "port": "443",
+            "protocol": "tcp",
+            "state": "open",
+            "service": "http",
+            "product": "Cloudflare http proxy",
+            "version": null,
+            "scripts": [
+              {
+                "id": "http-cors",
+                "output": "GET POST OPTIONS"
+              },
+              {
+                "id": "http-server-header",
+                "output": "cloudflare"
+              },
+              {
+                "id": "ssl-cert",
+                "output": "Subject: commonName=exxspecial.com\nSubject Alternative Name: DNS:exxspecial.com, DNS:*.exxspecial.com\nNot valid before: 2025-11-20T14:15:12\nNot valid after:  2026-02-18T15:13:40"
+              },
+              {
+                "id": "http-title",
+                "output": "Connexion\nRequested resource was /login"
+              },
+              {
+                "id": "http-robots.txt",
+                "output": "1 disallowed entry \n/"
+              }
+            ],
+            "extrainfo": null
+          }
+        ],
+        "os": [],
+        "status": "up"
+      }
+    ],
+    "raw_output": "Starting Nmap 7.95 ( https://nmap.org ) at 2025-12-21 14:25 EET\nNmap scan report for exxspecial.com (172.67.136.160)\nHost is up (0.18s latency).\nOther addresses for exxspecial.com (not scanned): 104.21.78.191 2606:4700:3031::ac43:88a0 2606:4700:3036::6815:4ebf\n\nPORT    STATE SERVICE  VERSION\n80/tcp  open  http     Cloudflare http proxy\n| http-title: Connexion\n|_Requested resource was /login\n|_http-server-header: cloudflare\n| http-robots.txt: 1 disallowed entry \n|_/\n|_http-cors: GET POST OPTIONS\n443/tcp open  ssl/http Cloudflare http proxy\n|_http-cors: GET POST OPTIONS\n|_http-server-header: cloudflare\n| ssl-cert: Subject: commonName=exxspecial.com\n| Subject Alternative Name: DNS:exxspecial.com, DNS:*.exxspecial.com\n| Not valid before: 2025-11-20T14:15:12\n|_Not valid after:  2026-02-18T15:13:40\n| http-title: Connexion\n|_Requested resource was /login\n| http-robots.txt: 1 disallowed entry \n|_/\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 31.90 seconds",
+    "errors": null
+  }
+}

@@ -12,11 +12,11 @@ class OSINTHunter:
         """Analyse multi-facteurs pour détecter un scam ou phishing"""
         
         # 1. WHOIS (Âge du domaine)
-        whois_data, _ = await self.executor.run_command(f"whois {domain}")
+        whois_data, _, _ = await self.executor.run_command(f"whois {domain}")
         creation_date = re.search(r"(Creation Date|created|Registered on):?\s*(.*)", whois_data, re.I)
         
         # 2. SSL Analysis
-        ssl_data, _ = await self.executor.run_command(f"timeout 5 openssl s_client -connect {domain}:443 -servername {domain} < /dev/null 2>/dev/null | openssl x509 -noout -issuer -dates")
+        ssl_data, _, _ = await self.executor.run_command(f"timeout 5 openssl s_client -connect {domain}:443 -servername {domain} < /dev/null 2>/dev/null | openssl x509 -noout -issuer -dates")
         
         # 3. Réputation IP (via DNSBL ou similar)
         
