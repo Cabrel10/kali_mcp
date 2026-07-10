@@ -1,0 +1,14 @@
+{
+  "tool": "cors_scanner",
+  "timestamp": "20260710_115908",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/get"
+  },
+  "outputs": {
+    "url": "https://httpbin.org/get",
+    "vulnerable": false,
+    "findings": [],
+    "tests_run": 4
+  }
+}

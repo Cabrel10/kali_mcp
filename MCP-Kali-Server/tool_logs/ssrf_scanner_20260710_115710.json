@@ -1,0 +1,16 @@
+{
+  "tool": "ssrf_scanner",
+  "timestamp": "20260710_115710",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "url"
+  },
+  "outputs": {
+    "url": "https://httpbin.org/get",
+    "parameter": "url",
+    "findings": [],
+    "tests_run": 8,
+    "vulnerable": false
+  }
+}

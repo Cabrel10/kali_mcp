@@ -1,0 +1,26 @@
+{
+  "tool": "hydra_attack",
+  "timestamp": "20260710_115935",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "target": "127.0.0.1",
+    "service": "ssh",
+    "username": "test",
+    "userlist": null,
+    "threads": 16
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "127.0.0.1",
+    "service": "ssh",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/hydra_127.0.0.1_ssh_20260710_115935.txt",
+    "execution_time": 0,
+    "credentials_found": false,
+    "summary": {
+      "credentials_count": 0
+    },
+    "credentials": [],
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

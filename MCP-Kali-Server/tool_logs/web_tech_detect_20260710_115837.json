@@ -1,0 +1,24 @@
+{
+  "tool": "web_tech_detect",
+  "timestamp": "20260710_115837",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org"
+  },
+  "outputs": {
+    "status": "success",
+    "url": "https://httpbin.org",
+    "server": "Unknown",
+    "powered_by": "Unknown",
+    "technologies": [],
+    "headers": {
+      "date": "Fri, 10 Jul 2026 11:58:37 GMT",
+      "content-type": "text/html; charset=utf-8",
+      "content-length": "9593",
+      "server": "gunicorn/19.9.0",
+      "access-control-allow-origin": "*",
+      "access-control-allow-credentials": "true"
+    },
+    "raw_whatweb": ""
+  }
+}

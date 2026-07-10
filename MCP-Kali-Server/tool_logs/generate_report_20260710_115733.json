@@ -1,0 +1,16 @@
+{
+  "tool": "generate_report",
+  "timestamp": "20260710_115733",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "title": "Test XSS Vulnerability",
+    "platform": "immunefi"
+  },
+  "outputs": {
+    "status": "success",
+    "platform": "immunefi",
+    "severity": "high",
+    "report_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/report_immunefi_Test_XSS_Vulnerability_20260710_115733.md",
+    "report_preview": "# Smart Contract / DeFi Vulnerability Report\n\n**Project**: https://example.com/search?q=test\n**Title**: Test XSS Vulnerability\n**Severity**: HIGH \ud83d\udfe0\n**Category**: Cross-Site Scripting (XSS)\n**CVSS**: 7.0-8.9\n\n## Vulnerability Details\nReflected XSS in search parameter\n\n## Steps to Reproduce\n\n\n## Funds at Risk / Impact\n\n\n## Proof of Concept\n\n\n## Recommended Mitigation\n- Audit smart contract logic\n- Add reentrancy guards\n- Implement access controls\n- Use SafeMath/checked arithmetic\n\n---\n*Immunefi Cr"
+  }
+}

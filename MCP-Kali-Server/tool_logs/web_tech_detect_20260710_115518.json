@@ -1,0 +1,17 @@
+{
+  "tool": "web_tech_detect",
+  "timestamp": "20260710_115518",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org"
+  },
+  "outputs": {
+    "status": "success",
+    "url": "https://httpbin.org",
+    "server": "Unknown",
+    "powered_by": "Unknown",
+    "technologies": [],
+    "headers": {},
+    "raw_whatweb": ""
+  }
+}

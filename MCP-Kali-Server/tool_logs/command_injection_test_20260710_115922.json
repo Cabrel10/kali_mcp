@@ -1,0 +1,130 @@
+{
+  "tool": "command_injection_test",
+  "timestamp": "20260710_115922",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "cmd",
+    "method": "GET"
+  },
+  "outputs": {
+    "status": "success",
+    "target": "https://httpbin.org/get",
+    "parameter": "cmd",
+    "method": "GET",
+    "payloads_tested": 20,
+    "vulnerable": false,
+    "summary": {
+      "total_tested": 20,
+      "vulnerable": 0
+    },
+    "vulnerable_payloads": [],
+    "all_results": [
+      {
+        "payload": "; whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "|| whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "&& whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "& whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "`whoami`",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "$(whoami)",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; cat /etc/passwd",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| cat /etc/passwd",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; id",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| id",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; uname -a",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| uname -a",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; ls -la",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| ls -la",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      }
+    ]
+  }
+}

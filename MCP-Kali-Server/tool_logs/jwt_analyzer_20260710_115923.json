@@ -1,0 +1,34 @@
+{
+  "tool": "jwt_analyzer",
+  "timestamp": "20260710_115923",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6Ik..."
+  },
+  "outputs": {
+    "token_preview": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxM...",
+    "valid_format": true,
+    "header": {
+      "alg": "HS256",
+      "typ": "JWT"
+    },
+    "payload": {
+      "sub": "1234567890",
+      "name": "John Doe",
+      "exp": 1709246400
+    },
+    "findings": [
+      {
+        "type": "symmetric_algorithm",
+        "severity": "medium",
+        "description": "HS256 used - if server expects RS256, key confusion attack possible"
+      },
+      {
+        "type": "expired_token",
+        "severity": "info",
+        "description": "Token expired 74438363 seconds ago"
+      }
+    ],
+    "none_alg_token": "eyJhbGciOiAibm9uZSIsICJ0eXAiOiAiSldUIn0.eyJzdWIiOiAiMTIzNDU2Nzg5MCIsICJuYW1lIjogIkpvaG4gRG9lIiwgImV4cCI6IDE3MDkyNDY0MDB9."
+  }
+}

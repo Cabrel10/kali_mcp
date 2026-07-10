@@ -1,0 +1,31 @@
+{
+  "tool": "nmap_scan",
+  "timestamp": "20260710_115908",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "target": "scanme.nmap.org",
+    "scan_type": "quick",
+    "ports": null,
+    "scripts": null,
+    "intensity": "medium",
+    "timeout": 30
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "scanme.nmap.org",
+    "scan_type": "quick",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/nmap_scanme.nmap.org_20260710_115908.xml",
+    "execution_time": 0,
+    "summary": {
+      "hosts_up": 0,
+      "open_ports": 0,
+      "services_detected": 0
+    },
+    "open_ports": [],
+    "services": [],
+    "os_detection": [],
+    "hosts": [],
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

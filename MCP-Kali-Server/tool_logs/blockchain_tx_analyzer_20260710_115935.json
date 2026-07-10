@@ -1,0 +1,16 @@
+{
+  "tool": "blockchain_tx_analyzer",
+  "timestamp": "20260710_115935",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "tx_hash": "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060",
+    "chain": "ethereum"
+  },
+  "outputs": {
+    "tx_hash": "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060",
+    "chain": "ethereum",
+    "status": "error",
+    "analysis": {},
+    "error": "Failed to parse RPC response"
+  }
+}

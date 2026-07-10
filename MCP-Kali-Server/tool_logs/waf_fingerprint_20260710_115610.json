@@ -1,0 +1,16 @@
+{
+  "tool": "waf_fingerprint",
+  "timestamp": "20260710_115610",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org"
+  },
+  "outputs": {
+    "url": "https://httpbin.org",
+    "waf_detected": false,
+    "waf_name": "none",
+    "confidence": 0,
+    "evidence": [],
+    "bypass_hints": []
+  }
+}

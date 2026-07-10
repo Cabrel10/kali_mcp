@@ -1,0 +1,21 @@
+{
+  "tool": "john_crack",
+  "timestamp": "20260710_115935",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "hash_file": "/tmp/test_hashes.txt",
+    "wordlist": "/usr/share/wordlists/rockyou.txt",
+    "format": null,
+    "rules": null,
+    "incremental": false
+  },
+  "outputs": {
+    "status": "partial",
+    "hash_file": "/tmp/test_hashes.txt",
+    "execution_time": 0,
+    "cracked_count": 0,
+    "cracked_passwords": [],
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

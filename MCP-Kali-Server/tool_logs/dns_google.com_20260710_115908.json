@@ -1,0 +1,17 @@
+{
+  "domain": "google.com",
+  "records": {
+    "A": [],
+    "AAAA": [],
+    "MX": [],
+    "NS": [],
+    "TXT": [],
+    "SOA": [],
+    "CNAME": []
+  },
+  "zone_transfer": {
+    "attempted": false,
+    "success": false,
+    "data": []
+  }
+}

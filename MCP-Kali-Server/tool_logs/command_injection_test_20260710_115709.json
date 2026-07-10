@@ -1,0 +1,161 @@
+{
+  "tool": "command_injection_test",
+  "timestamp": "20260710_115709",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "cmd",
+    "method": "GET"
+  },
+  "outputs": {
+    "status": "success",
+    "target": "https://httpbin.org/get",
+    "parameter": "cmd",
+    "method": "GET",
+    "payloads_tested": 20,
+    "vulnerable": true,
+    "summary": {
+      "total_tested": 20,
+      "vulnerable": 2
+    },
+    "vulnerable_payloads": [
+      {
+        "payload": "| whoami",
+        "vulnerable": true,
+        "indicators_found": [
+          "whoami:root",
+          "ls:bin"
+        ],
+        "response_length": 294,
+        "confidence": "high",
+        "response_preview": "{\n  \"args\": {\n    \"cmd\": \"| whoami\"\n  }, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Host\": \"httpbin.org\", \n    \"User-Agent\": \"curl/8.14.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6a50de05-57616ccd63c420b9536ca424\"\n  }, \n  \"origin\": \"170.106.202.227\", \n  \"url\": \"https://httpbin.org/get?cmd=| whoami\"\n}"
+      },
+      {
+        "payload": "; uname -a",
+        "vulnerable": true,
+        "indicators_found": [
+          "whoami:root",
+          "ls:bin"
+        ],
+        "response_length": 300,
+        "confidence": "high",
+        "response_preview": "{\n  \"args\": {\n    \"cmd\": \"; uname -a\"\n  }, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Host\": \"httpbin.org\", \n    \"User-Agent\": \"curl/8.14.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6a50de05-57395de41064e0bb756756d3\"\n  }, \n  \"origin\": \"170.106.202.227\", \n  \"url\": \"https://httpbin.org/get?cmd=%3B uname -a\"\n}"
+      }
+    ],
+    "all_results": [
+      {
+        "payload": "; whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| whoami",
+        "vulnerable": true,
+        "indicators_found": [
+          "whoami:root",
+          "ls:bin"
+        ],
+        "response_length": 294,
+        "confidence": "high",
+        "response_preview": "{\n  \"args\": {\n    \"cmd\": \"| whoami\"\n  }, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Host\": \"httpbin.org\", \n    \"User-Agent\": \"curl/8.14.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6a50de05-57616ccd63c420b9536ca424\"\n  }, \n  \"origin\": \"170.106.202.227\", \n  \"url\": \"https://httpbin.org/get?cmd=| whoami\"\n}"
+      },
+      {
+        "payload": "|| whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "&& whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "& whoami",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "`whoami`",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "$(whoami)",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; cat /etc/passwd",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| cat /etc/passwd",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; id",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| id",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; uname -a",
+        "vulnerable": true,
+        "indicators_found": [
+          "whoami:root",
+          "ls:bin"
+        ],
+        "response_length": 300,
+        "confidence": "high",
+        "response_preview": "{\n  \"args\": {\n    \"cmd\": \"; uname -a\"\n  }, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Host\": \"httpbin.org\", \n    \"User-Agent\": \"curl/8.14.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6a50de05-57395de41064e0bb756756d3\"\n  }, \n  \"origin\": \"170.106.202.227\", \n  \"url\": \"https://httpbin.org/get?cmd=%3B uname -a\"\n}"
+      },
+      {
+        "payload": "| uname -a",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "; ls -la",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      },
+      {
+        "payload": "| ls -la",
+        "vulnerable": false,
+        "indicators_found": [],
+        "response_length": 155,
+        "confidence": "low"
+      }
+    ]
+  }
+}

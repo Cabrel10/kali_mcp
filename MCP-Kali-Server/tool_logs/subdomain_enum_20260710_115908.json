@@ -1,0 +1,30 @@
+{
+  "tool": "subdomain_enum",
+  "timestamp": "20260710_115908",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "domain": "google.com",
+    "tools": [
+      "subfinder",
+      "amass"
+    ],
+    "wordlist": null
+  },
+  "outputs": {
+    "status": "success",
+    "domain": "google.com",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/subdomains_google.com_20260710_115908.txt",
+    "total_unique": 0,
+    "tool_results": {
+      "subfinder": {
+        "count": 0,
+        "subdomains": []
+      },
+      "amass": {
+        "count": 0,
+        "subdomains": []
+      }
+    },
+    "subdomains": []
+  }
+}

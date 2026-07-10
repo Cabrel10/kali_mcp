@@ -1,0 +1,17 @@
+{
+  "tool": "run_curl_advanced",
+  "timestamp": "20260710_115548",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "method": "GET"
+  },
+  "outputs": {
+    "status": "error",
+    "url": "https://httpbin.org/get",
+    "method": "GET",
+    "execution_time": 30.029564,
+    "response": "",
+    "errors": null
+  }
+}

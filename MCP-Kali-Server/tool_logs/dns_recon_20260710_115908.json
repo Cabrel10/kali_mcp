@@ -1,0 +1,40 @@
+{
+  "tool": "dns_recon",
+  "timestamp": "20260710_115908",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "domain": "google.com",
+    "record_types": [
+      "A",
+      "AAAA",
+      "MX",
+      "NS",
+      "TXT",
+      "SOA",
+      "CNAME"
+    ]
+  },
+  "outputs": {
+    "status": "success",
+    "domain": "google.com",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/dns_google.com_20260710_115908.json",
+    "records": {
+      "A": [],
+      "AAAA": [],
+      "MX": [],
+      "NS": [],
+      "TXT": [],
+      "SOA": [],
+      "CNAME": []
+    },
+    "zone_transfer": {
+      "attempted": false,
+      "success": false,
+      "data": []
+    },
+    "summary": {
+      "record_types_found": 0,
+      "zone_transfer_vulnerable": false
+    }
+  }
+}

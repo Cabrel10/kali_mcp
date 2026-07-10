@@ -1,0 +1,18 @@
+{
+  "tool": "idor_tester",
+  "timestamp": "20260710_115931",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/status/200",
+    "param": "id"
+  },
+  "outputs": {
+    "url": "https://httpbin.org/status/200",
+    "parameter": "id",
+    "findings": [],
+    "tested_range": "1-3",
+    "accessible_ids": [],
+    "vulnerable": false,
+    "total_accessible": 0
+  }
+}

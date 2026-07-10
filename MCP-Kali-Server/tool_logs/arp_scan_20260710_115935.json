@@ -1,0 +1,18 @@
+{
+  "tool": "arp_scan",
+  "timestamp": "20260710_115935",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "interface": "eth0",
+    "target_range": "127.0.0.1/32"
+  },
+  "outputs": {
+    "status": "partial",
+    "interface": "eth0",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/arp_scan_20260710_115935.txt",
+    "hosts_found": 0,
+    "hosts": [],
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

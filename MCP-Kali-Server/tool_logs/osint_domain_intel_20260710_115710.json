@@ -1,0 +1,46 @@
+{
+  "tool": "osint_domain_intel",
+  "timestamp": "20260710_115710",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "domain": "google.com"
+  },
+  "outputs": {
+    "domain": "google.com",
+    "whois": {},
+    "dns": {
+      "A": [
+        "172.253.62.102",
+        "2607:f8b0:4004:c2d::65",
+        "172.253.62.113",
+        "172.253.62.139",
+        "2607:f8b0:4004:c2d::8a",
+        "172.253.62.100",
+        "2607:f8b0:4004:c2d::71",
+        "172.253.62.138",
+        "172.253.62.101",
+        "2607:f8b0:4004:c2d::64"
+      ]
+    },
+    "ssl": {
+      "issuer": "C=US; O=Google Trust Services; CN=WR2",
+      "subject": "CN=*.google.com",
+      "expires": "Sep 14 08:35:22 2026 GMT"
+    },
+    "http_headers": {
+      "location": "https://www.google.com/",
+      "content-type": "text/html; charset=UTF-8",
+      "content-security-policy-report-only": "object-src 'none';base-uri 'self';script-src 'nonce-cBJNm8KU5-6G3U9Pw0DRyQ' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/other-hp",
+      "date": "Fri, 10 Jul 2026 11:57:10 GMT",
+      "expires": "Sun, 09 Aug 2026 11:57:10 GMT",
+      "cache-control": "public, max-age=2592000",
+      "server": "gws",
+      "content-length": "220",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+    },
+    "technologies": [],
+    "subdomains": []
+  }
+}

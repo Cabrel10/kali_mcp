@@ -1,0 +1,280 @@
+{
+  "tool": "origin_ip_hunter",
+  "timestamp": "20260710_115924",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "domain": "google.com"
+  },
+  "outputs": {
+    "domain": "google.com",
+    "cdn_detected": false,
+    "possible_origins": [
+      {
+        "ip": "172.253.62.103",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.62.147",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.62.106",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.62.104",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.62.105",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.62.99",
+        "source": "subdomain:api.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.138",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.101",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.102",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c17::8b",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c17::64",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c17::66",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.139",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.100",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.16.113",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c17::65",
+        "source": "subdomain:admin.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.167.18",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "2607:f8b0:4004:c1d::13",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "2607:f8b0:4004:c1d::53",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "2607:f8b0:4004:c1d::12",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "2607:f8b0:4004:c1d::11",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "142.251.167.19",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "142.251.167.17",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "142.251.167.83",
+        "source": "subdomain:mail.google.com",
+        "confidence": "high"
+      },
+      {
+        "ip": "2607:f8b0:4004:c2d::1b",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.179.18.27",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c27::1b",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "142.251.163.26",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::1a",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.27",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::1b",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "172.253.139.27",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.26",
+        "source": "subdomain:smtp.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "64.9.224.68",
+        "source": "subdomain:vpn.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "64.9.224.69",
+        "source": "subdomain:vpn.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "64.9.224.70",
+        "source": "subdomain:vpn.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2001:4860:4802:32::a",
+        "source": "subdomain:ns1.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "216.239.32.10",
+        "source": "subdomain:ns1.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "216.239.34.10",
+        "source": "subdomain:ns2.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2001:4860:4802:34::a",
+        "source": "subdomain:ns2.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::71",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.101",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.102",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.100",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.113",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::64",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.139",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::8b",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "192.178.155.138",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      },
+      {
+        "ip": "2607:f8b0:4004:c23::65",
+        "source": "subdomain:images.google.com",
+        "confidence": "medium"
+      }
+    ],
+    "dns_records": {},
+    "subdomains_checked": 8,
+    "main_ips": [
+      "172.253.62.101",
+      "2607:f8b0:4004:c2d::8b",
+      "2607:f8b0:4004:c2d::66",
+      "172.253.62.113",
+      "172.253.62.139",
+      "172.253.62.102",
+      "172.253.62.100",
+      "2607:f8b0:4004:c2d::65",
+      "172.253.62.138",
+      "2607:f8b0:4004:c2d::71"
+    ],
+    "ssl_cn": "*.google.com",
+    "total_origins_found": 50
+  }
+}

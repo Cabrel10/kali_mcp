@@ -1,0 +1,16 @@
+{
+  "tool": "ssti_scanner",
+  "timestamp": "20260710_115709",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "url": "https://httpbin.org/get",
+    "param": "q"
+  },
+  "outputs": {
+    "url": "https://httpbin.org/get",
+    "parameter": "q",
+    "vulnerable": false,
+    "engine_detected": null,
+    "findings": []
+  }
+}

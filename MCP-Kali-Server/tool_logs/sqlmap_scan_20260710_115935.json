@@ -1,0 +1,37 @@
+{
+  "tool": "sqlmap_scan",
+  "timestamp": "20260710_115935",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "url": "https://httpbin.org/get?id=1",
+    "data": null,
+    "method": "GET",
+    "param": null,
+    "dbms": null,
+    "level": 1,
+    "risk": 1,
+    "technique": "BEUSTQ",
+    "dump": false,
+    "tables": false,
+    "dbs": false,
+    "tamper": null
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "https://httpbin.org/get?id=1",
+    "vulnerable": false,
+    "output_dir": "/home/user/webapp/MCP-Kali-Server/tool_logs/sqlmap_https_httpbin.org_get_id_1_20260710_115935",
+    "execution_time": 0,
+    "summary": {
+      "is_vulnerable": false,
+      "injection_points": 0,
+      "databases_found": 0,
+      "dumped_files": 0
+    },
+    "injection_points": [],
+    "databases": [],
+    "dumped_files": [],
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

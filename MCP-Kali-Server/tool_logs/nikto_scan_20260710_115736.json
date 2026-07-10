@@ -1,0 +1,26 @@
+{
+  "tool": "nikto_scan",
+  "timestamp": "20260710_115736",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "target": "https://httpbin.org",
+    "tuning": "x6",
+    "plugins": null,
+    "ssl": false
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "https://httpbin.org",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/nikto_https_httpbin.org_20260710_115736.xml",
+    "execution_time": 0,
+    "summary": {
+      "total_findings": 0,
+      "critical": 0,
+      "high": 0
+    },
+    "vulnerabilities": [],
+    "critical_findings": [],
+    "high_findings": [],
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

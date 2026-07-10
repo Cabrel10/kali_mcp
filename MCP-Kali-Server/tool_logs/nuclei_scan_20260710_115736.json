@@ -1,0 +1,28 @@
+{
+  "tool": "nuclei_scan",
+  "timestamp": "20260710_115736",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "target": "https://httpbin.org",
+    "templates": null,
+    "severity": "critical,high,medium",
+    "tags": null,
+    "rate_limit": 150
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "https://httpbin.org",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/nuclei_https_httpbin.org_20260710_115736.json",
+    "execution_time": 0,
+    "summary": {
+      "total_findings": 0,
+      "critical": 0,
+      "high": 0,
+      "medium": 0
+    },
+    "critical_findings": [],
+    "high_findings": [],
+    "all_findings": [],
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

@@ -1,0 +1,289 @@
+{
+  "tool": "api_endpoint_discovery",
+  "timestamp": "20260710_115931",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "base_url": "https://httpbin.org",
+    "wordlist": "common"
+  },
+  "outputs": {
+    "base_url": "https://httpbin.org",
+    "endpoints_found": [
+      {
+        "path": "/api",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/api/v1",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/api/v2",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/api/v3",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/v1",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/v2",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/health",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/status",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/version",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/info",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/docs",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/swagger",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/openapi.json",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/swagger.json",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/api-docs",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/graphql",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/admin",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/dashboard",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/config",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/settings",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/debug",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/users",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/user",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/auth",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/login",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/register",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/token",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/oauth",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/callback",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/webhook",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/websocket",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/ws",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/metrics",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/prometheus",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/actuator",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/env",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/trace",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/.env",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/robots.txt",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/sitemap.xml",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/.git/HEAD",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/wp-admin",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/wp-login.php",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/xmlrpc.php",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      },
+      {
+        "path": "/wp-json",
+        "method": "GET",
+        "status_code": "503",
+        "response_size": "162"
+      }
+    ],
+    "total_tested": 45,
+    "interesting_codes": {
+      "HTTP_503": 45
+    },
+    "total_found": 45
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "tool": "defi_protocol_scan",
+  "timestamp": "20260710_115934",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "protocol": "https://app.uniswap.org"
+  },
+  "outputs": {
+    "protocol": "https://app.uniswap.org",
+    "findings": [],
+    "frontend_analysis": {},
+    "api_keys_exposed": [
+      {
+        "type": "etherscan_key_in_js",
+        "count": 2,
+        "severity": "critical",
+        "source": "/assets/index-CpFM5cwa.js"
+      },
+      {
+        "type": "mnemonic_in_js",
+        "count": 1,
+        "severity": "critical",
+        "source": "/assets/index-CpFM5cwa.js"
+      }
+    ],
+    "js_endpoints": [
+      "/api/v2/",
+      "/api/v2/",
+      "/api/human#parseabiitem-1",
+      "/api/glossary/Errors#typeddatainvalidprimarytypeerror",
+      "/api/WagmiProvider",
+      "/api/v1/analytics_events",
+      "/api/v1/apps/:app_id",
+      "/api/v1/funding/coinbase_on_ramp/init",
+      "/api/v1/funding/coinbase_on_ramp/status",
+      "/api/v1/apps/:app_id/cross-app/connections",
+      "/api/v1/custom_jwt_account/authenticate",
+      "/api/v1/custom_jwt_account/link",
+      "/api/v1/farcaster/init",
+      "/api/v1/farcaster/authenticate",
+      "/api/v1/farcaster/link",
+      "/api/v1/farcaster/unlink",
+      "/api/v1/farcaster/status",
+      "/api/v2/farcaster/init",
+      "/api/v2/farcaster/authenticate",
+      "/api/v1/guest/authenticate"
+    ],
+    "js_bundles": [
+      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+      "/assets/index-CpFM5cwa.js",
+      "/zone-events.js"
+    ],
+    "contract_addresses": [],
+    "rpc_endpoints": [
+      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+      "https://challenges.cloudflare.com; style-src &#39;self&#39; &#39;unsafe-inline&#39; https://fonts.googleapis.com https://fonts.gstatic.com https://fonts.gstatic.com/s/inter/v18/*; font-src &#39;self&#39; https://fonts.googleapis.com https://fonts.gstatic.com https://fonts.gstatic.com/s/inter/v18/*; img-src * blob: data:; frame-src &#39;self&#39; https://buy.moonpay.com/ https://challenges.cloudflare.com https://verify.walletconnect.com/ https://verify.walletconnect.org/ https://wrapped.uniswap.org https://auth.privy.io https://privy.dev.ew.unihq.org https://privy.app.corn-staging.com https://privy.app.uniswap.org; media-src &#39;self&#39; *; form-action &#39;none&#39;; connect-src &#39;self&#39; blob: data: https://*.alchemy.com https://*.arc.io https://*.arbitrum.io https://*.base.org/ https://*.coinbase.com https://*.coingecko.com/ https://*.coinmarketcap.com/ https://*.drpc.org/ https://*.googleapis.com https://*.infura.io https://*.nodereal.io https://*.optimism.io https://*.quiknode.pro https://*.uniswap.org https://*.walletconnect.com https://*.walletconnect.org https://api.avax.network/ext/bc/C/rpc https://api.moonpay.com/ https://api.opensea.io https://uploads.pinata.cloud https://bsc-dataseed.bnbchain.org https://bsc-dataseed1.bnbchain.org https://bsc-dataseed2.bnbchain.org https://bsc-dataseed3.bnbchain.org https://bsc-dataseed4.bnbchain.org https://bsc-dataseed-public.bnbchain.org https://opbnb-mainnet-rpc.bnbchain.org https://bsc-dataseed1.ninicoin.io https://bsc-dataseed2.ninicoin.io https://bscrpc.com https://buy.moonpay.com/ https://forno.celo.org/ https://images-country.meld.io https://lh3.googleusercontent.com/ https://mainnet.megaeth.com/rpc https://mainnet.base.org/ https://browser-intake-datadoghq.com https://polygon-rpc.com/ https://raw.githubusercontent.com https://rpc.ankr.com https://eth-mainnet.public.blastapi.io https://rpc.blast.io/ https://rpc.mevblocker.io/ https://rpc.scroll.io/ https://rpc.sepolia.org/ https://rpc.linea.build https://rpc.mainnet.chain.robinhood.com https://rpc.soneium.org https://rpc.tempo.xyz https://sepolia.gateway.tenderly.co https://ethereum-sepolia-rpc.publicnode.com https://rpc.zora.energy/ https://sockjs-us3.pusher.com/ https://sparrow.cloudflare.com/ https://statsigapi.net https://trustwallet.com https://uniswap.org https://valid.rpki.cloudflare.com https://vercel.com https://vercel.live/ https://mainnet.era.zksync.io/ https://mainnet.unichain.org/ https://api.web3modal.org https://api.statsig.com https://featuregates.org https://events.statsigapi.net https://api.statsigcdn.com https://featureassets.org https://assetsconfigcdn.org https://prodregistryv2.org https://cloudflare-dns.com https://beyondwickedmapping.org https://auth.privy.io https://privy.dev.ew.unihq.org https://privy.app.corn-staging.com https://privy.app.uniswap.org https://ipv4-check-perf.radar.cloudflare.com https://ipv6-check-perf.radar.cloudflare.com/ https://performance.radar.cloudflare.com/ https://invalid.rpki.cloudflare.com/ https://dnssec-oracle.ens.domains/ https://ccip-v3.ens.xyz wss://*.uniswap.org wss://relay.walletconnect.com wss://relay.walletconnect.org wss://ws-us3.pusher.com/ wss://nbstream.binance.com wss://nbstream.binance.info; worker-src &#39;self&#39; blob:"
+    ],
+    "total_findings": 2
+  }
+}

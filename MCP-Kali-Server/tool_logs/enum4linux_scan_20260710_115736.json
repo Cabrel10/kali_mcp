@@ -1,0 +1,29 @@
+{
+  "tool": "enum4linux_scan",
+  "timestamp": "20260710_115736",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "target": "127.0.0.1",
+    "options": "-a"
+  },
+  "outputs": {
+    "status": "partial",
+    "target": "127.0.0.1",
+    "output_file": "/home/user/webapp/MCP-Kali-Server/tool_logs/enum4linux_127.0.0.1_20260710_115736.txt",
+    "execution_time": 0,
+    "summary": {
+      "users": 0,
+      "groups": 0,
+      "shares": 0
+    },
+    "parsed_data": {
+      "users": [],
+      "groups": [],
+      "shares": [],
+      "os_info": [],
+      "password_policy": []
+    },
+    "raw_output": "",
+    "errors": "Command not found. Ensure the tool is installed."
+  }
+}

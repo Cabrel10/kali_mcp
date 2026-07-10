@@ -1,0 +1,26 @@
+{
+  "tool": "subdomain_scanner",
+  "timestamp": "20260710_115730",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "domain": "google.com"
+  },
+  "outputs": {
+    "domain": "google.com",
+    "subdomains": [
+      "admin.google.com",
+      "api.google.com",
+      "docs.google.com",
+      "mail.google.com",
+      "vpn.google.com",
+      "www.google.com"
+    ],
+    "total": 6,
+    "sources": [
+      {
+        "tool": "dns_bruteforce",
+        "found": 6
+      }
+    ]
+  }
+}

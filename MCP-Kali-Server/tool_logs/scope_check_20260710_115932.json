@@ -1,0 +1,48 @@
+{
+  "tool": "scope_check",
+  "timestamp": "20260710_115932",
+  "session_id": "test_validation_20260710_115837",
+  "inputs": {
+    "target": "google.com",
+    "platform": "immunefi"
+  },
+  "outputs": {
+    "target": "google.com",
+    "platform": "immunefi",
+    "program": "test",
+    "in_scope": true,
+    "checks": [
+      {
+        "check": "dns_resolution",
+        "status": "ok"
+      },
+      {
+        "check": "http_reachable",
+        "status": "ok"
+      }
+    ],
+    "resolved_ips": [
+      "192.179.18.138",
+      "192.179.18.101",
+      "2607:f8b0:4004:c2d::8b",
+      "192.179.18.100",
+      "2607:f8b0:4004:c2d::66",
+      "192.179.18.139",
+      "192.179.18.102",
+      "2607:f8b0:4004:c2d::8a",
+      "192.179.18.113",
+      "2607:f8b0:4004:c2d::65"
+    ],
+    "response_code": "301",
+    "waf": "none_detected",
+    "platform_info": {
+      "report_url": "https://immunefi.com/bug-bounty/test",
+      "focus": "smart_contracts,blockchain,defi",
+      "out_of_scope_patterns": [
+        "frontend only",
+        "informational"
+      ],
+      "required_header": "X-Immunefi-Research"
+    }
+  }
+}

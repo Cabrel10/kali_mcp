@@ -1,0 +1,18 @@
+{
+  "tool": "execute_command",
+  "timestamp": "20260710_115736",
+  "session_id": "test_validation_20260710_115508",
+  "inputs": {
+    "command": "echo 'MCP test OK'",
+    "timeout": 5,
+    "working_dir": null
+  },
+  "outputs": {
+    "status": "success",
+    "command": "echo 'MCP test OK'",
+    "stdout": "MCP test OK",
+    "stderr": "",
+    "return_code": 0,
+    "execution_time": 0.003041
+  }
+}
