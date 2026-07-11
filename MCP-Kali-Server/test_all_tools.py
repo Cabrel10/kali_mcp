@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Kali MCP Server v6 — Comprehensive Test Suite
-Tests ALL 20 mega-modules + 11 core/intelligence classes + async execution
-Validates: imports, signatures, CVSS scoring, correlation, kill chain, deep parsing, parallel exec
+Kali MCP Server v6.2 — Comprehensive Test Suite
+Tests ALL 22 mega-modules + 17 core/intelligence classes + async execution
+Validates: imports, signatures, CVSS scoring, correlation, kill chain, deep parsing,
+           parallel exec, forensics, race conditions, enhanced crypto, persistence, IDOR, WiFi pivot
 """
 
 import asyncio
@@ -75,11 +76,9 @@ def test_rate_limit_detector():
         rl.detect_from_response("T", 429, {})
         d2 = rl.get_delay("T")
         assert d2 >= d1, f"Backoff: {d2} >= {d1}"
-        # WAF detection
         waf = rl.detect_from_response("W", 403, {"server": "cloudflare"})
         assert waf.get("waf_detected") is True
         rl.reset("T")
-        # After reset, defaultdict gives default 0.1
         d3 = rl.get_delay("T")
         assert d3 <= 0.2, f"After reset: {d3}"
         record("RateLimitDetector", True)
@@ -92,31 +91,23 @@ def test_orchestrator():
         mem = srv.PentestMemory()
         rl = srv.RateLimitDetector()
         orch = srv.IntelligentOrchestrator(mem, rl)
-        # 403 bypass
         recs = orch.analyze_response_code("T", "/admin", 403, {})
         assert any(r["action"] == "auth_bypass" for r in recs)
-        # 405 method enum
         recs2 = orch.analyze_response_code("T", "/api", 405, {})
         assert any(r["action"] == "method_enumeration" for r in recs2)
-        # 422 param fuzz
         recs3 = orch.analyze_response_code("T", "/api", 422, {})
         assert any(r["action"] == "parameter_fuzzing" for r in recs3)
-        # 500 error exploit
         recs4 = orch.analyze_response_code("T", "/err", 500, {})
         assert any(r["action"] == "error_exploitation" for r in recs4)
-        # Cloud header detection
         recs5 = orch.analyze_response_code("T", "/", 200, {"x-amz-request-id": "abc123"})
         assert any(r["action"] == "cloud_enumeration" for r in recs5)
-        # Stack configs
         assert len(orch.STACK_CONFIGS) >= 7
         for stack in ["spring", "django", "express", "flask", "php", "go", "aspnet"]:
             assert stack in orch.STACK_CONFIGS
-        # adapt_to_stack
         mem.store_tech("S", {"framework": "spring"})
         adapted = orch.adapt_to_stack("S")
         assert adapted["adapted"] is True
         assert "/actuator" in adapted["config"]["endpoints"]
-        # recommend_next_tools
         recs6 = orch.recommend_next_tools("EMPTY")
         assert any(r["module"] == "recon_engine" for r in recs6)
         record("IntelligentOrchestrator", True)
@@ -164,30 +155,25 @@ def test_input_validator():
 
 def test_cvss_calculator():
     try:
-        # RCE: should be 10.0
         s1, v1 = srv.CVSSCalculator.calculate(
             av="network", ac="low", pr="none", ui="none",
             scope="changed", conf="high", integ="high", avail="high")
         assert s1 == 10.0, f"RCE should be 10.0, got {s1}"
         assert "CVSS:3.1" in v1
-        # Info only: should be low
         s2, v2 = srv.CVSSCalculator.calculate(
             av="network", ac="low", pr="none", ui="none",
             scope="unchanged", conf="low", integ="none", avail="none")
         assert 4.0 <= s2 <= 6.0, f"Info should be medium, got {s2}"
-        # Severity labels
         assert srv.CVSSCalculator.severity_from_score(9.5) == "critical"
         assert srv.CVSSCalculator.severity_from_score(7.5) == "high"
         assert srv.CVSSCalculator.severity_from_score(5.0) == "medium"
         assert srv.CVSSCalculator.severity_from_score(2.0) == "low"
         assert srv.CVSSCalculator.severity_from_score(0.0) == "info"
-        # Vuln type presets
         for vt in ["rce", "sqli", "xss_stored", "lfi", "ssrf", "ssti", "cmdi", "log4shell",
                     "default_credentials", "kerberoast", "jwt_none_alg"]:
             s, v, sev = srv.CVSSCalculator.score_for_vuln_type(vt)
             assert s > 0, f"{vt} score should be > 0"
             assert sev in ["critical", "high", "medium", "low", "info"]
-        # Context boost
         s_boost, _, _ = srv.CVSSCalculator.score_for_vuln_type(
             "info_disclosure", {"internet_facing": True, "no_auth": True})
         s_no_boost, _, _ = srv.CVSSCalculator.score_for_vuln_type("info_disclosure")
@@ -201,7 +187,6 @@ def test_vuln_correlator():
     try:
         mem = srv.PentestMemory()
         vc = srv.VulnCorrelator(mem)
-        # Add findings to trigger SSRF→Cloud chain
         mem.store_finding("C", "ssrf_hunter", "ssrf", {"url": "http://169.254.169.254"})
         mem.store_finding("C", "orchestrator", "cloud_detected", {"provider": "aws"})
         vc.add_vulnerability(srv.VulnFinding(
@@ -210,17 +195,15 @@ def test_vuln_correlator():
             mitre_techniques=["T1190"]))
         corr = vc.correlate("C")
         assert corr["total_vulns"] >= 1
-        assert len(corr["exploit_chains"]) >= 1  # SSRF+cloud chain
+        assert len(corr["exploit_chains"]) >= 1
         assert corr["attack_surface_score"] > 0
         assert corr["risk_rating"] in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]
         assert len(corr["mitre_coverage"]) > 0
-        # Service checks
         smb_checks = vc.get_service_checks("smb")
         assert "eternalblue" in smb_checks["checks"]
         assert "CVE-2017-0144" in smb_checks["common_cves"]
         ssh_checks = vc.get_service_checks("ssh")
         assert "weak_creds" in ssh_checks["checks"]
-        # Verify chain detection: SSTI → RCE chain (single requirement)
         mem2 = srv.PentestMemory()
         vc2 = srv.VulnCorrelator(mem2)
         vc2.add_vulnerability(srv.VulnFinding(
@@ -245,7 +228,6 @@ def test_kill_chain_tracker():
         assert prog["completion"] == "3/7"
         assert prog["completion_pct"] == round(3/7 * 100, 1)
         assert prog["next_phase"]["phase"] == "weaponization"
-        # MITRE mapping exists for all phases
         assert len(srv.KillChainTracker.MITRE_MAPPING) == 7
         for phase in srv.KillChainPhase:
             assert phase in srv.KillChainTracker.MITRE_MAPPING
@@ -257,18 +239,15 @@ def test_kill_chain_tracker():
 def test_deep_output_parser():
     try:
         dp = srv.DeepOutputParser()
-        # Credential extraction
         hydra_out = "[22][ssh] host: 10.0.0.1 login: admin password: P@ssw0rd123\n[22][ssh] host: 10.0.0.1 login: root password: toor"
         creds = dp.extract_credentials_from_output(hydra_out)
         assert len(creds) == 2
         assert creds[0]["username"] == "admin"
         assert creds[0]["password"] == "P@ssw0rd123"
-        # Hashcat format (hash:password)
         hc_out = "5f4dcc3b5aa765d61d8327deb882cf99:password123"
         hc_creds = dp.extract_credentials_from_output(hc_out)
         assert len(hc_creds) >= 1
         assert hc_creds[0]["password"] == "password123"
-        # Error page parsing
         html = """<html><body>
         Traceback (most recent call last):
           File "app.py", line 42
@@ -282,7 +261,6 @@ def test_deep_output_parser():
         assert len(ep["stack_traces"]) > 0
         assert len(ep["info_leaks"]) > 0
         assert any(t["tech"] == "php" for t in ep["technologies"])
-        # Nuclei output parsing
         nuclei_out = "[critical] [CVE-2021-44228] [http] http://target.com/api [log4j]\n[high] [exposed-panel] [http] http://target.com/admin"
         nf = dp.parse_nuclei_output(nuclei_out)
         assert len(nf) == 2
@@ -310,7 +288,6 @@ async def test_parallel_executor():
         results = await srv.ParallelExecutor.run_parallel(tasks, max_concurrent=2)
         assert len(results) == 2
         assert all(r["status"] == "success" for r in results)
-        # Timeout test
         async def forever():
             await asyncio.sleep(100)
         timeout_tasks = [{"name": "infinite", "coro": forever(), "timeout": 0.5}]
@@ -322,7 +299,7 @@ async def test_parallel_executor():
 
 
 # ══════════════════════════════════════════════════════════════
-# SECTION 3: Module Existence & Signatures (20 tools)
+# SECTION 3: Module Existence & Signatures (22 tools)
 # ══════════════════════════════════════════════════════════════
 
 TOOL_SIGNATURES = {
@@ -346,6 +323,8 @@ TOOL_SIGNATURES = {
     "reporting_engine": ["target", "report_type"],
     "autopilot_commander": ["target", "depth", "scope", "aggressive"],
     "payload_factory": ["action", "target"],
+    "forensics_engine": ["target", "modules"],
+    "race_condition_tester": ["target", "modules"],
 }
 
 
@@ -383,7 +362,6 @@ async def test_exec_recon():
         r = await srv.recon_engine(target="127.0.0.1", depth="stealth", timeout=30)
         d = json.loads(r) if isinstance(r, str) else r
         assert isinstance(d, dict)
-        # Check intelligence fields exist
         if "intelligence_summary" in d:
             assert "risk_rating" in d["intelligence_summary"]
         record("exec:recon_engine", True)
@@ -437,8 +415,225 @@ async def test_exec_osint():
         record("exec:osint_harvester", False, str(e))
 
 
+async def test_exec_forensics():
+    """Test forensics_engine with safe local analysis"""
+    try:
+        r = await srv.forensics_engine(
+            target="127.0.0.1",
+            modules="log_analysis,ioc_extract",
+            depth="stealth",
+            timeout=30,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "modules" in d
+        assert "target" in d
+        record("exec:forensics_engine", True)
+    except Exception as e:
+        record("exec:forensics_engine", False, str(e))
+
+
+async def test_exec_race_condition():
+    """Test race_condition_tester with safe localhost target"""
+    try:
+        r = await srv.race_condition_tester(
+            target="http://127.0.0.1",
+            modules="timing_attack",
+            timeout=15,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "modules" in d
+        assert "target" in d
+        record("exec:race_condition_tester", True)
+    except Exception as e:
+        record("exec:race_condition_tester", False, str(e))
+
+
+async def test_exec_crypto_forensics():
+    """Test enhanced crypto_forensics with hash identification"""
+    try:
+        r = await srv.crypto_forensics(
+            target="5f4dcc3b5aa765d61d8327deb882cf99",
+            modules="hash_id",
+            depth="stealth",
+            timeout=15,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "modules" in d
+        if "hash_id" in d.get("modules", {}):
+            hi = d["modules"]["hash_id"]
+            assert "hashes" in hi
+            # MD5 hash should be identified
+            if hi["hashes"]:
+                assert any("MD5" in str(h.get("possible_types", [])) for h in hi["hashes"])
+        record("exec:crypto_forensics_hash", True)
+    except Exception as e:
+        record("exec:crypto_forensics_hash", False, str(e))
+
+
+async def test_exec_post_exploit():
+    """Test enhanced post_exploit_ops persistence module"""
+    try:
+        r = await srv.post_exploit_ops(
+            target="127.0.0.1",
+            modules="persist",
+            depth="deep",
+            timeout=15,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "modules" in d
+        if "persist" in d.get("modules", {}):
+            per = d["modules"]["persist"]
+            # Verify deep persistence techniques are present
+            assert "linux" in per
+            assert "windows" in per
+            # Verify actual commands exist (not just names)
+            linux_techs = per["linux"]
+            if isinstance(linux_techs, dict) and "techniques" in linux_techs:
+                for tech in linux_techs["techniques"]:
+                    assert "command" in tech, f"Technique missing command: {tech.get('name')}"
+                    assert "detection" in tech, f"Technique missing detection: {tech.get('name')}"
+                    assert "stealth" in tech, f"Technique missing stealth rating: {tech.get('name')}"
+                assert len(linux_techs["techniques"]) >= 8, "Should have 8+ Linux persistence techniques"
+            if isinstance(per.get("windows"), dict) and "techniques" in per["windows"]:
+                for tech in per["windows"]["techniques"]:
+                    assert "command" in tech
+                assert len(per["windows"]["techniques"]) >= 6, "Should have 6+ Windows persistence techniques"
+            # Verify payload generation commands
+            if "payload_generation" in per:
+                pg = per["payload_generation"]
+                assert "msfvenom_linux" in pg
+                assert "msfvenom_windows" in pg
+        record("exec:post_exploit_persistence", True)
+    except Exception as e:
+        record("exec:post_exploit_persistence", False, str(e))
+
+
 # ══════════════════════════════════════════════════════════════
-# SECTION 5: Integration Test — Full Correlation Pipeline
+# SECTION 5: Enhanced Feature Tests
+# ══════════════════════════════════════════════════════════════
+
+def test_wireless_audit_signature_enhanced():
+    """Verify wireless_audit has pivot + restore in default module list"""
+    try:
+        fn = srv.wireless_audit
+        src = inspect.getsource(fn)
+        # Verify pivot and restore are in the default module list
+        assert "pivot" in src, "wireless_audit should support pivot module"
+        assert "restore" in src, "wireless_audit should support restore module"
+        assert "VulnFinding" in src, "wireless_audit should register VulnFindings"
+        assert "kill_chain" in src, "wireless_audit should integrate kill chain"
+        assert "arp-scan" in src or "arp_scan" in src, "wireless_audit pivot should do ARP scanning"
+        assert "wpa_supplicant" in src or "wpa_passphrase" in src, "wireless_audit pivot should auto-connect"
+        record("wireless_audit_enhanced", True)
+    except Exception as e:
+        record("wireless_audit_enhanced", False, str(e))
+
+
+def test_crypto_forensics_signature_enhanced():
+    """Verify crypto_forensics has new modules"""
+    try:
+        fn = srv.crypto_forensics
+        src = inspect.getsource(fn)
+        assert "cipher_analysis" in src, "crypto_forensics should have cipher_analysis"
+        assert "decrypt" in src, "crypto_forensics should have decrypt module"
+        assert "tls_audit" in src, "crypto_forensics should have tls_audit"
+        assert "hash_id" in src, "crypto_forensics should have hash_id"
+        assert "testssl" in src, "crypto_forensics should use testssl.sh"
+        assert "openssl" in src, "crypto_forensics should use openssl"
+        assert "caesar" in src.lower() or "rot" in src.lower(), "crypto_forensics should handle Caesar/ROT ciphers"
+        assert "zip2john" in src or "john" in src, "crypto_forensics should handle encrypted archives"
+        record("crypto_forensics_enhanced", True)
+    except Exception as e:
+        record("crypto_forensics_enhanced", False, str(e))
+
+
+def test_post_exploit_persistence_enhanced():
+    """Verify post_exploit_ops has deep persistence techniques"""
+    try:
+        fn = srv.post_exploit_ops
+        src = inspect.getsource(fn)
+        # Linux persistence
+        assert "ld_preload" in src.lower() or "LD_PRELOAD" in src
+        assert "pam_backdoor" in src.lower() or "PAM" in src
+        assert "systemd_timer" in src.lower() or "systemd" in src
+        assert "rc_local" in src.lower() or "rc.local" in src
+        # Windows persistence
+        assert "golden_ticket" in src.lower() or "Golden Ticket" in src
+        assert "wmi_event" in src.lower() or "WMI" in src
+        assert "com_hijack" in src.lower() or "COM" in src
+        # Payload generation
+        assert "msfvenom" in src
+        assert "meterpreter" in src or "reverse_tcp" in src
+        record("post_exploit_persistence_enhanced", True)
+    except Exception as e:
+        record("post_exploit_persistence_enhanced", False, str(e))
+
+
+def test_auth_destroyer_idor_enhanced():
+    """Verify auth_destroyer has enhanced IDOR testing"""
+    try:
+        fn = srv.auth_destroyer
+        src = inspect.getsource(fn)
+        assert "bola" in src.lower() or "BOLA" in src, "auth_destroyer should have BOLA testing"
+        assert "X-HTTP-Method-Override" in src or "method_override" in src.lower(), "Should have method override bypass"
+        assert "2147483647" in src, "Should test integer overflow edge cases"
+        record("auth_destroyer_idor_enhanced", True)
+    except Exception as e:
+        record("auth_destroyer_idor_enhanced", False, str(e))
+
+
+def test_forensics_engine_submodules():
+    """Verify forensics_engine has all required sub-modules"""
+    try:
+        fn = srv.forensics_engine
+        src = inspect.getsource(fn)
+        required_modules = [
+            "log_analysis", "malware_detect", "usb_forensics",
+            "memory_analysis", "ransomware_analysis", "yara_scan",
+            "ioc_extract", "network_forensics", "botnet_detect"
+        ]
+        for mod in required_modules:
+            assert mod in src, f"forensics_engine missing module: {mod}"
+        # Verify specific capabilities
+        assert "chkrootkit" in src or "rkhunter" in src, "Should detect rootkits"
+        assert "volatility" in src.lower() or "Volatility" in src, "Should use Volatility for memory analysis"
+        assert "lsusb" in src, "Should parse USB devices"
+        assert "HID" in src or "Rubber" in src, "Should detect HID attacks"
+        assert "entropy" in src, "Should analyze file entropy for ransomware"
+        assert "yara" in src.lower(), "Should support YARA scanning"
+        assert "C2" in src or "c2_ports" in src.lower() or "botnet" in src.lower(), "Should detect C2/botnet activity"
+        record("forensics_engine_submodules", True)
+    except Exception as e:
+        record("forensics_engine_submodules", False, str(e))
+
+
+def test_race_condition_submodules():
+    """Verify race_condition_tester has all required sub-modules"""
+    try:
+        fn = srv.race_condition_tester
+        src = inspect.getsource(fn)
+        required_modules = [
+            "concurrent_requests", "toctou", "session_race",
+            "limit_bypass", "timing_attack"
+        ]
+        for mod in required_modules:
+            assert mod in src, f"race_condition_tester missing module: {mod}"
+        # Verify specific capabilities
+        assert "curl" in src, "Should use curl for concurrent requests"
+        assert "TOCTOU" in src or "toctou" in src, "Should test TOCTOU"
+        assert "coupon" in src or "vote" in src, "Should test limit bypass (coupon/vote)"
+        assert "50" in src and "ms" in src.lower() or "timing" in src.lower(), "Should do timing attack with threshold"
+        record("race_condition_submodules", True)
+    except Exception as e:
+        record("race_condition_submodules", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 6: Integration Test — Full Correlation Pipeline
 # ══════════════════════════════════════════════════════════════
 
 def test_full_correlation_pipeline():
@@ -492,7 +687,7 @@ def test_full_correlation_pipeline():
         assert corr["risk_rating"] in ["CRITICAL", "HIGH"]
         assert corr["total_vulns"] >= 3
         assert corr["attack_surface_score"] >= 50
-        assert len(corr["exploit_chains"]) >= 1  # SSRF→Cloud chain minimum
+        assert len(corr["exploit_chains"]) >= 1
         assert len(corr["mitre_coverage"]) >= 2
         assert len(corr["recommended_attack_path"]) >= 1
 
@@ -514,14 +709,55 @@ def test_full_correlation_pipeline():
         record("full_correlation_pipeline", False, str(e))
 
 
+def test_cross_module_interconnection():
+    """Verify that modules share data through PentestMemory and VulnCorrelator"""
+    try:
+        mem = srv.PentestMemory()
+        vc = srv.VulnCorrelator(mem)
+        kc = srv.KillChainTracker(mem)
+
+        target = "192.168.1.100"
+
+        # Simulate wireless_audit → pivot → recon chain
+        mem.store_finding(target, "wireless_audit", "wpa_cracked", {"bssid": "AA:BB:CC:DD:EE:FF", "key": "password123"})
+        mem.store_finding(target, "wireless_audit", "pivot_hosts", {"hosts": ["192.168.1.1", "192.168.1.50"]})
+        kc.advance_phase(target, srv.KillChainPhase.RECONNAISSANCE, "wireless_audit", ["wifi_scan"])
+        kc.advance_phase(target, srv.KillChainPhase.EXPLOITATION, "wireless_audit", ["wpa_cracked"])
+        kc.advance_phase(target, srv.KillChainPhase.ACTIONS_ON_OBJECTIVES, "wireless_audit", ["pivoted_to_network"])
+
+        # Verify cross-module data access
+        assert mem.has_finding(target, "wpa_cracked"), "wireless findings should be accessible"
+        assert mem.has_finding(target, "pivot_hosts"), "pivot hosts should be stored"
+
+        # Simulate forensics findings feeding into correlation
+        mem.store_finding(target, "forensics_engine", "malware_detected", {"type": "rootkit"})
+        vc.add_vulnerability(srv.VulnFinding(
+            vuln_id="rootkit_1", title="Rootkit detected on target",
+            severity="critical", cvss_score=9.8, cvss_vector="",
+            target=target, port=0, exploitable=True,
+            mitre_techniques=["T1014", "T1547.006"]))
+
+        corr = vc.correlate(target)
+        assert corr["total_vulns"] >= 1
+        assert "T1014" in corr["mitre_coverage"]
+
+        # Verify kill chain progress across modules
+        prog = kc.get_progress(target)
+        assert prog["completion_pct"] >= round(3/7 * 100, 1)
+
+        record("cross_module_interconnection", True)
+    except Exception as e:
+        record("cross_module_interconnection", False, str(e))
+
+
 # ══════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════
 
 async def run_all():
     print("=" * 72)
-    print("  Kali MCP Server v6 — Comprehensive Test Suite")
-    print("  20 Mega-Modules | 11 Classes | Intelligence Engine")
+    print("  Kali MCP Server v6.2 — Comprehensive Test Suite")
+    print("  22 Mega-Modules | 17 Classes | Intelligence Engine")
     print("=" * 72)
     t0 = time.time()
 
@@ -540,7 +776,7 @@ async def run_all():
     test_deep_output_parser()
     await test_parallel_executor()
 
-    print("\n--- Module Signatures (20 tools) ---")
+    print("\n--- Module Signatures (22 tools) ---")
     test_module_signatures()
 
     print("\n--- Async Execution Tests ---")
@@ -550,9 +786,22 @@ async def run_all():
     await test_exec_reporting()
     await test_exec_payload_factory()
     await test_exec_osint()
+    await test_exec_forensics()
+    await test_exec_race_condition()
+    await test_exec_crypto_forensics()
+    await test_exec_post_exploit()
+
+    print("\n--- Enhanced Feature Verification ---")
+    test_wireless_audit_signature_enhanced()
+    test_crypto_forensics_signature_enhanced()
+    test_post_exploit_persistence_enhanced()
+    test_auth_destroyer_idor_enhanced()
+    test_forensics_engine_submodules()
+    test_race_condition_submodules()
 
     print("\n--- Integration: Full Correlation Pipeline ---")
     test_full_correlation_pipeline()
+    test_cross_module_interconnection()
 
     elapsed = time.time() - t0
     print("\n" + "=" * 72)
@@ -567,7 +816,7 @@ async def run_all():
 
     print()
     if FAIL == 0:
-        print("  ALL TESTS PASSED — v6 Mythos-tier READY")
+        print("  ALL TESTS PASSED — v6.2 Mythos-tier READY")
     else:
         print(f"  {FAIL} test(s) failed")
     return FAIL == 0
