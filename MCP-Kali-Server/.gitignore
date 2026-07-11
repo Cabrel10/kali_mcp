@@ -1,0 +1,6 @@
+sessions/
+cve_cache/
+chain_data/
+__pycache__/
+*.pyc
+*.backup
