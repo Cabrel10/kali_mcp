@@ -1,345 +1,578 @@
 #!/usr/bin/env python3
 """
-Comprehensive Integration Test Suite for Kali MCP Server v4
-Tests ALL 59 registered tools with REAL async calls
-Validates: trace logging, progress reporting, chain enrichment, output format
+Kali MCP Server v6 — Comprehensive Test Suite
+Tests ALL 20 mega-modules + 11 core/intelligence classes + async execution
+Validates: imports, signatures, CVSS scoring, correlation, kill chain, deep parsing, parallel exec
 """
 
 import asyncio
+import inspect
 import json
 import sys
 import os
 import time
-import traceback
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kali_mcp_server as srv
 
-# Import the server module
-import importlib.util
-spec = importlib.util.spec_from_file_location("kali_mcp_server",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "kali_mcp_server.py"))
-server_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(server_module)
+# ──────────────────────── Framework ────────────────────────
 
-# Results tracking
 RESULTS = []
-PASS = 0
-FAIL = 0
-SKIP = 0
+PASS = FAIL = 0
 
-def log_result(tool_name, status, detail="", duration=0):
-    global PASS, FAIL, SKIP
-    icon = {"OK": "\u2705", "FAIL": "\u274c", "SKIP": "\u23ed\ufe0f"}[status]
-    if status == "OK": PASS += 1
-    elif status == "FAIL": FAIL += 1
-    else: SKIP += 1
-    RESULTS.append({"tool": tool_name, "status": status, "detail": detail[:200], "duration_ms": duration})
-    print(f"  {icon} {tool_name}: {status} ({duration}ms) {detail[:100]}")
 
-async def test_tool(name, coro, validate_fn=None):
-    """Generic tool tester with JSON validation."""
-    start = time.time()
+def record(name: str, passed: bool, detail: str = ""):
+    global PASS, FAIL
+    if passed:
+        PASS += 1
+    else:
+        FAIL += 1
+    RESULTS.append(("PASS" if passed else "FAIL", name, detail))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 1: Core Infrastructure (6 classes)
+# ══════════════════════════════════════════════════════════════
+
+def test_scan_depth():
     try:
-        result = await coro
-        duration = int((time.time() - start) * 1000)
-        data = json.loads(result)
-        if data.get("status") in ["success", "error", "partial"]:
-            if validate_fn and not validate_fn(data):
-                log_result(name, "FAIL", f"Validation failed: {json.dumps(data)[:150]}", duration)
-            else:
-                log_result(name, "OK", f"status={data['status']}", duration)
-        else:
-            log_result(name, "FAIL", f"Missing status field: {result[:150]}", duration)
+        assert len(srv.ScanDepth) == 4
+        assert srv.ScanDepth.STEALTH.value == "stealth"
+        assert srv.ScanDepth.AGGRESSIVE.value == "aggressive"
+        record("ScanDepth enum", True)
     except Exception as e:
-        duration = int((time.time() - start) * 1000)
-        log_result(name, "FAIL", f"Exception: {e}", duration)
-
-async def run_all_tests():
-    global PASS, FAIL, SKIP
-    print("=" * 70)
-    print("KALI MCP SERVER v4 - COMPREHENSIVE TEST SUITE")
-    print("=" * 70)
-    total_start = time.time()
-
-    s = server_module  # shorthand
-
-    # ==================== CORE TOOLS ====================
-    print("\n[CORE TOOLS]")
-
-    await test_tool("start_session",
-        s.start_session(session_name="test_v4"))
-
-    await test_tool("server_health",
-        s.server_health())
-
-    await test_tool("execute_command",
-        s.execute_command(command="echo test_v4_works"))
-
-    await test_tool("get_chain_summary",
-        s.get_chain_summary(target="127.0.0.1"))
-
-    await test_tool("session_summary",
-        s.session_summary())
-
-    # ==================== RECON TOOLS ====================
-    print("\n[RECON TOOLS]")
-
-    await test_tool("nmap_scan",
-        s.nmap_scan(target="127.0.0.1", scan_type="quick", timeout=30))
-
-    await test_tool("cve_cartography",
-        s.cve_cartography(target="127.0.0.1"))
-
-    await test_tool("vulnx_scan",
-        s.vulnx_scan(target="127.0.0.1", timeout=30))
-
-    await test_tool("web_tech_detect",
-        s.web_tech_detect(target="127.0.0.1", timeout=20))
-
-    # ==================== WEB SCANNING ====================
-    print("\n[WEB SCANNING]")
-
-    await test_tool("gobuster_scan",
-        s.gobuster_scan(url="http://127.0.0.1", timeout=20))
-
-    await test_tool("nikto_scan",
-        s.nikto_scan(target="127.0.0.1", timeout=30))
-
-    await test_tool("ffuf_fuzz",
-        s.ffuf_fuzz(target="http://127.0.0.1", timeout=20))
-
-    await test_tool("wpscan_audit",
-        s.wpscan_audit(target="http://127.0.0.1", timeout=30))
-
-    await test_tool("nuclei_scan",
-        s.nuclei_scan(target="127.0.0.1", timeout=30))
-
-    # ==================== INJECTION TOOLS ====================
-    print("\n[INJECTION / VULN TESTING]")
-
-    await test_tool("sqlmap_scan",
-        s.sqlmap_scan(url="http://127.0.0.1/test?id=1", timeout=30))
-
-    await test_tool("sql_injection_test",
-        s.sql_injection_test(url="http://127.0.0.1/test", param="id"))
-
-    await test_tool("xss_scan",
-        s.xss_scan(url="http://127.0.0.1/test", param="q"))
-
-    await test_tool("lfi_scan",
-        s.lfi_scan(url="http://127.0.0.1/test", param="file"))
-
-    await test_tool("command_injection_test",
-        s.command_injection_test(url="http://127.0.0.1/test", param="cmd"))
-
-    await test_tool("ssti_scanner",
-        s.ssti_scanner(target="http://127.0.0.1/test", param="name"))
-
-    await test_tool("ssrf_scanner",
-        s.ssrf_scanner(target="http://127.0.0.1/test", param="url"))
-
-    await test_tool("idor_tester",
-        s.idor_tester(target="http://127.0.0.1/api/user", param="id", start_id=1, end_id=3))
-
-    # ==================== BRUTE FORCE ====================
-    print("\n[BRUTE FORCE]")
-
-    await test_tool("hydra_attack",
-        s.hydra_attack(target="127.0.0.1", service="ssh", timeout=60))
-
-    await test_tool("john_crack",
-        s.john_crack(hash_value="5f4dcc3b5aa765d61d8327deb882cf99", hash_type="md5", timeout=30))
-
-    # ==================== EXPLOITATION ====================
-    print("\n[EXPLOITATION]")
-
-    await test_tool("metasploit_exploit",
-        s.metasploit_exploit(target="127.0.0.1", timeout=30))
-
-    await test_tool("reverse_shell_generator",
-        s.reverse_shell_generator(lhost="10.0.0.1", lport=4444, shell_type="bash"))
-
-    # ==================== DNS / SUBDOMAIN ====================
-    print("\n[DNS / SUBDOMAIN]")
-
-    await test_tool("subdomain_enum",
-        s.subdomain_enum(target="example.com", methods="brute", timeout=30))
-
-    await test_tool("subdomain_scanner",
-        s.subdomain_scanner(target="example.com", timeout=30))
-
-    await test_tool("dns_recon",
-        s.dns_recon(target="example.com", record_types="A,MX,NS", zone_transfer=False, timeout=30))
-
-    # ==================== NETWORK ====================
-    print("\n[NETWORK]")
-
-    await test_tool("arp_scan",
-        s.arp_scan(network="127.0.0.1/32", timeout=20))
-
-    await test_tool("enum4linux_scan",
-        s.enum4linux_scan(target="127.0.0.1", timeout=30))
-
-    # ==================== SECURITY SCANNERS ====================
-    print("\n[SECURITY SCANNERS]")
-
-    await test_tool("cors_scanner",
-        s.cors_scanner(target="http://127.0.0.1", timeout=20))
-
-    await test_tool("jwt_analyzer",
-        s.jwt_analyzer(token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"))
-
-    await test_tool("header_security_audit",
-        s.header_security_audit(target="127.0.0.1", timeout=20))
-
-    await test_tool("waf_fingerprint",
-        s.waf_fingerprint(target="127.0.0.1", timeout=20))
-
-    # ==================== OSINT ====================
-    print("\n[OSINT]")
-
-    await test_tool("origin_ip_hunter",
-        s.origin_ip_hunter(target="example.com", timeout=30))
-
-    await test_tool("osint_domain_intel",
-        s.osint_domain_intel(target="example.com", depth="standard", timeout=30))
-
-    # ==================== API / DISCOVERY ====================
-    print("\n[API / DISCOVERY]")
-
-    await test_tool("api_endpoint_discovery",
-        s.api_endpoint_discovery(target="http://127.0.0.1", timeout=30))
-
-    await test_tool("run_curl_advanced",
-        s.run_curl_advanced(url="http://127.0.0.1", method="GET", timeout=10))
-
-    # ==================== BUG BOUNTY ====================
-    print("\n[BUG BOUNTY]")
-
-    await test_tool("scope_check",
-        s.scope_check(target="test.example.com", platform="hackerone",
-                     in_scope_domains="example.com"))
-
-    await test_tool("generate_report",
-        s.generate_report(target="127.0.0.1", title="Test Report", report_format="markdown"))
-
-    await test_tool("get_payloads",
-        s.get_payloads(category="xss"))
-
-    # ==================== CRYPTO / DEFI ====================
-    print("\n[CRYPTO / DEFI]")
-
-    await test_tool("smart_contract_audit",
-        s.smart_contract_audit(source_code="contract Test { function withdraw() public { msg.sender.call{value: 1}(''); } }"))
-
-    await test_tool("defi_protocol_scan",
-        s.defi_protocol_scan(protocol_url="https://example.com", chain="ethereum", timeout=20))
-
-    await test_tool("blockchain_tx_analyzer",
-        s.blockchain_tx_analyzer(address="0x0000000000000000000000000000000000000000", chain="ethereum", timeout=20))
-
-    # ==================== ENHANCED DETECTION (Phase 1-3) ====================
-    print("\n[ENHANCED DETECTION]")
-
-    await test_tool("smart_vulnerability_detector",
-        s.smart_vulnerability_detector(target="127.0.0.1", scan_depth="quick", timeout=20))
-
-    await test_tool("context_fuzzer",
-        s.context_fuzzer(target="127.0.0.1", mode="smart", timeout=20))
-
-    await test_tool("target_profiler",
-        s.target_profiler(target="127.0.0.1", timeout=15))
-
-    await test_tool("advanced_arp_discovery",
-        s.advanced_arp_discovery(network="192.168.1.0/24", mode="auto", timeout=10))
-
-    await test_tool("advanced_smb_enum",
-        s.advanced_smb_enum(target="127.0.0.1", timeout=15))
-
-    await test_tool("enhanced_ssrf_scanner",
-        s.enhanced_ssrf_scanner(target="http://127.0.0.1/test", timeout=20))
-
-    await test_tool("enhanced_jwt_analyzer",
-        s.enhanced_jwt_analyzer(token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"))
-
-    await test_tool("enhanced_idor_scanner",
-        s.enhanced_idor_scanner(target="http://127.0.0.1/api/users", timeout=15))
-
-    await test_tool("enhanced_api_discovery",
-        s.enhanced_api_discovery(target="127.0.0.1", timeout=20))
-
-    await test_tool("enhanced_cors_scanner",
-        s.enhanced_cors_scanner(target="http://127.0.0.1", timeout=15))
-
-    await test_tool("enhanced_waf_bypass",
-        s.enhanced_waf_bypass(target="http://127.0.0.1", timeout=15))
-
-    await test_tool("cloud_storage_enum",
-        s.cloud_storage_enum(target="example.com", timeout=20))
-
-    await test_tool("exploitation_chain",
-        s.exploitation_chain(target="127.0.0.1", timeout=10))
-
-    # ==================== SELF-AUDIT ====================
-    print("\n[INTELLIGENT ORCHESTRATION]")
-
-    await test_tool("autopilot_scan",
-        s.autopilot_scan(target="http://127.0.0.1:19999", playbook="web_full", max_stages=1, timeout=10))
-
-    await test_tool("adaptive_recon",
-        s.adaptive_recon(target="http://127.0.0.1:19999", depth="quick", timeout=10))
-
-    await test_tool("rate_limit_detector_tool",
-        s.rate_limit_detector_tool(target="http://127.0.0.1:19999", requests_count=2, timeout=10))
-
-    await test_tool("intelligent_405_bypass",
-        s.intelligent_405_bypass(target="http://127.0.0.1:19999", endpoint="/api", timeout=10))
-
-    await test_tool("pentest_memory_query",
-        s.pentest_memory_query(target="127.0.0.1", query_type="full_context"))
-
-    print("\n[SMART FINGERPRINTING]")
-
-    await test_tool("smart_fingerprint",
-        s.smart_fingerprint(target="http://127.0.0.1:19999", deep=False, timeout=10))
-
-    await test_tool("source_map_extractor",
-        s.source_map_extractor(target="http://127.0.0.1:19999", timeout=10))
-
-    await test_tool("spring_actuator_exploit",
-        s.spring_actuator_exploit(target="http://127.0.0.1:19999", timeout=10))
-
-    await test_tool("graphql_introspection",
-        s.graphql_introspection(target="http://127.0.0.1:19999", timeout=10))
-
-    print("\n[SELF-AUDIT]")
-
-    await test_tool("server_security_audit",
-        s.server_security_audit())
-
-    # ==================== SUMMARY ====================
-    total_time = int((time.time() - total_start) * 1000)
-    print("\n" + "=" * 70)
-    print(f"RESULTS: {PASS} PASSED | {FAIL} FAILED | {SKIP} SKIPPED")
-    print(f"TOTAL: {PASS + FAIL + SKIP} tools tested in {total_time}ms")
-    if (PASS + FAIL) > 0:
-        print(f"PASS RATE: {PASS/(PASS+FAIL)*100:.1f}%")
-    print("=" * 70)
-
-    # Write validation report
-    report = {
-        "version": "v4",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "summary": {"passed": PASS, "failed": FAIL, "skipped": SKIP, "total_time_ms": total_time},
-        "results": RESULTS
-    }
-    with open("VALIDATION_REPORT.json", "w") as f:
-        json.dump(report, f, indent=2)
-    print(f"\nReport saved to VALIDATION_REPORT.json")
-
+        record("ScanDepth enum", False, str(e))
+
+
+def test_pentest_memory():
+    try:
+        mem = srv.PentestMemory()
+        mem.store_finding("T", "nmap", "port", {"port": 22})
+        mem.store_finding("T", "nmap", "port", {"port": 80})
+        mem.store_finding("T", "nikto", "vuln", {"id": "X"})
+        ctx = mem.get_context("T")
+        assert ctx["total_findings"] == 3
+        assert "port" in ctx["finding_types"]
+        ports = mem.get_findings("T", "port")
+        assert len(ports) == 2
+        all_f = mem.get_findings("T")
+        assert len(all_f) == 3
+        mem.store_tech("T", {"framework": "django"})
+        assert mem.get_tech("T")["framework"] == "django"
+        assert mem.has_finding("T", "port")
+        mem.decide("T", "scan_deep", "many ports open")
+        record("PentestMemory", True)
+    except Exception as e:
+        record("PentestMemory", False, str(e))
+
+
+def test_rate_limit_detector():
+    try:
+        rl = srv.RateLimitDetector()
+        rl.detect_from_response("T", 429, {})
+        d1 = rl.get_delay("T")
+        assert d1 > 0
+        rl.detect_from_response("T", 429, {})
+        d2 = rl.get_delay("T")
+        assert d2 >= d1, f"Backoff: {d2} >= {d1}"
+        # WAF detection
+        waf = rl.detect_from_response("W", 403, {"server": "cloudflare"})
+        assert waf.get("waf_detected") is True
+        rl.reset("T")
+        # After reset, defaultdict gives default 0.1
+        d3 = rl.get_delay("T")
+        assert d3 <= 0.2, f"After reset: {d3}"
+        record("RateLimitDetector", True)
+    except Exception as e:
+        record("RateLimitDetector", False, str(e))
+
+
+def test_orchestrator():
+    try:
+        mem = srv.PentestMemory()
+        rl = srv.RateLimitDetector()
+        orch = srv.IntelligentOrchestrator(mem, rl)
+        # 403 bypass
+        recs = orch.analyze_response_code("T", "/admin", 403, {})
+        assert any(r["action"] == "auth_bypass" for r in recs)
+        # 405 method enum
+        recs2 = orch.analyze_response_code("T", "/api", 405, {})
+        assert any(r["action"] == "method_enumeration" for r in recs2)
+        # 422 param fuzz
+        recs3 = orch.analyze_response_code("T", "/api", 422, {})
+        assert any(r["action"] == "parameter_fuzzing" for r in recs3)
+        # 500 error exploit
+        recs4 = orch.analyze_response_code("T", "/err", 500, {})
+        assert any(r["action"] == "error_exploitation" for r in recs4)
+        # Cloud header detection
+        recs5 = orch.analyze_response_code("T", "/", 200, {"x-amz-request-id": "abc123"})
+        assert any(r["action"] == "cloud_enumeration" for r in recs5)
+        # Stack configs
+        assert len(orch.STACK_CONFIGS) >= 7
+        for stack in ["spring", "django", "express", "flask", "php", "go", "aspnet"]:
+            assert stack in orch.STACK_CONFIGS
+        # adapt_to_stack
+        mem.store_tech("S", {"framework": "spring"})
+        adapted = orch.adapt_to_stack("S")
+        assert adapted["adapted"] is True
+        assert "/actuator" in adapted["config"]["endpoints"]
+        # recommend_next_tools
+        recs6 = orch.recommend_next_tools("EMPTY")
+        assert any(r["module"] == "recon_engine" for r in recs6)
+        record("IntelligentOrchestrator", True)
+    except Exception as e:
+        record("IntelligentOrchestrator", False, str(e))
+
+
+def test_session_manager():
+    try:
+        sm = srv.SessionManager()
+        sid = sm.create_session("test")
+        assert len(sid) > 10
+        ex = sm.start_execution("recon_engine", "10.0.0.1", {"depth": "deep"})
+        assert ex.tool_name == "recon_engine"
+        sm.complete_execution(ex, {"ports": [22, 80]})
+        assert ex.status == "completed"
+        record("SessionManager", True)
+    except Exception as e:
+        record("SessionManager", False, str(e))
+
+
+def test_input_validator():
+    try:
+        iv = srv.InputValidator()
+        assert iv.sanitize_target("192.168.1.1") == "192.168.1.1"
+        assert iv.sanitize_target("example.com") == "example.com"
+        assert iv.sanitize_target("10.0.0.0/24") == "10.0.0.0/24"
+        blocked = 0
+        for bad in ["192.168.1.1; rm -rf /", "$(whoami)", "`cat /etc/passwd`"]:
+            try:
+                iv.sanitize_target(bad)
+            except ValueError:
+                blocked += 1
+        assert blocked >= 2, f"Blocked {blocked} of 3"
+        assert iv.validate_timeout(300) == 300
+        assert iv.validate_port(8080) == 8080
+        record("InputValidator", True)
+    except Exception as e:
+        record("InputValidator", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 2: Intelligence Engine (5 classes)
+# ══════════════════════════════════════════════════════════════
+
+def test_cvss_calculator():
+    try:
+        # RCE: should be 10.0
+        s1, v1 = srv.CVSSCalculator.calculate(
+            av="network", ac="low", pr="none", ui="none",
+            scope="changed", conf="high", integ="high", avail="high")
+        assert s1 == 10.0, f"RCE should be 10.0, got {s1}"
+        assert "CVSS:3.1" in v1
+        # Info only: should be low
+        s2, v2 = srv.CVSSCalculator.calculate(
+            av="network", ac="low", pr="none", ui="none",
+            scope="unchanged", conf="low", integ="none", avail="none")
+        assert 4.0 <= s2 <= 6.0, f"Info should be medium, got {s2}"
+        # Severity labels
+        assert srv.CVSSCalculator.severity_from_score(9.5) == "critical"
+        assert srv.CVSSCalculator.severity_from_score(7.5) == "high"
+        assert srv.CVSSCalculator.severity_from_score(5.0) == "medium"
+        assert srv.CVSSCalculator.severity_from_score(2.0) == "low"
+        assert srv.CVSSCalculator.severity_from_score(0.0) == "info"
+        # Vuln type presets
+        for vt in ["rce", "sqli", "xss_stored", "lfi", "ssrf", "ssti", "cmdi", "log4shell",
+                    "default_credentials", "kerberoast", "jwt_none_alg"]:
+            s, v, sev = srv.CVSSCalculator.score_for_vuln_type(vt)
+            assert s > 0, f"{vt} score should be > 0"
+            assert sev in ["critical", "high", "medium", "low", "info"]
+        # Context boost
+        s_boost, _, _ = srv.CVSSCalculator.score_for_vuln_type(
+            "info_disclosure", {"internet_facing": True, "no_auth": True})
+        s_no_boost, _, _ = srv.CVSSCalculator.score_for_vuln_type("info_disclosure")
+        assert s_boost > s_no_boost
+        record("CVSSCalculator", True)
+    except Exception as e:
+        record("CVSSCalculator", False, str(e))
+
+
+def test_vuln_correlator():
+    try:
+        mem = srv.PentestMemory()
+        vc = srv.VulnCorrelator(mem)
+        # Add findings to trigger SSRF→Cloud chain
+        mem.store_finding("C", "ssrf_hunter", "ssrf", {"url": "http://169.254.169.254"})
+        mem.store_finding("C", "orchestrator", "cloud_detected", {"provider": "aws"})
+        vc.add_vulnerability(srv.VulnFinding(
+            vuln_id="ssrf_1", title="SSRF in /api/proxy", severity="high",
+            cvss_score=8.5, cvss_vector="", target="C", port=443, exploitable=True,
+            mitre_techniques=["T1190"]))
+        corr = vc.correlate("C")
+        assert corr["total_vulns"] >= 1
+        assert len(corr["exploit_chains"]) >= 1  # SSRF+cloud chain
+        assert corr["attack_surface_score"] > 0
+        assert corr["risk_rating"] in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]
+        assert len(corr["mitre_coverage"]) > 0
+        # Service checks
+        smb_checks = vc.get_service_checks("smb")
+        assert "eternalblue" in smb_checks["checks"]
+        assert "CVE-2017-0144" in smb_checks["common_cves"]
+        ssh_checks = vc.get_service_checks("ssh")
+        assert "weak_creds" in ssh_checks["checks"]
+        # Verify chain detection: SSTI → RCE chain (single requirement)
+        mem2 = srv.PentestMemory()
+        vc2 = srv.VulnCorrelator(mem2)
+        vc2.add_vulnerability(srv.VulnFinding(
+            vuln_id="ssti_1", title="SSTI Jinja2", severity="critical",
+            cvss_score=10.0, cvss_vector="", target="D"))
+        mem2.store_finding("D", "injection", "ssti", {"engine": "jinja2"})
+        corr2 = vc2.correlate("D")
+        assert any("SSTI" in c["chain"] for c in corr2["exploit_chains"])
+        record("VulnCorrelator", True)
+    except Exception as e:
+        record("VulnCorrelator", False, str(e))
+
+
+def test_kill_chain_tracker():
+    try:
+        mem = srv.PentestMemory()
+        kc = srv.KillChainTracker(mem)
+        kc.advance_phase("K", srv.KillChainPhase.RECONNAISSANCE, "recon_engine", ["ports:22,80"])
+        kc.advance_phase("K", srv.KillChainPhase.EXPLOITATION, "injection_matrix", ["sqli_found"])
+        kc.advance_phase("K", srv.KillChainPhase.INSTALLATION, "post_exploit_ops", ["backdoor"])
+        prog = kc.get_progress("K")
+        assert prog["completion"] == "3/7"
+        assert prog["completion_pct"] == round(3/7 * 100, 1)
+        assert prog["next_phase"]["phase"] == "weaponization"
+        # MITRE mapping exists for all phases
+        assert len(srv.KillChainTracker.MITRE_MAPPING) == 7
+        for phase in srv.KillChainPhase:
+            assert phase in srv.KillChainTracker.MITRE_MAPPING
+        record("KillChainTracker", True)
+    except Exception as e:
+        record("KillChainTracker", False, str(e))
+
+
+def test_deep_output_parser():
+    try:
+        dp = srv.DeepOutputParser()
+        # Credential extraction
+        hydra_out = "[22][ssh] host: 10.0.0.1 login: admin password: P@ssw0rd123\n[22][ssh] host: 10.0.0.1 login: root password: toor"
+        creds = dp.extract_credentials_from_output(hydra_out)
+        assert len(creds) == 2
+        assert creds[0]["username"] == "admin"
+        assert creds[0]["password"] == "P@ssw0rd123"
+        # Hashcat format (hash:password)
+        hc_out = "5f4dcc3b5aa765d61d8327deb882cf99:password123"
+        hc_creds = dp.extract_credentials_from_output(hc_out)
+        assert len(hc_creds) >= 1
+        assert hc_creds[0]["password"] == "password123"
+        # Error page parsing
+        html = """<html><body>
+        Traceback (most recent call last):
+          File "app.py", line 42
+        ValueError: invalid literal
+        PHPSESSID=abc123
+        password = "admin123"
+        jdbc:mysql://db.internal:3306/mydb
+        </body></html>"""
+        ep = dp.parse_error_page(html)
+        assert ep["debug_mode"] is True
+        assert len(ep["stack_traces"]) > 0
+        assert len(ep["info_leaks"]) > 0
+        assert any(t["tech"] == "php" for t in ep["technologies"])
+        # Nuclei output parsing
+        nuclei_out = "[critical] [CVE-2021-44228] [http] http://target.com/api [log4j]\n[high] [exposed-panel] [http] http://target.com/admin"
+        nf = dp.parse_nuclei_output(nuclei_out)
+        assert len(nf) == 2
+        assert nf[0]["severity"] == "critical"
+        assert "CVE-2021-44228" in nf[0]["cves"]
+        record("DeepOutputParser", True)
+    except Exception as e:
+        record("DeepOutputParser", False, str(e))
+
+
+async def test_parallel_executor():
+    try:
+        async def fast_task():
+            await asyncio.sleep(0.1)
+            return "fast_done"
+
+        async def slow_task():
+            await asyncio.sleep(0.2)
+            return "slow_done"
+
+        tasks = [
+            {"name": "fast", "coro": fast_task(), "timeout": 5},
+            {"name": "slow", "coro": slow_task(), "timeout": 5},
+        ]
+        results = await srv.ParallelExecutor.run_parallel(tasks, max_concurrent=2)
+        assert len(results) == 2
+        assert all(r["status"] == "success" for r in results)
+        # Timeout test
+        async def forever():
+            await asyncio.sleep(100)
+        timeout_tasks = [{"name": "infinite", "coro": forever(), "timeout": 0.5}]
+        t_results = await srv.ParallelExecutor.run_parallel(timeout_tasks)
+        assert t_results[0]["status"] == "timeout"
+        record("ParallelExecutor", True)
+    except Exception as e:
+        record("ParallelExecutor", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 3: Module Existence & Signatures (20 tools)
+# ══════════════════════════════════════════════════════════════
+
+TOOL_SIGNATURES = {
+    "session_ops": ["action"],
+    "recon_engine": ["target", "depth"],
+    "web_assault": ["target", "depth"],
+    "injection_matrix": ["target", "depth"],
+    "credential_cracker": ["target", "entropy_limit"],
+    "network_dominator": ["target", "depth"],
+    "wireless_audit": ["interface"],
+    "cloud_siege": ["target", "depth"],
+    "ad_annihilator": ["target", "domain"],
+    "api_breaker": ["target", "depth"],
+    "vuln_scanner_ultra": ["target", "depth"],
+    "exploit_engine": ["target", "exploit_type"],
+    "auth_destroyer": ["target", "depth"],
+    "ssrf_hunter": ["target", "param"],
+    "crypto_forensics": ["target", "depth"],
+    "osint_harvester": ["target", "depth"],
+    "post_exploit_ops": ["target", "depth"],
+    "reporting_engine": ["target", "report_type"],
+    "autopilot_commander": ["target", "depth", "scope", "aggressive"],
+    "payload_factory": ["action", "target"],
+}
+
+
+def test_module_signatures():
+    for name, required_params in TOOL_SIGNATURES.items():
+        try:
+            fn = getattr(srv, name, None)
+            assert fn is not None, f"not found"
+            assert callable(fn), f"not callable"
+            assert inspect.iscoroutinefunction(fn), f"not async"
+            params = list(inspect.signature(fn).parameters.keys())
+            for rp in required_params:
+                assert rp in params, f"missing '{rp}', has {params}"
+            record(f"sig:{name}", True)
+        except Exception as e:
+            record(f"sig:{name}", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 4: Async Tool Execution (safe targets)
+# ══════════════════════════════════════════════════════════════
+
+async def test_exec_session_ops():
+    try:
+        r = await srv.session_ops(action="health")
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        record("exec:session_ops", True)
+    except Exception as e:
+        record("exec:session_ops", False, str(e))
+
+
+async def test_exec_recon():
+    try:
+        r = await srv.recon_engine(target="127.0.0.1", depth="stealth", timeout=30)
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        # Check intelligence fields exist
+        if "intelligence_summary" in d:
+            assert "risk_rating" in d["intelligence_summary"]
+        record("exec:recon_engine", True)
+    except Exception as e:
+        record("exec:recon_engine", False, str(e))
+
+
+async def test_exec_credential_cracker():
+    try:
+        r = await srv.credential_cracker(
+            target="127.0.0.1", hash_value="5f4dcc3b5aa765d61d8327deb882cf99",
+            hash_type="md5", technique="auto", timeout=15)
+        d = json.loads(r) if isinstance(r, str) else r
+        assert "hash_analysis" in d
+        assert d["hash_analysis"]["hash_type"] in ["md5", "ntlm"]
+        assert d["hash_analysis"]["estimated_entropy"] > 0
+        assert "estimated_time" in d["hash_analysis"]
+        record("exec:credential_cracker", True)
+    except Exception as e:
+        record("exec:credential_cracker", False, str(e))
+
+
+async def test_exec_reporting():
+    try:
+        r = await srv.reporting_engine(target="127.0.0.1", report_type="headers", timeout=15)
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        record("exec:reporting_engine", True)
+    except Exception as e:
+        record("exec:reporting_engine", False, str(e))
+
+
+async def test_exec_payload_factory():
+    try:
+        r = await srv.payload_factory(action="generate", target="127.0.0.1", payload_type="xss")
+        d = json.loads(r) if isinstance(r, str) else r
+        assert "payloads" in d
+        assert len(d["payloads"]) > 0
+        record("exec:payload_factory", True)
+    except Exception as e:
+        record("exec:payload_factory", False, str(e))
+
+
+async def test_exec_osint():
+    try:
+        r = await srv.osint_harvester(target="example.com", depth="stealth", timeout=15)
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        record("exec:osint_harvester", True)
+    except Exception as e:
+        record("exec:osint_harvester", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 5: Integration Test — Full Correlation Pipeline
+# ══════════════════════════════════════════════════════════════
+
+def test_full_correlation_pipeline():
+    """End-to-end: simulate a pentest with findings, verify correlation output"""
+    try:
+        mem = srv.PentestMemory()
+        rl = srv.RateLimitDetector()
+        orch = srv.IntelligentOrchestrator(mem, rl)
+        vc = srv.VulnCorrelator(mem)
+        kc = srv.KillChainTracker(mem)
+
+        target = "10.10.10.100"
+
+        # Phase 1: Recon findings
+        mem.store_finding(target, "recon", "open_ports", {"ports": [22, 80, 443, 445, 3389]})
+        mem.store_tech(target, {"framework": "spring-boot", "server": "nginx"})
+        kc.advance_phase(target, srv.KillChainPhase.RECONNAISSANCE, "recon_engine", ["5_ports"])
+
+        # Phase 2: Web vulns
+        mem.store_finding(target, "web_assault", "web_vulns", {"nikto": ["CVE-2021-44228"]})
+        mem.store_finding(target, "web_assault", "directories", {"count": 42})
+
+        # Phase 3: SQLi found
+        mem.store_finding(target, "injection_matrix", "sqli_found", {"param": "id"})
+        s, v, sev = srv.CVSSCalculator.score_for_vuln_type("sqli")
+        vc.add_vulnerability(srv.VulnFinding(
+            vuln_id="sqli_id", title="SQLi in /api/users?id=", severity=sev,
+            cvss_score=s, cvss_vector=v, target=target, port=443,
+            exploitable=True, mitre_techniques=["T1190"]))
+        kc.advance_phase(target, srv.KillChainPhase.EXPLOITATION, "injection_matrix", ["sqli"])
+
+        # Phase 4: Default creds found
+        mem.store_finding(target, "credential_cracker", "credentials", {"source": "hydra"})
+        s2, v2, sev2 = srv.CVSSCalculator.score_for_vuln_type("default_credentials")
+        vc.add_vulnerability(srv.VulnFinding(
+            vuln_id="default_creds_ssh", title="Default SSH credentials",
+            severity=sev2, cvss_score=s2, cvss_vector=v2, target=target, port=22,
+            exploitable=True, mitre_techniques=["T1110.001"]))
+
+        # Phase 5: SSRF + Cloud
+        mem.store_finding(target, "ssrf_hunter", "ssrf", {"url": "http://169.254.169.254"})
+        mem.store_finding(target, "orchestrator", "cloud_detected", {"provider": "aws"})
+        s3, v3, sev3 = srv.CVSSCalculator.score_for_vuln_type("ssrf")
+        vc.add_vulnerability(srv.VulnFinding(
+            vuln_id="ssrf_proxy", title="SSRF via /api/proxy", severity=sev3,
+            cvss_score=s3, cvss_vector=v3, target=target, port=443,
+            exploitable=True, mitre_techniques=["T1190", "T1552.005"]))
+
+        # Full correlation
+        corr = vc.correlate(target)
+        assert corr["risk_rating"] in ["CRITICAL", "HIGH"]
+        assert corr["total_vulns"] >= 3
+        assert corr["attack_surface_score"] >= 50
+        assert len(corr["exploit_chains"]) >= 1  # SSRF→Cloud chain minimum
+        assert len(corr["mitre_coverage"]) >= 2
+        assert len(corr["recommended_attack_path"]) >= 1
+
+        # Orchestrator recommendations
+        recs = orch.recommend_next_tools(target)
+        assert len(recs) > 0
+
+        # Spring stack adaptation
+        adapted = orch.adapt_to_stack(target)
+        assert adapted["adapted"] is True
+        assert adapted["stack"] == "spring"
+
+        # Kill chain progress
+        prog = kc.get_progress(target)
+        assert prog["completion_pct"] > 0
+
+        record("full_correlation_pipeline", True)
+    except Exception as e:
+        record("full_correlation_pipeline", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# Runner
+# ══════════════════════════════════════════════════════════════
+
+async def run_all():
+    print("=" * 72)
+    print("  Kali MCP Server v6 — Comprehensive Test Suite")
+    print("  20 Mega-Modules | 11 Classes | Intelligence Engine")
+    print("=" * 72)
+    t0 = time.time()
+
+    print("\n--- Core Infrastructure (6 classes) ---")
+    test_scan_depth()
+    test_pentest_memory()
+    test_rate_limit_detector()
+    test_orchestrator()
+    test_session_manager()
+    test_input_validator()
+
+    print("\n--- Intelligence Engine (5 classes) ---")
+    test_cvss_calculator()
+    test_vuln_correlator()
+    test_kill_chain_tracker()
+    test_deep_output_parser()
+    await test_parallel_executor()
+
+    print("\n--- Module Signatures (20 tools) ---")
+    test_module_signatures()
+
+    print("\n--- Async Execution Tests ---")
+    await test_exec_session_ops()
+    await test_exec_recon()
+    await test_exec_credential_cracker()
+    await test_exec_reporting()
+    await test_exec_payload_factory()
+    await test_exec_osint()
+
+    print("\n--- Integration: Full Correlation Pipeline ---")
+    test_full_correlation_pipeline()
+
+    elapsed = time.time() - t0
+    print("\n" + "=" * 72)
+    print(f"  RESULTS: {PASS} passed | {FAIL} failed | {PASS + FAIL} total | {elapsed:.1f}s")
+    print("=" * 72 + "\n")
+    for status, name, detail in RESULTS:
+        icon = "+" if status == "PASS" else "X"
+        line = f"  [{icon}] {name}"
+        if detail:
+            line += f"  ({detail})"
+        print(line)
+
+    print()
+    if FAIL == 0:
+        print("  ALL TESTS PASSED — v6 Mythos-tier READY")
+    else:
+        print(f"  {FAIL} test(s) failed")
     return FAIL == 0
 
+
 if __name__ == "__main__":
-    success = asyncio.run(run_all_tests())
+    success = asyncio.run(run_all())
     sys.exit(0 if success else 1)

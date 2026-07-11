@@ -1,545 +1,165 @@
-# Kali MCP Tactical Server v4
+# Kali MCP Server v6 — Autonomous Pentest Engine
 
-**Professional Penetration Testing & Bug Bounty Platform with MCP Protocol**
-
-A comprehensive, forensic-grade penetration testing server with 59 tools, hierarchical session management, trace logging, tool chaining, and CVE cartography. Designed for AI-driven security operations via the Model Context Protocol (MCP).
-
----
-
-## What's New in v4
-
-- **Hierarchical Session Storage** — `sessions/{session_id}/{target}/{tool}/{execution_id}/` with full forensic traces
-- **Trace Logging** — JSONL forensic logs for every operation step (timestamps, elapsed_ms, phase, data)
-- **Real-time Progress** — Percentage-based progress reporting during tool execution
-- **Tool Chaining Engine** — Cross-references results between tools, auto-enriches output with context from prior runs
-- **CVE Cartography** — Maps discovered services to CVEs with severity ratings and patch recommendations
-- **Input Validation & Security** — Sanitizes all inputs, blocks shell injection, validates ports/timeouts/paths
-- **Enhanced Payloads** — Time-based blind SQLi, DOM XSS, polyglot XSS, SSRF, auth bypass, and more
-- **Bug Bounty Platforms** — HackerOne, Bugcrowd, Intigriti, Immunefi scope checking
-- **Crypto/DeFi Auditing** — Smart contract analysis, DeFi protocol scanning, blockchain TX tracing
-- **Self-Audit** — Server can audit its own security posture
-
----
+> 20 unified mega-modules | 11 intelligence classes | Kill chain tracking | CVSS scoring | MITRE ATT&CK mapping | Parallel execution | Cross-module correlation
 
 ## Architecture
 
-### v4 Infrastructure Classes
+```
+72 fragmented tools -> 20 unified mega-modules
+Manual decisions    -> Autonomous orchestration  
+Flat outputs        -> CVSS-scored, correlated, MITRE-mapped intelligence
+Sequential scans    -> Parallel execution with kill-chain tracking
+```
+
+### Core Infrastructure (6 classes)
 
 | Class | Purpose |
 |-------|---------|
-| `SessionManager` | Singleton. Creates hierarchical session dirs, generates execution IDs, manages session lifecycle |
-| `TraceLogger` | Writes `trace.jsonl` per execution with forensic-level per-step logging |
-| `ProgressReporter` | Percentage-based real-time progress with step descriptions |
-| `ToolChainEngine` | Singleton. Cross-references tool results, auto-enriches outputs with prior context |
-| `CVECartographer` | Maps services to CVEs using local curated DB (13+ service families) + NVD API |
-| `InputValidator` | Sanitizes targets, blocks shell injection, validates ports/timeouts/paths |
-| `PayloadGenerator` | 8 payload categories: SQLi, XSS, LFI, RCE, SSTI, XXE, SSRF, Auth Bypass |
+| `ScanDepth` | Enum: `stealth / light / deep / aggressive` |
+| `PentestMemory` | Cross-module finding storage, tech stack tracking, decision log |
+| `RateLimitDetector` | Auto-detect 429/WAF, exponential backoff, per-target state |
+| `IntelligentOrchestrator` | Response code analysis (403/405/422/500), stack-adapted configs (Spring/Django/Express/Flask/PHP/Go/ASP.NET), next-tool recommendations |
+| `SessionManager` | Execution tracking, timing, input/output logging |
+| `InputValidator` | Command injection prevention, input sanitization |
 
-### v4 Tool Pattern
+### Intelligence Engine (5 classes)
 
-Every tool follows this pattern for consistency and traceability:
+| Class | Purpose |
+|-------|---------|
+| `CVSSCalculator` | Dynamic CVSS v3.1 scoring with 25+ vulnerability type presets |
+| `VulnCorrelator` | Cross-module correlation, 12 exploit chain patterns, attack surface scoring, MITRE technique aggregation |
+| `KillChainTracker` | 7-phase Lockheed Martin kill chain with MITRE ATT&CK mapping per phase |
+| `DeepOutputParser` | Parse nmap XML (NSE vulns, CVEs), error pages (tech fingerprint, info leaks, stack traces), nuclei JSON, credentials (hydra/hashcat/john/secretsdump) |
+| `ParallelExecutor` | Concurrent tool execution with semaphore, timeout handling, result aggregation |
+
+### 20 Mega-Modules
+
+| # | Module | Capabilities | Key Tools |
+|---|--------|-------------|-----------|
+| 1 | `recon_engine` | Port scan, service fingerprint, tech detection, origin IP hunting, TLS audit | nmap, whatweb, openssl, dig |
+| 2 | `web_assault` | Directory brute, vulnerability scan, source map extraction, WAF detection/bypass | nikto, gobuster/ffuf, curl |
+| 3 | `injection_matrix` | SQLi, XSS, LFI, CMDi, SSTI, JSON parameter fuzzing | sqlmap, custom payloads |
+| 4 | `credential_cracker` | Entropy estimation, dictionary/mask/markov/rules attacks, online brute force | hashcat, john, hydra |
+| 5 | `network_dominator` | ARP spoofing, SMB enum, NTLM relay, responder, impacket | bettercap, responder, impacket |
+| 6 | `wireless_audit` | Monitor mode, scan, handshake capture, PMKID, WPA crack | aircrack-ng, hcxdumptool, bettercap |
+| 7 | `cloud_siege` | S3/GCS/Azure bucket enum, metadata SSRF, IAM analysis | aws-cli, gcloud, curl |
+| 8 | `ad_annihilator` | BloodHound, Certipy (AD CS ESC1-8), Kerberoast, AS-REP, password spray | bloodhound, certipy, impacket |
+| 9 | `api_breaker` | GraphQL introspection, REST enum, Actuator exploit, 405 bypass, auth testing | curl, custom |
+| 10 | `vuln_scanner_ultra` | Nuclei (stack-adapted templates), CVE mapping, nmap vuln scripts | nuclei, nmap, searchsploit |
+| 11 | `exploit_engine` | Metasploit, deserialization, Log4Shell, reverse shell generation, chain exploits | msfconsole, ysoserial |
+| 12 | `auth_destroyer` | JWT attacks (none alg, kid injection), IDOR, CORS bypass, default creds, header/path mutation | custom |
+| 13 | `ssrf_hunter` | URL-based, blind, DNS rebind, cloud metadata, protocol smuggling (gopher/dict) | curl, collaborator |
+| 14 | `crypto_forensics` | Smart contract audit, DeFi analysis, transaction tracing | custom |
+| 15 | `osint_harvester` | Subdomain enum, DNS records, WHOIS, crt.sh, Google dorking | subfinder, amass, dig |
+| 16 | `post_exploit_ops` | Privilege escalation, persistence, lateral movement, pivoting, exfiltration | linpeas, ligolo-ng, chisel |
+| 17 | `reporting_engine` | Executive/technical/full reports with CVSS, MITRE, kill chain, exploit chains, header audit | built-in |
+| 18 | `autopilot_commander` | Full autonomous pentest with parallel execution, kill chain tracking, correlation-driven targeting | orchestrates all modules |
+| 19 | `session_ops` | Session management, health check, memory query, recommendations | built-in |
+| 20 | `payload_factory` | Payload generation (XSS/SQLi/LFI/SSTI/XXE/CMDi), command execution, WPScan | wpscan, custom |
+
+## Exploit Chain Detection
+
+The VulnCorrelator automatically detects 12 attack chains:
+
+| Chain | Requirements | Impact |
+|-------|-------------|--------|
+| SSRF -> Cloud Metadata -> IAM Takeover | ssrf + cloud_detected | cloud_account_takeover |
+| SQLi -> Data Exfil -> Credential Reuse | sqli + open_ports | database_compromise |
+| LFI -> Source Code -> Hardcoded Secrets | lfi + web_vulns | credential_theft |
+| Default Creds -> Admin Panel -> RCE | default_credentials + web_vulns | remote_code_execution |
+| Kerberoast -> Crack -> Domain Admin | kerberoast + credentials | domain_admin |
+| SMB Relay -> NTLM -> Lateral Movement | smb_signing_disabled + ntlm_hashes | lateral_movement |
+| SSTI -> RCE -> Shell | ssti | remote_code_execution |
+| Log4Shell -> JNDI -> Remote Class Loading | log4shell | remote_code_execution |
+| XXE -> SSRF -> Internal Service Access | xxe | internal_network_access |
+| JWT None Alg -> Auth Bypass -> Privesc | jwt_none_alg | privilege_escalation |
+| AS-REP Roast -> Crack -> Initial Access | as_rep_roast | domain_user_access |
+| WPA Handshake -> Crack -> WiFi -> Pivot | wpa_handshake | network_access |
+
+## Installation
+
+```bash
+pip install fastmcp
+# Kali Linux recommended — all pentest tools pre-installed
+```
+
+## Usage
+
+```bash
+# Run as MCP server
+python kali_mcp_server.py
+
+# Run tests (38 tests covering all modules + intelligence engine)
+python test_all_tools.py
+```
+
+### Example: Autonomous Pentest
 
 ```python
-@mcp.tool()
-@resolve_references
-async def tool_name(target: str, ...) -> str:
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("tool_name", target, N_steps)
-    inputs = {"target": target, ...}
-
-    progress.update("Step description", "detail")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    # ... processing ...
-
-    output = chain_engine.enrich_with_context("tool_name", target, output)
-    log_tool_execution("tool_name", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
+# The autopilot runs modules in parallel, tracks kill chain, builds attack paths
+result = await autopilot_commander(
+    target="10.10.10.100",
+    depth="deep",
+    scope="full",        # web|network|cloud|internal|full|api|wireless
+    aggressive=False,
+    max_duration=1800
+)
+# Returns: intelligence summary, exploit chains, MITRE coverage, kill chain progress
 ```
 
-### Directory Structure
+### Example: Credential Cracking with Entropy Estimation
 
-```
-MCP-Kali-Server/
-├── kali_mcp_server.py          # Main server (7288 lines, 59 tools)
-├── test_all_tools.py           # Full test suite (59 tool tests)
-├── main.py                     # Entry point
-├── requirements.txt            # Python dependencies
-├── README.md                   # This file
-│
-├── sessions/                   # Hierarchical session storage (runtime)
-│   └── {session_id}/
-│       └── {target}/
-│           └── {tool}/
-│               └── {execution_id}/
-│                   ├── trace.jsonl    # Forensic trace log
-│                   ├── result.json    # Tool output
-│                   └── progress.json  # Progress snapshots
-│
-├── cve_cache/                  # CVE data cache (runtime)
-│   └── nvd_{service}.json
-│
-└── chain_data/                 # Tool chain cross-reference data (runtime)
-    └── {target}/
-        └── {tool}.json
+```python
+result = await credential_cracker(
+    target="10.10.10.100",
+    hash_value="5f4dcc3b5aa765d61d8327deb882cf99",
+    hash_type="auto",     # auto-detected from length/prefix
+    technique="auto",     # dictionary -> mask -> rules -> markov
+    entropy_limit=60,     # skip hashes above this entropy
+    timeout=600
+)
+# Returns: hash_analysis (type, entropy, crackability, estimated_time), cracked credentials
 ```
 
----
+## Intelligence Output Format
 
-## 46 Tools — Complete Reference
-
-### Core (5)
-
-| Tool | Description |
-|------|-------------|
-| `start_session` | Initialize a new pentest session with target scope and metadata |
-| `server_health` | Health check — returns server status, tool count, uptime |
-| `execute_command` | Execute arbitrary shell commands with trace logging |
-| `get_chain_summary` | View cross-reference summary for a target across all tools |
-| `session_summary` | Get full session report with all execution traces |
-
-### Reconnaissance (4)
-
-| Tool | Description |
-|------|-------------|
-| `nmap_scan` | Advanced Nmap scanning with service/version/script detection |
-| `cve_cartography` | Map discovered services to CVEs with severity + patch recommendations |
-| `vulnx_scan` | VulnX CMS vulnerability scanner integration |
-| `web_tech_detect` | Web technology fingerprinting (CMS, frameworks, libraries, headers) |
-
-### Web Scanning (5)
-
-| Tool | Description |
-|------|-------------|
-| `gobuster_scan` | Directory/file brute-forcing with Gobuster |
-| `nikto_scan` | Nikto web server vulnerability scanning |
-| `ffuf_fuzz` | FFUF fuzzing (directories, parameters, vhosts) |
-| `wpscan_audit` | WordPress security audit with WPScan |
-| `nuclei_scan` | Nuclei vulnerability scanning with severity filtering |
-
-### Injection Testing (8)
-
-| Tool | Description |
-|------|-------------|
-| `sqlmap_scan` | Automated SQL injection with SQLMap |
-| `sql_injection_test` | Manual SQL injection testing with curated payloads |
-| `xss_scan` | XSS detection (reflected, stored, DOM-based, polyglot) |
-| `lfi_scan` | Local File Inclusion testing (Linux + Windows paths) |
-| `command_injection_test` | OS command injection testing (blind + bypass) |
-| `ssti_scanner` | Server-Side Template Injection across multiple engines |
-| `ssrf_scanner` | Server-Side Request Forgery detection |
-| `idor_tester` | Insecure Direct Object Reference testing |
-
-### Brute Force (2)
-
-| Tool | Description |
-|------|-------------|
-| `hydra_attack` | Hydra password brute-forcing (SSH, FTP, HTTP, etc.) |
-| `john_crack` | John the Ripper hash cracking |
-
-### Exploitation (2)
-
-| Tool | Description |
-|------|-------------|
-| `metasploit_exploit` | Metasploit Framework module execution |
-| `reverse_shell_generator` | Generate reverse shell payloads (bash, python, nc, php, etc.) |
-
-### DNS & Subdomain (3)
-
-| Tool | Description |
-|------|-------------|
-| `subdomain_enum` | Subdomain enumeration with Subfinder |
-| `subdomain_scanner` | Active subdomain scanning with HTTP probing |
-| `dns_recon` | DNS reconnaissance (records, zone transfer, DNSSEC) |
-
-### Network (2)
-
-| Tool | Description |
-|------|-------------|
-| `arp_scan` | ARP-based network discovery on local segment |
-| `enum4linux_scan` | SMB/NetBIOS enumeration with enum4linux |
-
-### Security Scanners (4)
-
-| Tool | Description |
-|------|-------------|
-| `cors_scanner` | CORS misconfiguration detection |
-| `jwt_analyzer` | JWT token analysis (decode, weakness detection) |
-| `header_security_audit` | HTTP security header audit (CSP, HSTS, X-Frame, etc.) |
-| `waf_fingerprint` | WAF detection and fingerprinting |
-
-### OSINT (2)
-
-| Tool | Description |
-|------|-------------|
-| `origin_ip_hunter` | Find origin IP behind CDN/WAF (DNS history, SSL, etc.) |
-| `osint_domain_intel` | Full OSINT domain intelligence gathering |
-
-### API & HTTP (2)
-
-| Tool | Description |
-|------|-------------|
-| `api_endpoint_discovery` | API endpoint discovery and enumeration |
-| `run_curl_advanced` | Advanced cURL execution with custom headers/methods |
-
-### Bug Bounty (3)
-
-| Tool | Description |
-|------|-------------|
-| `scope_check` | Verify target against bug bounty program scope (HackerOne, Bugcrowd, Intigriti, Immunefi) |
-| `generate_report` | Generate professional bug bounty / pentest reports |
-| `get_payloads` | Retrieve curated payload sets by category (sqli, xss, lfi, rce, ssti, xxe, ssrf, auth_bypass) |
-
-### Crypto / DeFi (3)
-
-| Tool | Description |
-|------|-------------|
-| `smart_contract_audit` | Solidity smart contract security analysis |
-| `defi_protocol_scan` | DeFi protocol security assessment |
-| `blockchain_tx_analyzer` | Blockchain transaction tracing and analysis |
-
-### Enhanced Detection (13) — Deep Vulnerability Discovery
-
-| Tool | Description |
-|------|-------------|
-| `smart_vulnerability_detector` | Intelligent vuln detection: 403 bypass, cloud SSRF, info disclosure, method enum |
-| `context_fuzzer` | Context-aware fuzzer: adapts wordlists per stack, 403/422/401 analysis, bypass |
-| `target_profiler` | Stack profiling with custom attack vectors per technology (Go/Python/PHP/AWS) |
-| `advanced_arp_discovery` | 4 fallback modes (arp-scan → nmap → ip neighbor → /proc/net/arp) + ARP spoofing detection |
-| `advanced_smb_enum` | Multi-tool SMB (enum4linux → smbmap → smbclient → nmap scripts) + EternalBlue check |
-| `enhanced_ssrf_scanner` | Cloud metadata (AWS/GCP/Azure), internal services, protocol payloads, blind SSRF |
-| `enhanced_jwt_analyzer` | alg:none bypass, key confusion, claim manipulation, kid injection, exploit generation |
-| `enhanced_idor_scanner` | UUID/base64/hash ID detection, horizontal + vertical privilege escalation |
-| `enhanced_api_discovery` | Swagger/OpenAPI parsing, GraphQL introspection, method probing, error-based params |
-| `enhanced_cors_scanner` | null origin, credentials+reflection, subdomain bypass, full takeover detection |
-| `enhanced_waf_bypass` | Active bypass per WAF type (Cloudflare/AWS/ModSec/Imperva), 14+ techniques |
-| `cloud_storage_enum` | AWS S3, GCS, Azure Blob enumeration with 25+ naming variants |
-| `exploitation_chain` | Auto-chains: SSRF→creds, SQLi→RCE, IDOR→dump, XSS→takeover, LFI→RCE |
-
-### Self-Audit (1)
-
-| Tool | Description |
-|------|-------------|
-| `server_security_audit` | Audit the MCP server's own security posture |
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- **Python 3.10+**
-- **Kali Linux** (recommended) or any Linux with pentest tools
-- **FastMCP 3.4.4+**
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/Cabrel10/kali_mcp.git
-cd kali_mcp/MCP-Kali-Server
-
-# Install Python dependencies
-pip install fastmcp aiohttp aiofiles
-
-# Run the server
-python3 kali_mcp_server.py
-```
-
-### Sudoers Configuration
-
-Many pentest tools require root privileges. Configure passwordless sudo for the tools you need:
-
-```bash
-# Edit sudoers with visudo (NEVER edit /etc/sudoers directly)
-sudo visudo -f /etc/sudoers.d/kali-mcp
-
-# Add these lines (replace 'kali' with your username):
-kali ALL=(ALL) NOPASSWD: /usr/bin/nmap
-kali ALL=(ALL) NOPASSWD: /usr/bin/arp-scan
-kali ALL=(ALL) NOPASSWD: /usr/sbin/enum4linux
-kali ALL=(ALL) NOPASSWD: /usr/bin/hydra
-kali ALL=(ALL) NOPASSWD: /usr/bin/john
-kali ALL=(ALL) NOPASSWD: /usr/share/metasploit-framework/msfconsole
-kali ALL=(ALL) NOPASSWD: /usr/bin/nikto
-kali ALL=(ALL) NOPASSWD: /usr/bin/wpscan
-kali ALL=(ALL) NOPASSWD: /usr/bin/sqlmap
-```
-
-> **Security Note:** Only grant NOPASSWD for specific binaries. Never use `ALL=(ALL) NOPASSWD: ALL` in production.
-
-### MCP Client Configuration
-
-Add to your AI client's MCP config (Claude Desktop, etc.):
+Every module returns structured JSON with:
 
 ```json
 {
-  "mcpServers": {
-    "kali-tactical": {
-      "command": "python3",
-      "args": ["/path/to/MCP-Kali-Server/kali_mcp_server.py"],
-      "env": {}
-    }
-  }
+  "target": "10.10.10.100",
+  "modules": { "...": "..." },
+  "correlation": {
+    "risk_rating": "CRITICAL",
+    "attack_surface_score": 85.0,
+    "exploit_chains": [{"chain": "SSRF -> Cloud -> IAM", "severity": "critical"}],
+    "mitre_coverage": ["T1190", "T1552.005", "T1078.004"],
+    "recommended_attack_path": [{"step": "...", "impact": "..."}]
+  },
+  "kill_chain": {
+    "completion": "3/7",
+    "completion_pct": 42.9,
+    "next_phase": {"phase": "installation", "recommended_tools": ["post_exploit_ops"]}
+  },
+  "recommendations": [{"module": "ssrf_hunter", "reason": "SSRF potential detected"}]
 }
 ```
 
----
+## Stats
 
-## Usage Examples
-
-### 1. Start a Session and Scan
-
-```json
-// Step 1: Start session
-{"tool": "start_session", "arguments": {"target": "example.com", "scope": "*.example.com"}}
-
-// Step 2: Nmap scan
-{"tool": "nmap_scan", "arguments": {"target": "example.com", "scan_type": "default", "ports": "1-1000"}}
-
-// Step 3: CVE cartography on discovered services
-{"tool": "cve_cartography", "arguments": {"target": "example.com"}}
-
-// Step 4: Get chain summary (cross-referenced results)
-{"tool": "get_chain_summary", "arguments": {"target": "example.com"}}
-```
-
-### 2. Web Application Assessment
-
-```json
-// Technology detection
-{"tool": "web_tech_detect", "arguments": {"target": "https://example.com"}}
-
-// Directory fuzzing
-{"tool": "gobuster_scan", "arguments": {"target": "https://example.com", "wordlist": "/usr/share/wordlists/dirb/common.txt"}}
-
-// Nuclei vulnerability scan
-{"tool": "nuclei_scan", "arguments": {"target": "https://example.com", "severity": "critical,high"}}
-
-// Security headers audit
-{"tool": "header_security_audit", "arguments": {"target": "https://example.com"}}
-```
-
-### 3. Injection Testing
-
-```json
-// SQL injection
-{"tool": "sql_injection_test", "arguments": {"target": "https://example.com/page?id=1"}}
-
-// XSS scanning
-{"tool": "xss_scan", "arguments": {"target": "https://example.com/search?q=test"}}
-
-// SSTI detection
-{"tool": "ssti_scanner", "arguments": {"target": "https://example.com/template?name=test"}}
-```
-
-### 4. Bug Bounty Workflow
-
-```json
-// Check scope before testing
-{"tool": "scope_check", "arguments": {"target": "example.com", "platform": "hackerone", "program": "example"}}
-
-// Get payloads
-{"tool": "get_payloads", "arguments": {"category": "sqli"}}
-
-// Generate report after findings
-{"tool": "generate_report", "arguments": {"target": "example.com", "format": "markdown"}}
-```
-
-### 5. Tool Chaining (Automatic)
-
-The ToolChainEngine automatically enriches outputs. When you run `nuclei_scan` after `nmap_scan` on the same target, the nuclei output will include:
-- Previously discovered open ports and services (from nmap)
-- Subdomain data (if `subdomain_enum` was run)
-- Technology stack (if `web_tech_detect` was run)
-- Known CVEs (if `cve_cartography` was run)
-
-No manual cross-referencing needed.
-
----
-
-## Session & Trace System
-
-### Forensic Trace Logs
-
-Every tool execution produces a `trace.jsonl` file:
-
-```jsonl
-{"timestamp": "2026-07-11T05:08:18.123", "elapsed_ms": 0, "phase": "init", "step": "Starting nmap_scan", "data": {"target": "example.com"}}
-{"timestamp": "2026-07-11T05:08:18.456", "elapsed_ms": 333, "phase": "execute", "step": "Running nmap", "data": {"cmd": "nmap -sV example.com"}}
-{"timestamp": "2026-07-11T05:08:25.789", "elapsed_ms": 7666, "phase": "parse", "step": "Parsing output", "data": {"ports_found": 5}}
-{"timestamp": "2026-07-11T05:08:25.890", "elapsed_ms": 7767, "phase": "complete", "step": "Done", "data": {"status": "success"}}
-```
-
-### Session Directory Example
-
-```
-sessions/
-└── pentest_20260711_050818/
-    └── example.com/
-        ├── nmap_scan/
-        │   └── exec_a1b2c3d4/
-        │       ├── trace.jsonl
-        │       ├── result.json
-        │       └── progress.json
-        ├── nuclei_scan/
-        │   └── exec_e5f6g7h8/
-        │       ├── trace.jsonl
-        │       ├── result.json
-        │       └── progress.json
-        └── cve_cartography/
-            └── exec_i9j0k1l2/
-                ├── trace.jsonl
-                └── result.json
-```
-
----
-
-## CVE Cartography
-
-The `CVECartographer` provides:
-
-1. **Local CVE Database** — Curated entries for 13+ service families:
-   - Apache HTTPD, Nginx, OpenSSH, MySQL, PostgreSQL, Redis
-   - MongoDB, Elasticsearch, Docker, Kubernetes, ProFTPD
-   - vsftpd, Microsoft IIS, and more
-
-2. **NVD API Integration** — Queries NIST NVD for real-time CVE data
-
-3. **Output per service:**
-   ```json
-   {
-     "service": "apache/2.4.49",
-     "cves": [
-       {
-         "id": "CVE-2021-41773",
-         "severity": "critical",
-         "cvss": 9.8,
-         "description": "Path traversal and RCE",
-         "patch": "Upgrade to Apache 2.4.51+"
-       }
-     ]
-   }
-   ```
-
----
-
-## Security Hardening
-
-### Input Validation
-
-All tool inputs pass through `InputValidator`:
-
-- **Targets**: Stripped of shell metacharacters, validated as hostname/IP/CIDR
-- **Ports**: Must be valid integers 1-65535
-- **Timeouts**: Bounded between 5-3600 seconds
-- **Paths**: Blocked from traversal (`../`, `/etc/shadow`, etc.)
-- **Shell injection**: Backticks, `$()`, pipes, semicolons stripped from user inputs
-
-### Server Self-Audit
-
-Run `server_security_audit` to check:
-- File permissions on server code
-- Exposed secrets in environment
-- Dependency versions
-- Network exposure
-- Log file security
-
----
-
-## Tool Requirements
-
-### Pre-installed on Kali Linux
-- `nmap`, `nikto`, `sqlmap`, `hydra`, `john`, `enum4linux`
-- `curl`, `whois`, `dig`, `arp-scan`
-- `metasploit-framework`
-
-### Install Separately
-
-```bash
-# Go-based tools
-go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-go install github.com/OJ/gobuster/v3@latest
-go install github.com/ffuf/ffuf/v2@latest
-
-# Update Nuclei templates
-nuclei -update-templates
-
-# Ruby-based
-gem install wpscan
-
-# Python-based
-pip install vulnx
-
-# System packages
-sudo apt install -y arp-scan enum4linux smbclient
-```
-
----
-
-## Testing
-
-```bash
-# Run full test suite (59 tools)
-python3 test_all_tools.py
-
-# Quick syntax check
-python3 -c "import py_compile; py_compile.compile('kali_mcp_server.py', doraise=True)"
-
-# Verify tool count
-python3 -c "
-import kali_mcp_server
-tools = [a for a in dir(kali_mcp_server) if not a.startswith('_')]
-print(f'Module loaded successfully')
-"
-```
-
----
-
-## Troubleshooting
-
-### "Permission denied" on tool execution
-Configure sudoers as described in the Sudoers Configuration section above.
-
-### "Command not found" for a tool
-Install the missing tool:
-```bash
-which nmap || sudo apt install -y nmap
-which nuclei || go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-```
-
-### Session directory not created
-Ensure the server has write permissions to its working directory:
-```bash
-chmod 755 /path/to/MCP-Kali-Server/
-```
-
-### NVD API rate limiting
-The CVECartographer caches results in `cve_cache/`. If you hit NVD rate limits, cached data will be used. For higher limits, set a NVD API key:
-```bash
-export NVD_API_KEY=your_key_here
-```
-
----
+- **4,395 lines** of Python
+- **20 mega-modules** (consolidated from 72)
+- **11 core + intelligence classes**
+- **12 exploit chain patterns**
+- **25+ CVSS vulnerability presets**
+- **7 kill chain phases** with MITRE ATT&CK mapping
+- **18 service vulnerability maps** (SSH, SMB, HTTP, LDAP, Redis, Docker, K8s, ...)
+- **38 automated tests** covering all layers
 
 ## License
 
-This project is for **educational and authorized security testing purposes only**.
+MIT
 
-**Unauthorized access to computer systems is illegal.** Always obtain written authorization before testing.
+## Author
 
----
-
-## Credits
-
-Built with:
-- [FastMCP](https://github.com/jlowin/fastmcp) — MCP Protocol Framework
-- [ProjectDiscovery](https://github.com/projectdiscovery) — nuclei, subfinder, httpx
-- [Nmap](https://nmap.org/) — Network scanning
-- [SQLMap](https://sqlmap.org/) — SQL injection
-- [OWASP](https://owasp.org/) — Security methodology
-
----
-
-**With great power comes great responsibility. Always obtain proper authorization before testing.**
+Cabrel10 / MorningStar

