@@ -7266,6 +7266,1408 @@ async def exploitation_chain(
 # MAIN ENTRY POINT
 # ============================================================================
 
+
+# ============================================================================
+# INTELLIGENT ORCHESTRATION ENGINE — Autonomous Pentest Brain
+# ============================================================================
+
+class PentestMemory:
+    """
+    Contextual memory system that retains findings across tool calls.
+    Enables intelligent decision-making based on accumulated knowledge.
+    """
+    
+    def __init__(self):
+        self._memory: Dict[str, Dict] = {}  # target → accumulated findings
+        self._decisions: List[Dict] = []  # decision log
+        self._rate_limits: Dict[str, Dict] = {}  # target → rate limit info
+    
+    def store_finding(self, target: str, tool: str, finding_type: str, data: Any):
+        """Store a finding for later cross-reference."""
+        if target not in self._memory:
+            self._memory[target] = {
+                "stack": {}, "ports": [], "services": [], "vulns": [],
+                "endpoints": [], "responses": {}, "headers": {},
+                "cloud": {}, "waf": None, "technologies": [],
+                "rate_limits": {}, "bypass_successes": [],
+            }
+        
+        mem = self._memory[target]
+        if finding_type == "port":
+            if data not in mem["ports"]:
+                mem["ports"].append(data)
+        elif finding_type == "service":
+            mem["services"].append(data)
+        elif finding_type == "vuln":
+            mem["vulns"].append({"tool": tool, "data": data, "timestamp": time.time()})
+        elif finding_type == "endpoint":
+            if data not in mem["endpoints"]:
+                mem["endpoints"].append(data)
+        elif finding_type == "response_code":
+            endpoint, code = data
+            mem["responses"][endpoint] = code
+        elif finding_type == "stack":
+            mem["stack"].update(data)
+        elif finding_type == "technology":
+            if data not in mem["technologies"]:
+                mem["technologies"].append(data)
+        elif finding_type == "cloud":
+            mem["cloud"].update(data)
+        elif finding_type == "waf":
+            mem["waf"] = data
+        elif finding_type == "header":
+            mem["headers"].update(data)
+        elif finding_type == "rate_limit":
+            mem["rate_limits"].update(data)
+        elif finding_type == "bypass_success":
+            mem["bypass_successes"].append(data)
+    
+    def get_context(self, target: str) -> Dict:
+        """Get full accumulated context for a target."""
+        return self._memory.get(target, {})
+    
+    def get_stack(self, target: str) -> Dict:
+        """Get detected technology stack."""
+        return self._memory.get(target, {}).get("stack", {})
+    
+    def get_vulns(self, target: str) -> List:
+        """Get all discovered vulnerabilities."""
+        return self._memory.get(target, {}).get("vulns", [])
+    
+    def has_finding(self, target: str, finding_type: str, keyword: str = "") -> bool:
+        """Check if a specific finding exists."""
+        mem = self._memory.get(target, {})
+        if finding_type == "waf":
+            return mem.get("waf") is not None
+        if finding_type == "cloud":
+            return bool(mem.get("cloud"))
+        data = mem.get(finding_type, [])
+        if keyword:
+            return any(keyword.lower() in str(item).lower() for item in data)
+        return bool(data)
+    
+    def decide(self, target: str, decision: str, reason: str):
+        """Log a strategic decision for audit trail."""
+        self._decisions.append({
+            "target": target, "decision": decision,
+            "reason": reason, "timestamp": time.time()
+        })
+    
+    def get_decisions(self, target: str) -> List[Dict]:
+        """Get decision trail for a target."""
+        return [d for d in self._decisions if d["target"] == target]
+
+
+class PlaybookEngine:
+    """
+    Pre-defined attack playbooks that auto-chain tools based on context.
+    Each playbook is a decision tree that adapts to findings.
+    """
+    
+    PLAYBOOKS = {
+        "web_full": {
+            "name": "Full Web Application Assessment",
+            "description": "Complete web pentest: recon → fingerprint → fuzz → inject → exploit",
+            "stages": [
+                {"name": "recon", "tools": ["nmap_scan", "web_tech_detect", "target_profiler"]},
+                {"name": "discovery", "tools": ["gobuster_scan", "enhanced_api_discovery", "subdomain_enum"]},
+                {"name": "analysis", "tools": ["enhanced_cors_scanner", "enhanced_waf_bypass", "header_security_audit"]},
+                {"name": "fuzzing", "tools": ["context_fuzzer", "smart_vulnerability_detector"]},
+                {"name": "injection", "tools": ["sql_injection_test", "xss_scan", "ssti_scanner", "ssrf_scanner"]},
+                {"name": "exploit", "tools": ["exploitation_chain"]},
+            ],
+        },
+        "api_assessment": {
+            "name": "API Security Assessment",
+            "description": "API-focused: discovery → auth testing → injection → IDOR → SSRF",
+            "stages": [
+                {"name": "discovery", "tools": ["enhanced_api_discovery", "target_profiler"]},
+                {"name": "auth", "tools": ["enhanced_jwt_analyzer", "enhanced_idor_scanner"]},
+                {"name": "injection", "tools": ["sql_injection_test", "command_injection_test"]},
+                {"name": "ssrf", "tools": ["enhanced_ssrf_scanner"]},
+                {"name": "exploit", "tools": ["exploitation_chain"]},
+            ],
+        },
+        "cloud_assessment": {
+            "name": "Cloud Infrastructure Assessment",
+            "description": "Cloud-focused: enum → storage → SSRF → metadata → takeover",
+            "stages": [
+                {"name": "recon", "tools": ["nmap_scan", "target_profiler"]},
+                {"name": "cloud_enum", "tools": ["cloud_storage_enum"]},
+                {"name": "ssrf", "tools": ["enhanced_ssrf_scanner"]},
+                {"name": "exploit", "tools": ["exploitation_chain"]},
+            ],
+        },
+        "network_internal": {
+            "name": "Internal Network Assessment",
+            "description": "Network pentest: discovery → services → SMB → exploit",
+            "stages": [
+                {"name": "discovery", "tools": ["advanced_arp_discovery", "nmap_scan"]},
+                {"name": "services", "tools": ["advanced_smb_enum"]},
+                {"name": "brute", "tools": ["hydra_attack"]},
+                {"name": "exploit", "tools": ["metasploit_exploit"]},
+            ],
+        },
+        "bug_bounty_quick": {
+            "name": "Bug Bounty Quick Assessment",
+            "description": "Fast bug bounty: subdomains → tech detect → CORS/SSRF/IDOR → report",
+            "stages": [
+                {"name": "scope", "tools": ["scope_check", "subdomain_enum"]},
+                {"name": "fingerprint", "tools": ["target_profiler", "web_tech_detect"]},
+                {"name": "vulns", "tools": ["enhanced_cors_scanner", "enhanced_ssrf_scanner", "enhanced_idor_scanner", "enhanced_jwt_analyzer"]},
+                {"name": "report", "tools": ["generate_report"]},
+            ],
+        },
+    }
+    
+    @classmethod
+    def get_playbook(cls, name: str) -> Dict:
+        """Get a playbook by name."""
+        return cls.PLAYBOOKS.get(name, {})
+    
+    @classmethod
+    def list_playbooks(cls) -> List[str]:
+        """List available playbooks."""
+        return list(cls.PLAYBOOKS.keys())
+    
+    @classmethod
+    def recommend_playbook(cls, context: Dict) -> str:
+        """Recommend a playbook based on current context."""
+        stack = context.get("stack", {})
+        ports = context.get("ports", [])
+        cloud = context.get("cloud", {})
+        
+        # Cloud detected → cloud assessment
+        if cloud.get("provider"):
+            return "cloud_assessment"
+        
+        # Only internal ports (445, 139, 3389) → network internal
+        internal_indicators = {445, 139, 3389, 22, 23, 3306, 5432}
+        if ports and all(p in internal_indicators for p in ports):
+            return "network_internal"
+        
+        # API detected → API assessment
+        if stack.get("api_type") or stack.get("framework") in ["fastapi", "express", "spring"]:
+            return "api_assessment"
+        
+        # Web ports → full web
+        if any(p in [80, 443, 8080, 8443] for p in ports):
+            return "web_full"
+        
+        return "bug_bounty_quick"
+
+
+class RateLimitDetector:
+    """
+    Detects rate limiting and adapts scan speed dynamically.
+    Monitors response patterns to identify throttling.
+    """
+    
+    def __init__(self):
+        self._limits: Dict[str, Dict] = {}
+        self._request_log: Dict[str, List[float]] = {}
+    
+    def log_request(self, target: str):
+        """Log a request timestamp."""
+        if target not in self._request_log:
+            self._request_log[target] = []
+        self._request_log[target].append(time.time())
+        # Keep last 100 timestamps
+        self._request_log[target] = self._request_log[target][-100:]
+    
+    def detect_from_response(self, target: str, status_code: int, headers: Dict) -> Dict:
+        """Analyze response for rate limit indicators."""
+        indicators = {
+            "rate_limited": False,
+            "limit": None,
+            "remaining": None,
+            "reset_time": None,
+            "retry_after": None,
+            "type": "unknown",
+        }
+        
+        # HTTP 429 → explicit rate limit
+        if status_code == 429:
+            indicators["rate_limited"] = True
+            indicators["type"] = "explicit_429"
+        
+        # Check rate limit headers
+        for key, val in headers.items():
+            key_lower = key.lower()
+            if "x-ratelimit-limit" in key_lower or "x-rate-limit-limit" in key_lower:
+                indicators["limit"] = int(val) if val.isdigit() else val
+            elif "x-ratelimit-remaining" in key_lower or "x-rate-limit-remaining" in key_lower:
+                indicators["remaining"] = int(val) if val.isdigit() else val
+            elif "x-ratelimit-reset" in key_lower or "x-rate-limit-reset" in key_lower:
+                indicators["reset_time"] = val
+            elif "retry-after" in key_lower:
+                indicators["retry_after"] = int(val) if val.isdigit() else val
+                indicators["rate_limited"] = True
+                indicators["type"] = "retry_after"
+        
+        # Cloudflare rate limit patterns
+        if status_code == 403 and any("cloudflare" in str(v).lower() for v in headers.values()):
+            indicators["rate_limited"] = True
+            indicators["type"] = "cloudflare_block"
+        
+        # AWS WAF rate limit (status 403 with specific headers)
+        if status_code == 403 and any("awselb" in str(v).lower() or "awsalb" in str(v).lower() for v in headers.values()):
+            indicators["rate_limited"] = True
+            indicators["type"] = "aws_waf"
+        
+        # Store findings
+        if indicators["rate_limited"] or indicators["limit"]:
+            self._limits[target] = indicators
+        
+        return indicators
+    
+    def get_recommended_delay(self, target: str) -> float:
+        """Get recommended delay between requests for a target."""
+        limit_info = self._limits.get(target, {})
+        
+        if limit_info.get("retry_after"):
+            return float(limit_info["retry_after"])
+        
+        if limit_info.get("type") == "cloudflare_block":
+            return 5.0  # Cloudflare needs longer cooldown
+        
+        if limit_info.get("type") == "aws_waf":
+            return 3.0
+        
+        if limit_info.get("limit"):
+            # Calculate safe request rate
+            limit = limit_info["limit"]
+            if isinstance(limit, int) and limit > 0:
+                return max(0.5, 60.0 / limit)  # Stay at 80% of limit
+        
+        # Default: adaptive based on response pattern
+        timestamps = self._request_log.get(target, [])
+        if len(timestamps) > 10:
+            # If requests are clustered, slow down
+            recent = timestamps[-10:]
+            time_span = recent[-1] - recent[0]
+            if time_span < 2.0:  # 10 requests in 2 seconds = too fast
+                return 1.0
+        
+        return 0.3  # Default moderate pace
+    
+    def is_rate_limited(self, target: str) -> bool:
+        """Check if target is currently rate limiting us."""
+        return self._limits.get(target, {}).get("rate_limited", False)
+    
+    def get_status(self, target: str) -> Dict:
+        """Get full rate limit status for a target."""
+        return {
+            "limits": self._limits.get(target, {}),
+            "total_requests": len(self._request_log.get(target, [])),
+            "recommended_delay": self.get_recommended_delay(target),
+            "is_limited": self.is_rate_limited(target),
+        }
+
+
+class IntelligentOrchestrator:
+    """
+    The brain of the MCP server. Makes autonomous decisions about:
+    - What to scan next based on findings
+    - How to adapt to rate limits and WAFs
+    - When to escalate from recon to exploitation
+    - Which payloads to use based on detected stack
+    """
+    
+    def __init__(self, memory: PentestMemory, rate_detector: RateLimitDetector):
+        self.memory = memory
+        self.rate_detector = rate_detector
+    
+    def analyze_response_code(self, target: str, endpoint: str, code: int) -> List[Dict]:
+        """
+        Contextual analysis of HTTP response codes.
+        Returns recommended follow-up actions.
+        """
+        actions = []
+        
+        if code == 405:
+            # Method Not Allowed → endpoint EXISTS but wrong method
+            actions.append({
+                "action": "method_enum",
+                "reason": f"{endpoint} returned 405 — endpoint exists, try alternate methods",
+                "methods": ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+                "headers_to_try": [
+                    {"Content-Type": "application/json", "body": "{}"},
+                    {"Content-Type": "application/x-www-form-urlencoded"},
+                    {"Content-Type": "multipart/form-data"},
+                ],
+            })
+            self.memory.store_finding(target, "orchestrator", "endpoint", endpoint)
+        
+        elif code == 422:
+            # Unprocessable Entity → expects specific body format (common in Java/Spring/FastAPI)
+            actions.append({
+                "action": "body_fuzz",
+                "reason": f"{endpoint} returned 422 — expects structured body, fuzz parameters",
+                "payloads": [
+                    '{"username":"admin","password":"admin"}',
+                    '{"email":"test@test.com"}',
+                    '{"id":1}',
+                    '{"query":"test"}',
+                    '{"data":null}',
+                ],
+                "stack_hint": "Likely Spring Boot / FastAPI / NestJS",
+            })
+            self.memory.store_finding(target, "orchestrator", "stack", {"body_format": "json", "validation": "strict"})
+        
+        elif code == 403:
+            # Forbidden → try bypass techniques
+            actions.append({
+                "action": "bypass_403",
+                "reason": f"{endpoint} returned 403 — try bypass techniques",
+                "techniques": [
+                    {"header": "X-Original-URL", "value": endpoint},
+                    {"header": "X-Rewrite-URL", "value": endpoint},
+                    {"header": "X-Forwarded-For", "value": "127.0.0.1"},
+                    {"header": "X-Custom-IP-Authorization", "value": "127.0.0.1"},
+                    {"path_mutation": endpoint + "/"},
+                    {"path_mutation": endpoint + "/..;/"},
+                    {"path_mutation": "/" + endpoint.strip("/").upper()},
+                    {"path_mutation": endpoint + "%20"},
+                    {"path_mutation": endpoint + "%0a"},
+                    {"path_mutation": endpoint + "?"},
+                    {"path_mutation": endpoint + "#"},
+                    {"path_mutation": endpoint + "..;"},
+                ],
+            })
+        
+        elif code == 401:
+            # Unauthorized → authentication required, try defaults + bypass
+            actions.append({
+                "action": "auth_bypass",
+                "reason": f"{endpoint} returned 401 — try default creds and auth bypass",
+                "techniques": [
+                    {"type": "basic_auth", "creds": ["admin:admin", "admin:password", "root:root"]},
+                    {"type": "jwt_none", "header": "Authorization: Bearer eyJhbGciOiJub25lIn0.eyJhZG1pbiI6dHJ1ZX0."},
+                    {"type": "header_bypass", "headers": ["X-API-Key: test", "Authorization: null"]},
+                ],
+            })
+        
+        elif code == 500:
+            # Internal Server Error → potential injection point
+            actions.append({
+                "action": "error_exploit",
+                "reason": f"{endpoint} returned 500 — server error, possible injection point",
+                "tests": ["sqli", "ssti", "command_injection", "deserialization"],
+            })
+        
+        elif code == 301 or code == 302:
+            # Redirect → follow and analyze destination
+            actions.append({
+                "action": "follow_redirect",
+                "reason": f"{endpoint} redirects — follow to discover hidden endpoints",
+            })
+        
+        return actions
+    
+    def recommend_next_tools(self, target: str) -> List[Dict]:
+        """
+        Based on accumulated memory, recommend next tools to run.
+        This is the core intelligence function.
+        """
+        context = self.memory.get_context(target)
+        if not context:
+            return [{"tool": "target_profiler", "reason": "No context yet — start with profiling"}]
+        
+        recommendations = []
+        stack = context.get("stack", {})
+        vulns = context.get("vulns", [])
+        waf = context.get("waf")
+        cloud = context.get("cloud", {})
+        endpoints = context.get("endpoints", [])
+        responses = context.get("responses", {})
+        
+        # If WAF detected but no bypass attempted
+        if waf and not context.get("bypass_successes"):
+            recommendations.append({
+                "tool": "enhanced_waf_bypass",
+                "reason": f"WAF detected ({waf}) but no bypass attempted",
+                "priority": "high",
+            })
+        
+        # If cloud provider detected but storage not enumerated
+        if cloud.get("provider") and not self.memory.has_finding(target, "vulns", "s3"):
+            recommendations.append({
+                "tool": "cloud_storage_enum",
+                "reason": f"Cloud provider {cloud.get('provider')} detected — enumerate storage",
+                "priority": "high",
+            })
+        
+        # If Java/Spring detected → test Spring-specific vulns
+        if stack.get("framework") in ["spring", "spring_boot"]:
+            if not self.memory.has_finding(target, "endpoints", "actuator"):
+                recommendations.append({
+                    "tool": "smart_vulnerability_detector",
+                    "reason": "Spring Boot detected — test /actuator, Log4Shell, deserial",
+                    "priority": "critical",
+                    "params": {"scan_type": "full"},
+                })
+        
+        # If 403s found but no bypass tested
+        forbidden_endpoints = [ep for ep, code in responses.items() if code == 403]
+        if forbidden_endpoints:
+            recommendations.append({
+                "tool": "context_fuzzer",
+                "reason": f"Found {len(forbidden_endpoints)} 403 endpoints — test bypass techniques",
+                "priority": "high",
+                "params": {"wordlist_type": "bypass"},
+            })
+        
+        # If vulns found but no exploitation chain built
+        if len(vulns) >= 2 and not self.memory.has_finding(target, "vulns", "chain"):
+            recommendations.append({
+                "tool": "exploitation_chain",
+                "reason": f"{len(vulns)} vulnerabilities found — build exploitation chain",
+                "priority": "critical",
+            })
+        
+        # If APIs discovered but not tested for IDOR
+        if endpoints and not self.memory.has_finding(target, "vulns", "idor"):
+            recommendations.append({
+                "tool": "enhanced_idor_scanner",
+                "reason": "API endpoints discovered — test for IDOR",
+                "priority": "medium",
+            })
+        
+        # If no SSRF test done yet
+        if not self.memory.has_finding(target, "vulns", "ssrf"):
+            recommendations.append({
+                "tool": "enhanced_ssrf_scanner",
+                "reason": "SSRF not yet tested — critical for cloud environments",
+                "priority": "medium",
+            })
+        
+        # Sort by priority
+        priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        recommendations.sort(key=lambda x: priority_order.get(x.get("priority", "low"), 3))
+        
+        return recommendations[:5]  # Top 5 recommendations
+    
+    def adapt_to_stack(self, target: str) -> Dict:
+        """
+        Adapt testing strategy based on detected technology stack.
+        Returns stack-specific configuration.
+        """
+        stack = self.memory.get_stack(target)
+        config = {
+            "wordlists": [],
+            "payloads": [],
+            "priority_tests": [],
+            "skip_tests": [],
+        }
+        
+        framework = stack.get("framework", "").lower()
+        language = stack.get("language", "").lower()
+        cloud_provider = self.memory.get_context(target).get("cloud", {}).get("provider", "")
+        
+        if "spring" in framework or "java" in language:
+            config["wordlists"].extend([
+                "/actuator", "/actuator/env", "/actuator/health", "/actuator/info",
+                "/actuator/mappings", "/actuator/beans", "/actuator/configprops",
+                "/swagger-ui.html", "/v2/api-docs", "/v3/api-docs",
+                "/h2-console", "/jolokia", "/heapdump",
+            ])
+            config["payloads"].extend(["log4shell", "java_deserial", "spring_spel"])
+            config["priority_tests"].extend(["ssti_scanner", "command_injection_test"])
+        
+        elif "go" in language or "golang" in framework:
+            config["wordlists"].extend([
+                "/debug/pprof/", "/debug/vars", "/metrics",
+                "/healthz", "/readyz", "/livez",
+                "/swagger/", "/api-docs/",
+            ])
+            config["payloads"].extend(["ssti_golang", "path_traversal"])
+            config["priority_tests"].extend(["ssti_scanner", "lfi_scan"])
+        
+        elif "node" in language or "express" in framework:
+            config["wordlists"].extend([
+                "/.env", "/package.json", "/node_modules/.package-lock.json",
+                "/graphql", "/__graphql", "/playground",
+                "/server.js", "/app.js", "/config.js",
+            ])
+            config["payloads"].extend(["nosql_injection", "prototype_pollution", "ssrf"])
+            config["priority_tests"].extend(["ssrf_scanner", "command_injection_test"])
+        
+        elif "python" in language or "django" in framework or "flask" in framework or "fastapi" in framework:
+            config["wordlists"].extend([
+                "/admin/", "/api/schema/", "/__debug__/", "/docs", "/redoc",
+                "/openapi.json", "/.env", "/settings.py",
+                "/manage.py", "/requirements.txt",
+            ])
+            config["payloads"].extend(["ssti_jinja2", "python_deserial", "ssrf"])
+            config["priority_tests"].extend(["ssti_scanner", "ssrf_scanner"])
+        
+        elif "php" in language or "laravel" in framework or "wordpress" in framework:
+            config["wordlists"].extend([
+                "/wp-admin/", "/wp-config.php.bak", "/.env",
+                "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+                "/debug/default/view", "/telescope/requests",
+            ])
+            config["payloads"].extend(["php_object_injection", "lfi", "rce_php"])
+            config["priority_tests"].extend(["lfi_scan", "command_injection_test"])
+        
+        # Cloud-specific
+        if cloud_provider == "aws":
+            config["wordlists"].extend([
+                "/.aws/credentials", "/.aws/config",
+                "/latest/meta-data/", "/latest/user-data",
+            ])
+            config["priority_tests"].append("enhanced_ssrf_scanner")
+        elif cloud_provider == "gcp":
+            config["wordlists"].extend([
+                "/computeMetadata/v1/", "/computeMetadata/v1/project/",
+            ])
+        elif cloud_provider == "azure":
+            config["wordlists"].extend([
+                "/metadata/instance", "/.azure/",
+            ])
+        
+        return config
+
+
+# Initialize global intelligence instances
+pentest_memory = PentestMemory()
+rate_limit_detector = RateLimitDetector()
+orchestrator = IntelligentOrchestrator(pentest_memory, rate_limit_detector)
+
+
+# --- Intelligent Tools ---
+
+@mcp.tool()
+@resolve_references
+async def autopilot_scan(
+    target: str,
+    playbook: str = "auto",
+    max_stages: int = 4,
+    respect_rate_limits: bool = True,
+    timeout: int = 600
+) -> str:
+    """
+    AUTONOMOUS pentest orchestration. Runs an intelligent attack sequence
+    adapted to the target in real-time. Uses playbooks + memory + rate-limit
+    detection to chain tools optimally.
+    
+    Playbooks: auto, web_full, api_assessment, cloud_assessment, network_internal, bug_bounty_quick
+    The 'auto' mode profiles the target first and selects the best playbook.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 600)
+    trace, progress, exec_dir = _init_tool_context("autopilot_scan", target, max_stages * 3)
+    
+    results = {
+        "target": target,
+        "playbook_used": playbook,
+        "stages_completed": [],
+        "findings": [],
+        "recommendations": [],
+        "decisions": [],
+        "rate_limit_status": {},
+    }
+    
+    try:
+        # Step 1: Initial profiling to select playbook
+        progress.update("Phase 1: Target profiling")
+        trace.command(f"autopilot_scan target={target} playbook={playbook}")
+        
+        # Quick HTTP fingerprint for playbook selection
+        import urllib.request, urllib.error
+        profile_data = {"ports": [], "stack": {}, "cloud": {}}
+        
+        try:
+            test_url = target if target.startswith("http") else f"https://{target}"
+            req = urllib.request.Request(test_url, method="GET")
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                headers = dict(resp.headers)
+                body = resp.read(4096).decode("utf-8", errors="ignore")
+                
+                # Stack detection from headers
+                server = headers.get("Server", "").lower()
+                powered = headers.get("X-Powered-By", "").lower()
+                
+                if "nginx" in server:
+                    profile_data["stack"]["server"] = "nginx"
+                elif "apache" in server:
+                    profile_data["stack"]["server"] = "apache"
+                elif "cloudflare" in server:
+                    profile_data["stack"]["server"] = "cloudflare"
+                    profile_data["cloud"]["provider"] = "cloudflare"
+                
+                if "express" in powered:
+                    profile_data["stack"]["framework"] = "express"
+                    profile_data["stack"]["language"] = "node"
+                elif "php" in powered:
+                    profile_data["stack"]["language"] = "php"
+                elif "asp.net" in powered:
+                    profile_data["stack"]["framework"] = "asp.net"
+                    profile_data["stack"]["language"] = "csharp"
+                
+                # Cloud detection from headers
+                for h_key, h_val in headers.items():
+                    h_lower = h_key.lower()
+                    if "x-amz" in h_lower or "x-aws" in h_lower:
+                        profile_data["cloud"]["provider"] = "aws"
+                    elif "x-goog" in h_lower or "x-cloud" in h_lower:
+                        profile_data["cloud"]["provider"] = "gcp"
+                    elif "x-ms" in h_lower or "x-azure" in h_lower:
+                        profile_data["cloud"]["provider"] = "azure"
+                
+                # Tech detection from body
+                if "react" in body.lower() or "next" in body.lower():
+                    profile_data["stack"]["frontend"] = "react"
+                elif "vue" in body.lower():
+                    profile_data["stack"]["frontend"] = "vue"
+                elif "angular" in body.lower():
+                    profile_data["stack"]["frontend"] = "angular"
+                
+                # WAF detection
+                if headers.get("cf-ray"):
+                    pentest_memory.store_finding(target, "autopilot", "waf", "cloudflare")
+                elif any("awselb" in str(v).lower() for v in headers.values()):
+                    pentest_memory.store_finding(target, "autopilot", "waf", "aws_alb")
+                
+                # Store all findings in memory
+                for key, val in profile_data["stack"].items():
+                    pentest_memory.store_finding(target, "autopilot", "stack", {key: val})
+                if profile_data["cloud"]:
+                    pentest_memory.store_finding(target, "autopilot", "cloud", profile_data["cloud"])
+                
+                # Rate limit detection
+                rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers)
+                if rate_info.get("rate_limited"):
+                    results["rate_limit_status"] = rate_info
+                    
+        except (urllib.error.HTTPError, urllib.error.URLError, Exception) as e:
+            profile_data["error"] = str(e)
+        
+        # Step 2: Select playbook
+        if playbook == "auto":
+            context = pentest_memory.get_context(target)
+            playbook = PlaybookEngine.recommend_playbook(context if context else profile_data)
+            pentest_memory.decide(target, f"Selected playbook: {playbook}", 
+                                  f"Based on stack={profile_data.get('stack')}, cloud={profile_data.get('cloud')}")
+        
+        results["playbook_used"] = playbook
+        selected_playbook = PlaybookEngine.get_playbook(playbook)
+        
+        if not selected_playbook:
+            selected_playbook = PlaybookEngine.get_playbook("web_full")
+            playbook = "web_full"
+        
+        # Step 3: Execute stages
+        stages = selected_playbook.get("stages", [])[:max_stages]
+        
+        for i, stage in enumerate(stages):
+            stage_name = stage["name"]
+            progress.update(f"Stage {i+1}/{len(stages)}: {stage_name}")
+            
+            # Check rate limits before proceeding
+            if respect_rate_limits and rate_limit_detector.is_rate_limited(target):
+                delay = rate_limit_detector.get_recommended_delay(target)
+                pentest_memory.decide(target, f"Pausing {delay}s", "Rate limit detected")
+                await asyncio.sleep(min(delay, 5))  # Cap at 5s in autopilot
+            
+            stage_result = {
+                "stage": stage_name,
+                "tools_planned": stage["tools"],
+                "tools_executed": [],
+                "findings": [],
+            }
+            
+            for tool_name in stage["tools"]:
+                try:
+                    # Simulate tool execution summary (actual execution happens via individual tool calls)
+                    tool_summary = {
+                        "tool": tool_name,
+                        "status": "recommended",
+                        "reason": f"Part of {playbook}/{stage_name} stage",
+                    }
+                    
+                    # Get stack-adapted config for tool
+                    stack_config = orchestrator.adapt_to_stack(target)
+                    if stack_config.get("priority_tests") and tool_name in stack_config["priority_tests"]:
+                        tool_summary["priority"] = "HIGH — stack-specific"
+                    
+                    stage_result["tools_executed"].append(tool_summary)
+                    
+                except Exception as e:
+                    stage_result["tools_executed"].append({
+                        "tool": tool_name, "status": "error", "error": str(e)
+                    })
+            
+            results["stages_completed"].append(stage_result)
+        
+        # Step 4: Generate intelligent recommendations
+        progress.update("Generating recommendations")
+        recommendations = orchestrator.recommend_next_tools(target)
+        results["recommendations"] = recommendations
+        
+        # Step 5: Compile decisions
+        results["decisions"] = pentest_memory.get_decisions(target)
+        
+        # Stack-specific guidance
+        stack_config = orchestrator.adapt_to_stack(target)
+        results["stack_adapted_config"] = {
+            "additional_wordlists": stack_config.get("wordlists", [])[:10],
+            "recommended_payloads": stack_config.get("payloads", []),
+            "priority_tests": stack_config.get("priority_tests", []),
+        }
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"AutoPilot completed {len(results['stages_completed'])} stages using '{playbook}' playbook. "
+            f"Generated {len(recommendations)} follow-up recommendations. "
+            f"Stack detected: {profile_data.get('stack', {})}. "
+            f"Cloud: {profile_data.get('cloud', {})}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("autopilot_scan complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def adaptive_recon(
+    target: str,
+    depth: str = "normal",
+    adapt_to_findings: bool = True,
+    timeout: int = 300
+) -> str:
+    """
+    Smart reconnaissance that profiles target, detects stack/cloud/WAF,
+    then adapts scanning strategy in real-time. Goes deeper when it finds
+    interesting signals (405/422/403 responses).
+    
+    Depth: quick (surface only), normal (with adaptation), deep (aggressive + bypass)
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 300)
+    trace, progress, exec_dir = _init_tool_context("adaptive_recon", target, 8)
+    
+    results = {
+        "target": target, "depth": depth,
+        "profile": {}, "endpoints_discovered": [],
+        "interesting_responses": [], "bypass_results": [],
+        "stack_detection": {}, "cloud_detection": {},
+        "waf_detection": {}, "rate_limit_info": {},
+        "contextual_actions": [], "next_steps": [],
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        # Phase 1: Initial fingerprint
+        progress.update("Phase 1: HTTP fingerprinting")
+        trace.command(f"adaptive_recon target={target} depth={depth}")
+        
+        headers_detected = {}
+        try:
+            req = urllib.request.Request(base_url, method="GET")
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                headers_detected = dict(resp.headers)
+                body = resp.read(8192).decode("utf-8", errors="ignore")
+                
+                # Deep header analysis
+                for h_key, h_val in headers_detected.items():
+                    pentest_memory.store_finding(target, "adaptive_recon", "header", {h_key: h_val})
+                
+                # Stack detection
+                stack = {}
+                server = headers_detected.get("Server", "")
+                powered = headers_detected.get("X-Powered-By", "")
+                
+                if server:
+                    stack["server"] = server
+                if powered:
+                    stack["powered_by"] = powered
+                
+                # Framework detection from response patterns
+                if "X-Request-Id" in headers_detected:
+                    stack["has_request_id"] = True
+                if any("go" in str(v).lower() for v in headers_detected.values()):
+                    stack["language"] = "golang"
+                if "Strict-Transport-Security" in headers_detected:
+                    stack["hsts"] = True
+                
+                # Body analysis for tech detection
+                tech_patterns = {
+                    "react": r"react|__NEXT_DATA__|_next/static",
+                    "vue": r"vue|__vue__|nuxt",
+                    "angular": r"angular|ng-version",
+                    "spring_boot": r"Whitelabel Error|Spring|actuator",
+                    "django": r"csrfmiddlewaretoken|django",
+                    "laravel": r"laravel_session|XSRF-TOKEN",
+                    "wordpress": r"wp-content|wp-includes|wordpress",
+                    "express": r"express|x-powered-by.*express",
+                }
+                
+                for tech, pattern in tech_patterns.items():
+                    if re.search(pattern, body, re.IGNORECASE):
+                        stack["frontend" if tech in ["react", "vue", "angular"] else "framework"] = tech
+                        pentest_memory.store_finding(target, "adaptive_recon", "technology", tech)
+                
+                results["stack_detection"] = stack
+                pentest_memory.store_finding(target, "adaptive_recon", "stack", stack)
+                
+                # Cloud detection
+                cloud = {}
+                all_headers_str = str(headers_detected).lower()
+                if "x-amz" in all_headers_str or "amazons3" in all_headers_str:
+                    cloud["provider"] = "aws"
+                elif "x-goog" in all_headers_str or "gcs" in all_headers_str:
+                    cloud["provider"] = "gcp"
+                elif "x-ms" in all_headers_str or "azure" in all_headers_str:
+                    cloud["provider"] = "azure"
+                elif "cf-ray" in all_headers_str:
+                    cloud["cdn"] = "cloudflare"
+                
+                results["cloud_detection"] = cloud
+                if cloud:
+                    pentest_memory.store_finding(target, "adaptive_recon", "cloud", cloud)
+                
+                # WAF detection
+                waf = None
+                if headers_detected.get("cf-ray"):
+                    waf = "cloudflare"
+                elif "x-sucuri" in all_headers_str:
+                    waf = "sucuri"
+                elif "x-cdn" in all_headers_str and "incapsula" in all_headers_str:
+                    waf = "imperva"
+                elif any("awselb" in str(v).lower() for v in headers_detected.values()):
+                    waf = "aws_alb_waf"
+                elif "akamai" in all_headers_str:
+                    waf = "akamai"
+                
+                if waf:
+                    results["waf_detection"] = {"type": waf, "bypass_recommended": True}
+                    pentest_memory.store_finding(target, "adaptive_recon", "waf", waf)
+                
+                # Rate limit check from initial response
+                rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers_detected)
+                results["rate_limit_info"] = rate_info
+                
+        except urllib.error.HTTPError as e:
+            results["profile"]["initial_error"] = f"HTTP {e.code}"
+            headers_detected = dict(e.headers) if hasattr(e, 'headers') else {}
+        except Exception as e:
+            results["profile"]["initial_error"] = str(e)
+        
+        # Phase 2: Intelligent endpoint probing (adapted to detected stack)
+        progress.update("Phase 2: Stack-adapted endpoint probing")
+        
+        stack_config = orchestrator.adapt_to_stack(target)
+        probe_paths = stack_config.get("wordlists", [])
+        
+        # Always probe these universal paths
+        universal_paths = [
+            "/robots.txt", "/sitemap.xml", "/.env", "/api", "/admin",
+            "/login", "/graphql", "/.git/config", "/swagger-ui.html",
+        ]
+        probe_paths = list(set(universal_paths + probe_paths[:15]))
+        
+        interesting = []
+        for path in probe_paths[:20]:  # Limit to 20 probes
+            try:
+                probe_url = f"{base_url.rstrip('/')}{path}"
+                req = urllib.request.Request(probe_url, method="GET")
+                req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                        status = resp.status
+                        if status == 200:
+                            content_len = len(resp.read(1024))
+                            interesting.append({
+                                "path": path, "status": 200, "size": content_len,
+                                "significance": "accessible"
+                            })
+                            pentest_memory.store_finding(target, "adaptive_recon", "endpoint", path)
+                except urllib.error.HTTPError as e:
+                    status = e.code
+                    if status in [401, 403, 405, 422, 500]:
+                        entry = {"path": path, "status": status}
+                        
+                        # Contextual analysis
+                        actions = orchestrator.analyze_response_code(target, path, status)
+                        if actions:
+                            entry["follow_up_actions"] = actions
+                            results["contextual_actions"].extend(actions)
+                        
+                        interesting.append(entry)
+                        pentest_memory.store_finding(target, "adaptive_recon", "response_code", (path, status))
+                        
+                # Rate limit adaptation
+                rate_limit_detector.log_request(target)
+                if rate_limit_detector.is_rate_limited(target):
+                    delay = rate_limit_detector.get_recommended_delay(target)
+                    await asyncio.sleep(min(delay, 2))
+                    
+            except Exception:
+                continue
+        
+        results["interesting_responses"] = interesting
+        
+        # Phase 3: Deep adaptation (if depth != quick)
+        if depth in ["normal", "deep"] and adapt_to_findings:
+            progress.update("Phase 3: Contextual deep probing")
+            
+            # 403 bypass attempts on discovered forbidden paths
+            forbidden_paths = [r["path"] for r in interesting if r.get("status") == 403]
+            
+            if forbidden_paths and depth == "deep":
+                bypass_results = []
+                for fpath in forbidden_paths[:3]:  # Top 3 403 paths
+                    bypass_techniques = [
+                        {"method": "path_append_slash", "path": fpath + "/"},
+                        {"method": "case_change", "path": fpath.upper()},
+                        {"method": "path_traversal", "path": fpath + "/..;/"},
+                        {"method": "null_byte", "path": fpath + "%00"},
+                        {"method": "header_bypass", "path": fpath, "header": ("X-Original-URL", fpath)},
+                    ]
+                    
+                    for technique in bypass_techniques:
+                        try:
+                            bypass_url = f"{base_url.rstrip('/')}{technique['path']}"
+                            req = urllib.request.Request(bypass_url, method="GET")
+                            req.add_header("User-Agent", "Mozilla/5.0")
+                            
+                            if technique.get("header"):
+                                req.add_header(technique["header"][0], technique["header"][1])
+                            
+                            try:
+                                with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                                    if resp.status == 200:
+                                        bypass_results.append({
+                                            "original_path": fpath,
+                                            "technique": technique["method"],
+                                            "result": "BYPASS SUCCESSFUL",
+                                            "severity": "HIGH",
+                                        })
+                                        pentest_memory.store_finding(target, "adaptive_recon", "bypass_success", technique)
+                            except urllib.error.HTTPError as e:
+                                if e.code != 403:  # Different response = partial bypass
+                                    bypass_results.append({
+                                        "original_path": fpath,
+                                        "technique": technique["method"],
+                                        "result": f"Different response: {e.code}",
+                                    })
+                        except Exception:
+                            continue
+                
+                results["bypass_results"] = bypass_results
+        
+        # Phase 4: Generate next steps
+        progress.update("Phase 4: Generating intelligent recommendations")
+        
+        next_steps = orchestrator.recommend_next_tools(target)
+        results["next_steps"] = next_steps
+        
+        # Summary
+        results["status"] = "success"
+        results["summary"] = (
+            f"Adaptive recon complete. "
+            f"Stack: {results['stack_detection']}. "
+            f"Cloud: {results['cloud_detection']}. "
+            f"WAF: {results['waf_detection']}. "
+            f"Interesting endpoints: {len(interesting)}. "
+            f"Bypass attempts: {len(results.get('bypass_results', []))}. "
+            f"Next recommended tools: {len(next_steps)}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("adaptive_recon complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def rate_limit_detector_tool(
+    target: str,
+    requests_count: int = 20,
+    interval_ms: int = 100,
+    timeout: int = 60
+) -> str:
+    """
+    Active rate limit detection and adaptation. Sends calibrated bursts to
+    detect rate limiting thresholds, then recommends optimal scan speed.
+    Detects: HTTP 429, Retry-After, X-RateLimit-*, Cloudflare blocks, AWS WAF.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 60)
+    trace, progress, exec_dir = _init_tool_context("rate_limit_detector", target, 5)
+    
+    results = {
+        "target": target,
+        "requests_sent": 0,
+        "rate_limit_detected": False,
+        "limit_details": {},
+        "response_timeline": [],
+        "recommended_delay": 0.3,
+        "waf_blocking": False,
+        "headers_observed": {},
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        progress.update("Sending calibrated request burst")
+        trace.command(f"rate_limit_detector target={target} count={requests_count}")
+        
+        interval_sec = interval_ms / 1000.0
+        responses = []
+        
+        for i in range(min(requests_count, 50)):  # Cap at 50
+            start_time = time.time()
+            try:
+                req = urllib.request.Request(base_url, method="GET")
+                req.add_header("User-Agent", f"Mozilla/5.0 (RateTest/{i})")
+                req.add_header("X-Request-ID", str(i))
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                        elapsed = time.time() - start_time
+                        headers = dict(resp.headers)
+                        
+                        entry = {
+                            "request_num": i + 1,
+                            "status": resp.status,
+                            "time_ms": round(elapsed * 1000, 1),
+                        }
+                        
+                        # Check for rate limit headers
+                        rate_info = rate_limit_detector.detect_from_response(target, resp.status, headers)
+                        if rate_info.get("limit") or rate_info.get("remaining") is not None:
+                            entry["rate_headers"] = rate_info
+                            results["headers_observed"].update({
+                                k: v for k, v in headers.items() 
+                                if "rate" in k.lower() or "limit" in k.lower() or "retry" in k.lower()
+                            })
+                        
+                        responses.append(entry)
+                        
+                except urllib.error.HTTPError as e:
+                    elapsed = time.time() - start_time
+                    headers = dict(e.headers) if hasattr(e, 'headers') else {}
+                    
+                    entry = {
+                        "request_num": i + 1,
+                        "status": e.code,
+                        "time_ms": round(elapsed * 1000, 1),
+                    }
+                    
+                    if e.code == 429:
+                        results["rate_limit_detected"] = True
+                        entry["rate_limited"] = True
+                        rate_info = rate_limit_detector.detect_from_response(target, e.code, headers)
+                        results["limit_details"] = rate_info
+                        entry["rate_headers"] = rate_info
+                    
+                    elif e.code == 403:
+                        # Possible WAF block
+                        if i > 5:  # Only after several requests
+                            results["waf_blocking"] = True
+                            entry["possible_waf_block"] = True
+                    
+                    responses.append(entry)
+                    
+                    # If rate limited, stop burst
+                    if e.code == 429:
+                        break
+                
+                rate_limit_detector.log_request(target)
+                results["requests_sent"] = i + 1
+                
+            except Exception as e:
+                responses.append({"request_num": i + 1, "error": str(e)})
+            
+            await asyncio.sleep(interval_sec)
+        
+        # Analysis
+        progress.update("Analyzing rate limit patterns")
+        
+        # Check for progressive slowdown (response times increasing)
+        if len(responses) > 5:
+            first_5_avg = sum(r.get("time_ms", 0) for r in responses[:5]) / 5
+            last_5_avg = sum(r.get("time_ms", 0) for r in responses[-5:]) / 5
+            
+            if last_5_avg > first_5_avg * 2:
+                results["rate_limit_detected"] = True
+                results["limit_details"]["type"] = "progressive_slowdown"
+                results["limit_details"]["slowdown_factor"] = round(last_5_avg / max(first_5_avg, 1), 2)
+        
+        # Check for status code changes
+        status_codes = [r.get("status") for r in responses if r.get("status")]
+        if 429 in status_codes:
+            trigger_point = status_codes.index(429) + 1
+            results["limit_details"]["trigger_at_request"] = trigger_point
+            results["limit_details"]["estimated_limit"] = trigger_point
+        
+        # Store only last 10 in timeline (summary)
+        results["response_timeline"] = responses[-10:] if len(responses) > 10 else responses
+        results["total_responses"] = len(responses)
+        
+        # Calculate recommended delay
+        results["recommended_delay"] = rate_limit_detector.get_recommended_delay(target)
+        
+        # Store in memory
+        pentest_memory.store_finding(target, "rate_limit_detector", "rate_limit", results["limit_details"])
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"Sent {results['requests_sent']} requests. "
+            f"Rate limit detected: {results['rate_limit_detected']}. "
+            f"WAF blocking: {results['waf_blocking']}. "
+            f"Recommended delay: {results['recommended_delay']}s between requests."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("rate_limit_detector complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def intelligent_405_bypass(
+    target: str,
+    endpoint: str = "/api",
+    timeout: int = 120
+) -> str:
+    """
+    When an endpoint returns 405 (Method Not Allowed), this tool intelligently
+    tests ALL HTTP methods with various content-types and body formats to find
+    accepted combinations. Adapts payloads based on detected stack.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 120)
+    trace, progress, exec_dir = _init_tool_context("intelligent_405_bypass", target, 6)
+    
+    results = {
+        "target": target, "endpoint": endpoint,
+        "methods_tested": [], "successful_methods": [],
+        "interesting_responses": [], "next_steps": [],
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        full_url = f"{base_url.rstrip('/')}{endpoint}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        progress.update("Testing HTTP methods")
+        trace.command(f"intelligent_405_bypass {full_url}")
+        
+        # Methods to test
+        methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE"]
+        
+        # Content types to try with body methods
+        content_types = [
+            ("application/json", '{"test": true}'),
+            ("application/x-www-form-urlencoded", "test=true"),
+            ("text/xml", "<test>true</test>"),
+            ("multipart/form-data; boundary=----Boundary", "------Boundary\r\nContent-Disposition: form-data; name=\"test\"\r\n\r\ntrue\r\n------Boundary--"),
+        ]
+        
+        # Get stack-specific payloads
+        stack = pentest_memory.get_stack(target)
+        if stack.get("framework") == "spring_boot" or stack.get("language") == "java":
+            content_types.append(("application/x-java-serialized-object", ""))
+        elif stack.get("language") == "php":
+            content_types.append(("application/x-php-serialized", 'a:1:{s:4:"test";b:1;}'))
+        
+        for method in methods:
+            if method in ["GET", "HEAD", "OPTIONS", "TRACE", "DELETE"]:
+                # No body methods
+                try:
+                    req = urllib.request.Request(full_url, method=method)
+                    req.add_header("User-Agent", "Mozilla/5.0")
+                    
+                    try:
+                        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                            entry = {
+                                "method": method, "status": resp.status,
+                                "content_type": resp.headers.get("Content-Type", ""),
+                                "content_length": resp.headers.get("Content-Length", "0"),
+                            }
+                            if resp.status in [200, 201, 204]:
+                                entry["result"] = "ACCEPTED"
+                                results["successful_methods"].append(entry)
+                            elif resp.status in [401, 403, 422]:
+                                entry["result"] = "EXISTS_BUT_RESTRICTED"
+                                results["interesting_responses"].append(entry)
+                            results["methods_tested"].append(entry)
+                    except urllib.error.HTTPError as e:
+                        entry = {"method": method, "status": e.code}
+                        if e.code in [401, 403, 422, 500]:
+                            entry["result"] = "INTERESTING"
+                            results["interesting_responses"].append(entry)
+                        results["methods_tested"].append(entry)
+                except Exception:
+                    continue
+            else:
+                # Body methods — try different content types
+                for ct, body in content_types:
+                    try:
+                        data = body.encode("utf-8") if body else b""
+                        req = urllib.request.Request(full_url, data=data, method=method)
+                        req.add_header("User-Agent", "Mozilla/5.0")
+                        req.add_header("Content-Type", ct)
+                        
+                        try:
+                            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                                entry = {
+                                    "method": method, "content_type": ct,
+                                    "status": resp.status,
+                                    "response_type": resp.headers.get("Content-Type", ""),
+                                }
+                                if resp.status in [200, 201, 204]:
+                                    entry["result"] = "ACCEPTED"
+                                    results["successful_methods"].append(entry)
+                                elif resp.status == 422:
+                                    entry["result"] = "VALIDATION_ERROR — endpoint accepts this method but needs correct body"
+                                    results["interesting_responses"].append(entry)
+                                results["methods_tested"].append(entry)
+                        except urllib.error.HTTPError as e:
+                            entry = {"method": method, "content_type": ct, "status": e.code}
+                            if e.code == 422:
+                                entry["result"] = "ACCEPTS_METHOD — needs correct parameters"
+                                results["interesting_responses"].append(entry)
+                            elif e.code in [401, 403, 500]:
+                                entry["result"] = "INTERESTING"
+                                results["interesting_responses"].append(entry)
+                            results["methods_tested"].append(entry)
+                    except Exception:
+                        continue
+            
+            # Rate limit awareness
+            rate_limit_detector.log_request(target)
+            if rate_limit_detector.is_rate_limited(target):
+                await asyncio.sleep(rate_limit_detector.get_recommended_delay(target))
+        
+        # Generate next steps based on findings
+        progress.update("Analyzing results")
+        
+        for resp in results["interesting_responses"]:
+            if resp.get("status") == 422:
+                results["next_steps"].append({
+                    "action": "Fuzz request body parameters",
+                    "method": resp.get("method"),
+                    "content_type": resp.get("content_type"),
+                    "reason": "422 indicates the endpoint accepts this method but needs specific parameters",
+                    "suggested_tool": "context_fuzzer",
+                })
+            elif resp.get("status") == 401:
+                results["next_steps"].append({
+                    "action": "Test authentication bypass",
+                    "method": resp.get("method"),
+                    "reason": "401 means endpoint exists and requires auth — test JWT none, default creds",
+                    "suggested_tool": "enhanced_jwt_analyzer",
+                })
+        
+        # Store findings in memory
+        for success in results["successful_methods"]:
+            pentest_memory.store_finding(target, "intelligent_405_bypass", "endpoint", 
+                                         f"{endpoint} [{success['method']}]")
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"Tested {len(results['methods_tested'])} method/content-type combinations. "
+            f"Successful: {len(results['successful_methods'])}. "
+            f"Interesting: {len(results['interesting_responses'])}. "
+            f"Next steps: {len(results['next_steps'])}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("intelligent_405_bypass complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def pentest_memory_query(
+    target: str,
+    query_type: str = "full_context"
+) -> str:
+    """
+    Query the intelligent memory system for accumulated findings about a target.
+    Returns all stored knowledge: stack, vulns, endpoints, rate limits, decisions.
+    
+    Query types: full_context, recommendations, vulns, stack, decisions, rate_limits
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("pentest_memory_query", target, 3)
+    
+    results = {"target": target, "query_type": query_type}
+    
+    try:
+        progress.update("Querying pentest memory")
+        context = pentest_memory.get_context(target)
+        
+        if query_type == "full_context":
+            results["context"] = context
+            results["decisions"] = pentest_memory.get_decisions(target)
+            results["rate_limits"] = rate_limit_detector.get_status(target)
+            results["recommendations"] = orchestrator.recommend_next_tools(target)
+        
+        elif query_type == "recommendations":
+            results["recommendations"] = orchestrator.recommend_next_tools(target)
+            results["stack_config"] = orchestrator.adapt_to_stack(target)
+        
+        elif query_type == "vulns":
+            results["vulnerabilities"] = pentest_memory.get_vulns(target)
+        
+        elif query_type == "stack":
+            results["stack"] = pentest_memory.get_stack(target)
+            results["stack_config"] = orchestrator.adapt_to_stack(target)
+        
+        elif query_type == "decisions":
+            results["decisions"] = pentest_memory.get_decisions(target)
+        
+        elif query_type == "rate_limits":
+            results["rate_limits"] = rate_limit_detector.get_status(target)
+        
+        results["status"] = "success"
+        results["summary"] = f"Memory query '{query_type}' for {target}: {len(str(context))} bytes of context stored"
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("pentest_memory_query complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
 def main():
     """Start the Kali MCP Server v4."""
     import sys

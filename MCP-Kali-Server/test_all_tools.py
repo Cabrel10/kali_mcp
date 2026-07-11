@@ -282,6 +282,23 @@ async def run_all_tests():
         s.exploitation_chain(target="127.0.0.1", timeout=10))
 
     # ==================== SELF-AUDIT ====================
+    print("\n[INTELLIGENT ORCHESTRATION]")
+
+    await test_tool("autopilot_scan",
+        s.autopilot_scan(target="http://127.0.0.1:19999", playbook="web_full", max_stages=1, timeout=10))
+
+    await test_tool("adaptive_recon",
+        s.adaptive_recon(target="http://127.0.0.1:19999", depth="quick", timeout=10))
+
+    await test_tool("rate_limit_detector_tool",
+        s.rate_limit_detector_tool(target="http://127.0.0.1:19999", requests_count=2, timeout=10))
+
+    await test_tool("intelligent_405_bypass",
+        s.intelligent_405_bypass(target="http://127.0.0.1:19999", endpoint="/api", timeout=10))
+
+    await test_tool("pentest_memory_query",
+        s.pentest_memory_query(target="127.0.0.1", query_type="full_context"))
+
     print("\n[SELF-AUDIT]")
 
     await test_tool("server_security_audit",
