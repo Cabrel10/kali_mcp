@@ -1,30 +1,30 @@
 {
   "version": "v4",
-  "timestamp": "2026-07-11T06:21:49",
+  "timestamp": "2026-07-11T06:38:53",
   "summary": {
-    "passed": 46,
+    "passed": 59,
     "failed": 0,
     "skipped": 0,
-    "total_time_ms": 87370
+    "total_time_ms": 56779
   },
   "results": [
     {
       "tool": "start_session",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "tool": "server_health",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 51
+      "duration_ms": 42
     },
     {
       "tool": "execute_command",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 4
+      "duration_ms": 5
     },
     {
       "tool": "get_chain_summary",
@@ -42,7 +42,7 @@
       "tool": "nmap_scan",
       "status": "OK",
       "detail": "status=partial",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "tool": "cve_cartography",
@@ -54,13 +54,13 @@
       "tool": "vulnx_scan",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 30
+      "duration_ms": 29
     },
     {
       "tool": "web_tech_detect",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 48
+      "duration_ms": 46
     },
     {
       "tool": "gobuster_scan",
@@ -90,7 +90,7 @@
       "tool": "nuclei_scan",
       "status": "OK",
       "detail": "status=error",
-      "duration_ms": 5
+      "duration_ms": 4
     },
     {
       "tool": "sqlmap_scan",
@@ -102,79 +102,79 @@
       "tool": "sql_injection_test",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 524
+      "duration_ms": 515
     },
     {
       "tool": "xss_scan",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 503
+      "duration_ms": 453
     },
     {
       "tool": "lfi_scan",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 373
+      "duration_ms": 427
     },
     {
       "tool": "command_injection_test",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 368
+      "duration_ms": 551
     },
     {
       "tool": "ssti_scanner",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 146
+      "duration_ms": 288
     },
     {
       "tool": "ssrf_scanner",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 159
+      "duration_ms": 331
     },
     {
       "tool": "idor_tester",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 28
+      "duration_ms": 68
     },
     {
       "tool": "hydra_attack",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 10
+      "duration_ms": 6
     },
     {
       "tool": "john_crack",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 2
+      "duration_ms": 8
     },
     {
       "tool": "metasploit_exploit",
       "status": "OK",
       "detail": "status=error",
-      "duration_ms": 3
+      "duration_ms": 5
     },
     {
       "tool": "reverse_shell_generator",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "tool": "subdomain_enum",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 30462
+      "duration_ms": 3458
     },
     {
       "tool": "subdomain_scanner",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 1173
+      "duration_ms": 1002
     },
     {
       "tool": "dns_recon",
@@ -186,7 +186,7 @@
       "tool": "arp_scan",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 8
+      "duration_ms": 7
     },
     {
       "tool": "enum4linux_scan",
@@ -204,7 +204,7 @@
       "tool": "jwt_analyzer",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 4
+      "duration_ms": 5
     },
     {
       "tool": "header_security_audit",
@@ -216,31 +216,31 @@
       "tool": "waf_fingerprint",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 137
+      "duration_ms": 144
     },
     {
       "tool": "origin_ip_hunter",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 20195
+      "duration_ms": 887
     },
     {
       "tool": "osint_domain_intel",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 15084
+      "duration_ms": 15074
     },
     {
       "tool": "api_endpoint_discovery",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 1084
+      "duration_ms": 888
     },
     {
       "tool": "run_curl_advanced",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 25
+      "duration_ms": 15
     },
     {
       "tool": "scope_check",
@@ -252,37 +252,115 @@
       "tool": "generate_report",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 9
+      "duration_ms": 8
     },
     {
       "tool": "get_payloads",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "tool": "smart_contract_audit",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 9
+      "duration_ms": 8
     },
     {
       "tool": "defi_protocol_scan",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 69
+      "duration_ms": 39
     },
     {
       "tool": "blockchain_tx_analyzer",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 268
+      "duration_ms": 287
+    },
+    {
+      "tool": "smart_vulnerability_detector",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 1053
+    },
+    {
+      "tool": "context_fuzzer",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 2165
+    },
+    {
+      "tool": "target_profiler",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 91
+    },
+    {
+      "tool": "advanced_arp_discovery",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 12
+    },
+    {
+      "tool": "advanced_smb_enum",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 16
+    },
+    {
+      "tool": "enhanced_ssrf_scanner",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 4792
+    },
+    {
+      "tool": "enhanced_jwt_analyzer",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 4
+    },
+    {
+      "tool": "enhanced_idor_scanner",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 572
+    },
+    {
+      "tool": "enhanced_api_discovery",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 725
+    },
+    {
+      "tool": "enhanced_cors_scanner",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 219
+    },
+    {
+      "tool": "enhanced_waf_bypass",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 603
+    },
+    {
+      "tool": "cloud_storage_enum",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 8182
+    },
+    {
+      "tool": "exploitation_chain",
+      "status": "OK",
+      "detail": "status=success",
+      "duration_ms": 3
     },
     {
       "tool": "server_security_audit",
       "status": "OK",
       "detail": "status=success",
-      "duration_ms": 16238
+      "duration_ms": 13380
     }
   ]
 }
