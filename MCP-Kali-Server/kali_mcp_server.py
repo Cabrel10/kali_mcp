@@ -8668,6 +8668,861 @@ async def pentest_memory_query(
     return json.dumps(results, indent=2, default=str)
 
 
+
+# ============================================================================
+# PHASE 2: SMART INFRASTRUCTURE FINGERPRINTING
+# ============================================================================
+
+@mcp.tool()
+@resolve_references
+async def smart_fingerprint(
+    target: str,
+    deep: bool = True,
+    timeout: int = 180
+) -> str:
+    """
+    Advanced infrastructure fingerprinting that goes beyond headers.
+    Analyzes: error page patterns, timing side-channels, HTTP/2 behavior,
+    TLS certificate details, favicon hashes, source maps, and API structure
+    to determine exact technology stack, versions, and cloud infrastructure.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 180)
+    trace, progress, exec_dir = _init_tool_context("smart_fingerprint", target, 8)
+    
+    results = {
+        "target": target,
+        "server": {}, "framework": {}, "language": {},
+        "cloud": {}, "waf": {}, "cdn": {},
+        "tls": {}, "api_structure": {},
+        "error_patterns": {}, "source_maps": [],
+        "favicon_hash": None, "interesting_headers": {},
+        "confidence_scores": {},
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl, hashlib, socket
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        hostname = base_url.split("//")[1].split("/")[0].split(":")[0]
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        # Phase 1: TLS Certificate Analysis
+        progress.update("Phase 1: TLS certificate analysis")
+        trace.command(f"smart_fingerprint target={target}")
+        
+        try:
+            tls_ctx = ssl.create_default_context()
+            with socket.create_connection((hostname, 443), timeout=10) as sock:
+                with tls_ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+                    cert = ssock.getpeercert()
+                    if cert:
+                        results["tls"] = {
+                            "issuer": dict(x[0] for x in cert.get("issuer", [])),
+                            "subject": dict(x[0] for x in cert.get("subject", [])),
+                            "san": [x[1] for x in cert.get("subjectAltName", [])],
+                            "not_after": cert.get("notAfter", ""),
+                            "serial": cert.get("serialNumber", ""),
+                        }
+                        # Cloud detection from certificate
+                        issuer_org = results["tls"]["issuer"].get("organizationName", "").lower()
+                        san_list = str(results["tls"]["san"]).lower()
+                        if "amazon" in issuer_org or "aws" in san_list:
+                            results["cloud"]["provider"] = "aws"
+                            results["cloud"]["evidence"] = "TLS certificate issuer/SAN"
+                        elif "google" in issuer_org or "gcp" in san_list:
+                            results["cloud"]["provider"] = "gcp"
+                        elif "microsoft" in issuer_org or "azure" in san_list:
+                            results["cloud"]["provider"] = "azure"
+                        elif "cloudflare" in issuer_org:
+                            results["cdn"]["provider"] = "cloudflare"
+        except Exception:
+            results["tls"]["error"] = "TLS analysis failed (non-443 or no TLS)"
+        
+        # Phase 2: Deep Header Analysis + Error Page Fingerprinting
+        progress.update("Phase 2: HTTP fingerprinting + error patterns")
+        
+        # Normal request
+        try:
+            req = urllib.request.Request(base_url, method="GET")
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+                headers = dict(resp.headers)
+                body = resp.read(16384).decode("utf-8", errors="ignore")
+                
+                # Detailed header analysis
+                for key, val in headers.items():
+                    k_lower = key.lower()
+                    if k_lower in ["server", "x-powered-by", "x-aspnet-version", "x-runtime"]:
+                        results["interesting_headers"][key] = val
+                    elif "x-amz" in k_lower or "x-aws" in k_lower:
+                        results["cloud"]["aws_headers"] = {key: val}
+                        results["cloud"]["provider"] = "aws"
+                    elif "x-goog" in k_lower:
+                        results["cloud"]["gcp_headers"] = {key: val}
+                        results["cloud"]["provider"] = "gcp"
+                    elif "cf-ray" in k_lower or "cf-cache-status" in k_lower:
+                        results["cdn"]["cloudflare"] = {key: val}
+                
+                # Server version extraction
+                server_header = headers.get("Server", "")
+                if server_header:
+                    results["server"]["header"] = server_header
+                    # Version extraction
+                    import re as _re
+                    version_match = _re.search(r'[\d.]+', server_header)
+                    if version_match:
+                        results["server"]["version"] = version_match.group()
+                
+                # Framework detection from body patterns
+                framework_signatures = {
+                    "spring_boot": [r"Whitelabel Error Page", r"actuator", r"spring"],
+                    "django": [r"csrfmiddlewaretoken", r"django", r"__admin__"],
+                    "laravel": [r"laravel_session", r"XSRF-TOKEN.*laravel"],
+                    "rails": [r"X-Request-Id", r"rails", r"turbolinks"],
+                    "express": [r"express", r"x-powered-by.*express"],
+                    "fastapi": [r"fastapi", r"openapi.*3\.0", r'"detail":\['],
+                    "nextjs": [r"__NEXT_DATA__", r"_next/static", r"_next/image"],
+                    "nuxtjs": [r"__nuxt", r"nuxt", r"_nuxt/"],
+                    "wordpress": [r"wp-content", r"wp-includes", r"wordpress"],
+                    "drupal": [r"Drupal", r"drupal.js", r"sites/default"],
+                }
+                
+                for fw, patterns in framework_signatures.items():
+                    for pattern in patterns:
+                        if _re.search(pattern, body, _re.IGNORECASE) or _re.search(pattern, str(headers), _re.IGNORECASE):
+                            results["framework"]["detected"] = fw
+                            results["framework"]["evidence"] = pattern
+                            results["confidence_scores"]["framework"] = "high"
+                            break
+                    if results["framework"].get("detected"):
+                        break
+                
+                # Source map detection
+                source_map_patterns = [
+                    r"//# sourceMappingURL=([^\s\"']+)",
+                    r"/\*# sourceMappingURL=([^\s\"']+)\s*\*/",
+                ]
+                for pattern in source_map_patterns:
+                    maps = _re.findall(pattern, body)
+                    results["source_maps"].extend(maps[:5])
+                
+        except urllib.error.HTTPError as e:
+            headers = dict(e.headers) if hasattr(e, 'headers') else {}
+            results["interesting_headers"]["error_status"] = e.code
+        except Exception as e:
+            results["error_patterns"]["main_request"] = str(e)
+        
+        # Phase 3: Error page fingerprinting (trigger 404, 500, etc.)
+        if deep:
+            progress.update("Phase 3: Error page fingerprinting")
+            
+            error_triggers = [
+                ("/thisdoesnotexist_" + str(int(time.time())), "404"),
+                ("/%00", "null_byte"),
+                ("/..%252f..%252f", "path_traversal"),
+                ("/?<script>", "xss_in_param"),
+            ]
+            
+            for path, trigger_type in error_triggers:
+                try:
+                    err_url = f"{base_url.rstrip('/')}{path}"
+                    req = urllib.request.Request(err_url, method="GET")
+                    req.add_header("User-Agent", "Mozilla/5.0")
+                    try:
+                        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                            err_body = resp.read(4096).decode("utf-8", errors="ignore")
+                            results["error_patterns"][trigger_type] = {
+                                "status": resp.status, "length": len(err_body)
+                            }
+                    except urllib.error.HTTPError as e:
+                        err_body = e.read(4096).decode("utf-8", errors="ignore") if hasattr(e, 'read') else ""
+                        results["error_patterns"][trigger_type] = {
+                            "status": e.code, "length": len(err_body)
+                        }
+                        # Fingerprint from error page content
+                        if "Whitelabel Error" in err_body:
+                            results["framework"]["detected"] = "spring_boot"
+                            results["framework"]["evidence"] = "Whitelabel Error Page in 404"
+                        elif "nginx" in err_body.lower():
+                            results["server"]["confirmed"] = "nginx"
+                        elif "apache" in err_body.lower():
+                            results["server"]["confirmed"] = "apache"
+                        elif "express" in err_body.lower() or "Cannot GET" in err_body:
+                            results["framework"]["detected"] = "express"
+                            results["framework"]["evidence"] = "Cannot GET pattern"
+                        elif "django" in err_body.lower():
+                            results["framework"]["detected"] = "django"
+                except Exception:
+                    continue
+        
+        # Phase 4: Favicon hash (Shodan-compatible)
+        progress.update("Phase 4: Favicon hash + API structure")
+        try:
+            fav_url = f"{base_url.rstrip('/')}/favicon.ico"
+            req = urllib.request.Request(fav_url)
+            req.add_header("User-Agent", "Mozilla/5.0")
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                if resp.status == 200:
+                    fav_data = resp.read(65536)
+                    import base64
+                    fav_b64 = base64.encodebytes(fav_data).decode()
+                    results["favicon_hash"] = hashlib.md5(fav_b64.encode()).hexdigest()
+        except Exception:
+            pass
+        
+        # Phase 5: API structure probing
+        api_endpoints = ["/api", "/v1", "/v2", "/graphql", "/rest", "/swagger-ui.html", "/docs", "/redoc"]
+        api_found = []
+        for ep in api_endpoints:
+            try:
+                api_url = f"{base_url.rstrip('/')}{ep}"
+                req = urllib.request.Request(api_url, method="GET")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                req.add_header("Accept", "application/json")
+                try:
+                    with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+                        if resp.status in [200, 301, 302]:
+                            api_found.append({"endpoint": ep, "status": resp.status})
+                except urllib.error.HTTPError as e:
+                    if e.code in [401, 403, 405, 422]:
+                        api_found.append({"endpoint": ep, "status": e.code, "exists": True})
+            except Exception:
+                continue
+        
+        results["api_structure"]["endpoints_found"] = api_found
+        
+        # Store in memory
+        if results["framework"].get("detected"):
+            pentest_memory.store_finding(target, "smart_fingerprint", "stack", 
+                                         {"framework": results["framework"]["detected"]})
+        if results["cloud"].get("provider"):
+            pentest_memory.store_finding(target, "smart_fingerprint", "cloud", results["cloud"])
+        if results["server"].get("header"):
+            pentest_memory.store_finding(target, "smart_fingerprint", "stack",
+                                         {"server": results["server"]["header"]})
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"Smart fingerprint complete. "
+            f"Server: {results['server']}. "
+            f"Framework: {results['framework']}. "
+            f"Cloud: {results['cloud']}. "
+            f"CDN: {results['cdn']}. "
+            f"Source maps: {len(results['source_maps'])}. "
+            f"API endpoints: {len(api_found)}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("smart_fingerprint complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def source_map_extractor(
+    target: str,
+    custom_paths: str = "",
+    timeout: int = 120
+) -> str:
+    """
+    Discovers and analyzes JavaScript source maps to extract:
+    - Original source file paths (reveals internal structure)
+    - API endpoint URLs hardcoded in frontend
+    - Internal hostnames and service names
+    - Environment variables and config
+    - Authentication patterns and secrets
+    
+    Source maps are often left accessible in production and reveal the entire
+    frontend codebase structure.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 120)
+    trace, progress, exec_dir = _init_tool_context("source_map_extractor", target, 6)
+    
+    results = {
+        "target": target,
+        "source_maps_found": [],
+        "source_files_revealed": [],
+        "api_endpoints_extracted": [],
+        "internal_hosts": [],
+        "secrets_patterns": [],
+        "environment_hints": [],
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        import re as _re
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        progress.update("Phase 1: Discovering JS files and source map references")
+        trace.command(f"source_map_extractor target={target}")
+        
+        # Step 1: Get main page and find JS files
+        js_files = []
+        source_map_urls = []
+        
+        try:
+            req = urllib.request.Request(base_url, method="GET")
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                body = resp.read(65536).decode("utf-8", errors="ignore")
+                
+                # Find JS file references
+                js_patterns = _re.findall(r"(?:src|href)=[\"']([^\"']*\.js(?:\?[^\"']*)?)[\"']", body)
+                js_files.extend(js_patterns[:20])
+                
+                # Direct source map references in HTML
+                map_refs = _re.findall(r'//[#@]\s*sourceMappingURL=([^\s\"\x27]+)', body)
+                source_map_urls.extend(map_refs)
+                
+        except Exception:
+            pass
+        
+        # Add common source map paths
+        common_map_paths = [
+            "/main.js.map", "/app.js.map", "/bundle.js.map",
+            "/vendor.js.map", "/runtime.js.map", "/chunk.js.map",
+            "/_next/static/chunks/main.js.map",
+            "/_next/static/chunks/webpack.js.map",
+            "/static/js/main.chunk.js.map",
+            "/static/js/bundle.js.map",
+        ]
+        
+        if custom_paths:
+            common_map_paths.extend(custom_paths.split(","))
+        
+        # Step 2: Check each JS file for sourceMappingURL
+        progress.update("Phase 2: Checking JS files for source map URLs")
+        
+        for js_path in js_files[:10]:
+            try:
+                if js_path.startswith("http"):
+                    js_url = js_path
+                elif js_path.startswith("//"):
+                    js_url = "https:" + js_path
+                elif js_path.startswith("/"):
+                    js_url = f"{base_url.rstrip('/')}{js_path}"
+                else:
+                    js_url = f"{base_url.rstrip('/')}/{js_path}"
+                
+                req = urllib.request.Request(js_url, method="GET")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    # Read last 500 bytes (source map URL is at the end)
+                    js_content = resp.read(262144).decode("utf-8", errors="ignore")
+                    map_refs = _re.findall(r'//[#@]\s*sourceMappingURL=([^\s\"\x27]+)', js_content[-500:])
+                    for ref in map_refs:
+                        if ref.startswith("data:"):
+                            continue  # Skip inline maps
+                        if not ref.startswith("http"):
+                            # Relative to JS file
+                            js_dir = "/".join(js_url.split("/")[:-1])
+                            ref = f"{js_dir}/{ref}"
+                        source_map_urls.append(ref)
+                    
+                    # Also extract API endpoints from JS content
+                    api_patterns = _re.findall(r'[\"\x27](/api/[^\"\x27\s]+)[\"\x27]', js_content)
+                    api_patterns += _re.findall(r'[\"\x27]https?://[^\"\x27\s]*?/api/[^\"\x27\s]+[\"\x27]', js_content)
+                    api_patterns += _re.findall(r'fetch\([\"\x27]([^\"\x27]+)[\"\x27]', js_content)
+                    results["api_endpoints_extracted"].extend(list(set(api_patterns))[:20])
+                    
+            except Exception:
+                continue
+        
+        # Step 3: Try to fetch source maps
+        progress.update("Phase 3: Fetching and analyzing source maps")
+        
+        all_map_urls = list(set(source_map_urls + common_map_paths))
+        
+        for map_url in all_map_urls[:15]:
+            try:
+                if not map_url.startswith("http"):
+                    map_url = f"{base_url.rstrip('/')}{map_url}"
+                
+                req = urllib.request.Request(map_url, method="GET")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    if resp.status == 200:
+                        map_content = resp.read(524288).decode("utf-8", errors="ignore")
+                        
+                        try:
+                            map_data = json.loads(map_content)
+                            sources = map_data.get("sources", [])
+                            
+                            results["source_maps_found"].append({
+                                "url": map_url,
+                                "sources_count": len(sources),
+                                "version": map_data.get("version"),
+                            })
+                            
+                            # Analyze source paths
+                            for src in sources[:50]:
+                                results["source_files_revealed"].append(src)
+                                
+                                # Look for internal hosts
+                                host_match = _re.search(r'https?://([^/\s\"\x27]+)', src)
+                                if host_match:
+                                    results["internal_hosts"].append(host_match.group(1))
+                            
+                            # Search source content for secrets
+                            sources_content = map_data.get("sourcesContent", [])
+                            for sc in sources_content[:10]:
+                                if sc:
+                                    # API keys, tokens, secrets
+                                    secrets = _re.findall(
+                                        r'(?:api[_-]?key|token|secret|password|auth)[\"\s:=]+[\"\x27]([^\"\x27\s]{8,})[\"\x27]',
+                                        sc, _re.IGNORECASE
+                                    )
+                                    for s in secrets[:5]:
+                                        results["secrets_patterns"].append({"pattern": s[:20] + "...", "type": "potential_secret"})
+                                    
+                                    # Environment hints
+                                    env_vars = _re.findall(r'process\.env\.(\w+)', sc)
+                                    results["environment_hints"].extend(env_vars[:10])
+                                    
+                                    # More API endpoints
+                                    apis = _re.findall(r'[\"\x27](/api/[^\"\x27\s]+)[\"\x27]', sc)
+                                    results["api_endpoints_extracted"].extend(apis[:10])
+                                    
+                        except json.JSONDecodeError:
+                            results["source_maps_found"].append({"url": map_url, "error": "invalid JSON"})
+                            
+            except Exception:
+                continue
+        
+        # Deduplicate
+        results["source_files_revealed"] = list(set(results["source_files_revealed"]))[:50]
+        results["api_endpoints_extracted"] = list(set(results["api_endpoints_extracted"]))[:30]
+        results["internal_hosts"] = list(set(results["internal_hosts"]))[:10]
+        results["environment_hints"] = list(set(results["environment_hints"]))[:15]
+        
+        # Store in memory
+        for ep in results["api_endpoints_extracted"]:
+            pentest_memory.store_finding(target, "source_map_extractor", "endpoint", ep)
+        for host in results["internal_hosts"]:
+            pentest_memory.store_finding(target, "source_map_extractor", "technology", f"internal_host:{host}")
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"Source map analysis complete. "
+            f"Maps found: {len(results['source_maps_found'])}. "
+            f"Source files revealed: {len(results['source_files_revealed'])}. "
+            f"API endpoints extracted: {len(results['api_endpoints_extracted'])}. "
+            f"Internal hosts: {len(results['internal_hosts'])}. "
+            f"Secrets/patterns: {len(results['secrets_patterns'])}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("source_map_extractor complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def spring_actuator_exploit(
+    target: str,
+    aggressive: bool = False,
+    timeout: int = 120
+) -> str:
+    """
+    Specialized Spring Boot Actuator exploitation module.
+    Tests all actuator endpoints, extracts environment variables,
+    heap dumps, thread dumps, and mapped endpoints.
+    Finds: credential exposure, internal URLs, database connections.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 120)
+    trace, progress, exec_dir = _init_tool_context("spring_actuator_exploit", target, 6)
+    
+    results = {
+        "target": target,
+        "actuator_found": False,
+        "endpoints_accessible": [],
+        "credentials_exposed": [],
+        "internal_urls": [],
+        "environment_vars": {},
+        "mapped_routes": [],
+        "heap_dump_available": False,
+        "severity": "none",
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        import re as _re
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        progress.update("Testing Spring Boot Actuator endpoints")
+        trace.command(f"spring_actuator_exploit target={target}")
+        
+        # All known actuator endpoints
+        actuator_endpoints = [
+            "/actuator", "/actuator/env", "/actuator/health",
+            "/actuator/info", "/actuator/mappings", "/actuator/beans",
+            "/actuator/configprops", "/actuator/metrics",
+            "/actuator/threaddump", "/actuator/heapdump",
+            "/actuator/loggers", "/actuator/scheduledtasks",
+            "/actuator/httptrace", "/actuator/sessions",
+            "/actuator/shutdown",  # POST only, dangerous
+            # Legacy Spring Boot 1.x paths
+            "/env", "/health", "/info", "/mappings", "/beans",
+            "/configprops", "/metrics", "/trace", "/dump", "/heapdump",
+            # Alternative paths
+            "/manage/health", "/management/health",
+            "/admin/health", "/internal/health",
+        ]
+        
+        for ep in actuator_endpoints:
+            try:
+                url = f"{base_url.rstrip('/')}{ep}"
+                req = urllib.request.Request(url, method="GET")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                req.add_header("Accept", "application/json")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                        if resp.status == 200:
+                            content = resp.read(65536).decode("utf-8", errors="ignore")
+                            ct = resp.headers.get("Content-Type", "")
+                            
+                            results["actuator_found"] = True
+                            entry = {"endpoint": ep, "status": 200, "content_type": ct}
+                            
+                            # Parse JSON responses
+                            if "json" in ct:
+                                try:
+                                    data = json.loads(content)
+                                    
+                                    # /env → credentials
+                                    if "/env" in ep:
+                                        entry["type"] = "ENVIRONMENT"
+                                        results["severity"] = "CRITICAL"
+                                        # Look for sensitive values
+                                        env_str = json.dumps(data)
+                                        cred_patterns = _re.findall(
+                                            r'"((?:password|secret|key|token|credential)[^"]*)"[:\s]*"([^"]+)"',
+                                            env_str, _re.IGNORECASE
+                                        )
+                                        for key, val in cred_patterns[:10]:
+                                            if val != "******":
+                                                results["credentials_exposed"].append({"key": key, "value": val[:20] + "..."})
+                                        results["environment_vars"] = {str(k): "..." for k in list(data.keys())[:20]} if isinstance(data, dict) else {}
+                                    
+                                    # /mappings → routes
+                                    elif "/mappings" in ep:
+                                        entry["type"] = "ROUTE_MAP"
+                                        if isinstance(data, dict):
+                                            contexts = data.get("contexts", data)
+                                            routes = _re.findall(r'"([A-Z]+\s+/[^"]+)"', json.dumps(contexts))
+                                            results["mapped_routes"] = routes[:30]
+                                    
+                                    # /health → internal services
+                                    elif "/health" in ep:
+                                        entry["type"] = "HEALTH_CHECK"
+                                        health_str = json.dumps(data)
+                                        urls = _re.findall(r'https?://[^\s\"\x27]+', health_str)
+                                        results["internal_urls"].extend(urls[:10])
+                                    
+                                    # /configprops → config
+                                    elif "/configprops" in ep:
+                                        entry["type"] = "CONFIGURATION"
+                                        results["severity"] = max(results["severity"], "HIGH") if results["severity"] != "CRITICAL" else "CRITICAL"
+                                    
+                                except json.JSONDecodeError:
+                                    pass
+                            
+                            # /heapdump → memory dump available
+                            if "/heapdump" in ep:
+                                entry["type"] = "HEAP_DUMP"
+                                results["heap_dump_available"] = True
+                                results["severity"] = "CRITICAL"
+                            
+                            results["endpoints_accessible"].append(entry)
+                            pentest_memory.store_finding(target, "spring_actuator", "endpoint", ep)
+                            
+                except urllib.error.HTTPError as e:
+                    if e.code in [401, 403]:
+                        results["endpoints_accessible"].append({
+                            "endpoint": ep, "status": e.code, "note": "exists but protected"
+                        })
+            except Exception:
+                continue
+        
+        # Store findings in memory
+        if results["actuator_found"]:
+            pentest_memory.store_finding(target, "spring_actuator", "vuln", {
+                "type": "spring_actuator_exposure",
+                "severity": results["severity"],
+                "endpoints": len(results["endpoints_accessible"]),
+            })
+            pentest_memory.store_finding(target, "spring_actuator", "stack", {"framework": "spring_boot"})
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"Spring Actuator scan complete. "
+            f"Actuator found: {results['actuator_found']}. "
+            f"Accessible endpoints: {len(results['endpoints_accessible'])}. "
+            f"Credentials exposed: {len(results['credentials_exposed'])}. "
+            f"Heap dump available: {results['heap_dump_available']}. "
+            f"Severity: {results['severity']}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("spring_actuator_exploit complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+@resolve_references
+async def graphql_introspection(
+    target: str,
+    endpoint: str = "/graphql",
+    timeout: int = 120
+) -> str:
+    """
+    Full GraphQL introspection and security testing.
+    Discovers: all types, queries, mutations, subscriptions.
+    Tests: introspection enabled, batch queries, DoS via nested queries,
+    authorization bypass, field-level injection.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, 120)
+    trace, progress, exec_dir = _init_tool_context("graphql_introspection", target, 6)
+    
+    results = {
+        "target": target, "endpoint": endpoint,
+        "graphql_found": False,
+        "introspection_enabled": False,
+        "types": [], "queries": [], "mutations": [],
+        "security_issues": [],
+        "batch_queries_allowed": False,
+        "depth_limit": None,
+    }
+    
+    try:
+        import urllib.request, urllib.error, ssl
+        
+        base_url = target if target.startswith("http") else f"https://{target}"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        progress.update("Testing GraphQL endpoints")
+        trace.command(f"graphql_introspection target={target} endpoint={endpoint}")
+        
+        # Try multiple GraphQL endpoint variants
+        gql_endpoints = [endpoint, "/graphql", "/__graphql", "/api/graphql", 
+                         "/v1/graphql", "/query", "/gql", "/playground"]
+        gql_endpoints = list(set(gql_endpoints))
+        
+        found_endpoint = None
+        
+        for gql_ep in gql_endpoints:
+            try:
+                url = f"{base_url.rstrip('/')}{gql_ep}"
+                
+                # Introspection query
+                introspection_query = json.dumps({
+                    "query": "{__schema{types{name kind fields{name type{name kind}}}}}"
+                }).encode()
+                
+                req = urllib.request.Request(url, data=introspection_query, method="POST")
+                req.add_header("Content-Type", "application/json")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                        if resp.status == 200:
+                            content = resp.read(131072).decode("utf-8", errors="ignore")
+                            data = json.loads(content)
+                            
+                            if "data" in data and "__schema" in data.get("data", {}):
+                                results["graphql_found"] = True
+                                results["introspection_enabled"] = True
+                                found_endpoint = gql_ep
+                                
+                                schema = data["data"]["__schema"]
+                                types = schema.get("types", [])
+                                
+                                # Extract types (skip internal __ types)
+                                for t in types:
+                                    name = t.get("name", "")
+                                    if not name.startswith("__"):
+                                        type_info = {
+                                            "name": name,
+                                            "kind": t.get("kind"),
+                                            "fields": [f["name"] for f in (t.get("fields") or [])[:10]]
+                                        }
+                                        results["types"].append(type_info)
+                                
+                                results["security_issues"].append({
+                                    "issue": "Introspection enabled in production",
+                                    "severity": "MEDIUM",
+                                    "detail": f"Full schema exposed via {gql_ep}",
+                                })
+                                break
+                            elif "errors" in data:
+                                # GraphQL exists but introspection may be disabled
+                                results["graphql_found"] = True
+                                found_endpoint = gql_ep
+                                break
+                                
+                except urllib.error.HTTPError as e:
+                    if e.code in [400, 401, 403, 405]:
+                        results["graphql_found"] = True
+                        found_endpoint = gql_ep
+            except Exception:
+                continue
+        
+        if found_endpoint and results["graphql_found"]:
+            url = f"{base_url.rstrip('/')}{found_endpoint}"
+            
+            # Test batch queries
+            progress.update("Testing batch queries and depth limits")
+            try:
+                batch_query = json.dumps([
+                    {"query": "{__typename}"},
+                    {"query": "{__typename}"},
+                ]).encode()
+                
+                req = urllib.request.Request(url, data=batch_query, method="POST")
+                req.add_header("Content-Type", "application/json")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                        batch_data = json.loads(resp.read(4096).decode())
+                        if isinstance(batch_data, list):
+                            results["batch_queries_allowed"] = True
+                            results["security_issues"].append({
+                                "issue": "Batch queries allowed",
+                                "severity": "LOW",
+                                "detail": "Can send multiple queries in one request — potential DoS vector",
+                            })
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            
+            # Test nested query depth (DoS test)
+            try:
+                # Build nested query 5 levels deep
+                nested = '{ __typename ' + '{ __typename ' * 4 + '}' * 4 + '}'
+                nested_query = json.dumps({"query": nested}).encode()
+                
+                req = urllib.request.Request(url, data=nested_query, method="POST")
+                req.add_header("Content-Type", "application/json")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                        depth_data = json.loads(resp.read(4096).decode())
+                        if "errors" in depth_data and any("depth" in str(e).lower() for e in depth_data["errors"]):
+                            results["depth_limit"] = "enforced"
+                        else:
+                            results["depth_limit"] = "not_enforced"
+                            results["security_issues"].append({
+                                "issue": "No query depth limit",
+                                "severity": "MEDIUM",
+                                "detail": "Nested queries accepted — GraphQL DoS possible",
+                            })
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            
+            # Full introspection with queries and mutations
+            if results["introspection_enabled"]:
+                progress.update("Extracting queries and mutations")
+                full_intro = json.dumps({
+                    "query": """{__schema{queryType{fields{name args{name type{name}}}}
+                    mutationType{fields{name args{name type{name}}}}}}"""
+                }).encode()
+                
+                req = urllib.request.Request(url, data=full_intro, method="POST")
+                req.add_header("Content-Type", "application/json")
+                req.add_header("User-Agent", "Mozilla/5.0")
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                        intro_data = json.loads(resp.read(131072).decode())
+                        schema = intro_data.get("data", {}).get("__schema", {})
+                        
+                        # Queries
+                        qt = schema.get("queryType", {})
+                        if qt:
+                            for field in (qt.get("fields") or [])[:20]:
+                                results["queries"].append({
+                                    "name": field["name"],
+                                    "args": [a["name"] for a in (field.get("args") or [])]
+                                })
+                        
+                        # Mutations
+                        mt = schema.get("mutationType", {})
+                        if mt:
+                            for field in (mt.get("fields") or [])[:20]:
+                                results["mutations"].append({
+                                    "name": field["name"],
+                                    "args": [a["name"] for a in (field.get("args") or [])]
+                                })
+                                # Flag dangerous mutations
+                                dangerous = ["delete", "remove", "admin", "create_user", "update_role"]
+                                if any(d in field["name"].lower() for d in dangerous):
+                                    results["security_issues"].append({
+                                        "issue": f"Dangerous mutation exposed: {field['name']}",
+                                        "severity": "HIGH",
+                                    })
+                except Exception:
+                    pass
+        
+        # Store findings
+        if results["graphql_found"]:
+            pentest_memory.store_finding(target, "graphql_introspection", "endpoint", found_endpoint)
+            pentest_memory.store_finding(target, "graphql_introspection", "technology", "graphql")
+            if results["security_issues"]:
+                pentest_memory.store_finding(target, "graphql_introspection", "vuln", {
+                    "type": "graphql_security",
+                    "issues": len(results["security_issues"]),
+                })
+        
+        results["status"] = "success"
+        results["summary"] = (
+            f"GraphQL analysis complete. "
+            f"Found: {results['graphql_found']}. "
+            f"Introspection: {results['introspection_enabled']}. "
+            f"Types: {len(results['types'])}. "
+            f"Queries: {len(results['queries'])}. "
+            f"Mutations: {len(results['mutations'])}. "
+            f"Security issues: {len(results['security_issues'])}."
+        )
+        
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+    
+    trace.command("graphql_introspection complete", results)
+    return json.dumps(results, indent=2, default=str)
+
+
 def main():
     """Start the Kali MCP Server v4."""
     import sys

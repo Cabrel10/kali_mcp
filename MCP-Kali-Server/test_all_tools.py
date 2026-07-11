@@ -299,6 +299,20 @@ async def run_all_tests():
     await test_tool("pentest_memory_query",
         s.pentest_memory_query(target="127.0.0.1", query_type="full_context"))
 
+    print("\n[SMART FINGERPRINTING]")
+
+    await test_tool("smart_fingerprint",
+        s.smart_fingerprint(target="http://127.0.0.1:19999", deep=False, timeout=10))
+
+    await test_tool("source_map_extractor",
+        s.source_map_extractor(target="http://127.0.0.1:19999", timeout=10))
+
+    await test_tool("spring_actuator_exploit",
+        s.spring_actuator_exploit(target="http://127.0.0.1:19999", timeout=10))
+
+    await test_tool("graphql_introspection",
+        s.graphql_introspection(target="http://127.0.0.1:19999", timeout=10))
+
     print("\n[SELF-AUDIT]")
 
     await test_tool("server_security_audit",
