@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive Integration Test Suite for Kali MCP Server v4
-Tests ALL 46 registered tools with REAL async calls
+Tests ALL 59 registered tools with REAL async calls
 Validates: trace logging, progress reporting, chain enrichment, output format
 """
 
@@ -238,6 +238,48 @@ async def run_all_tests():
 
     await test_tool("blockchain_tx_analyzer",
         s.blockchain_tx_analyzer(address="0x0000000000000000000000000000000000000000", chain="ethereum", timeout=20))
+
+    # ==================== ENHANCED DETECTION (Phase 1-3) ====================
+    print("\n[ENHANCED DETECTION]")
+
+    await test_tool("smart_vulnerability_detector",
+        s.smart_vulnerability_detector(target="127.0.0.1", scan_depth="quick", timeout=20))
+
+    await test_tool("context_fuzzer",
+        s.context_fuzzer(target="127.0.0.1", mode="smart", timeout=20))
+
+    await test_tool("target_profiler",
+        s.target_profiler(target="127.0.0.1", timeout=15))
+
+    await test_tool("advanced_arp_discovery",
+        s.advanced_arp_discovery(network="192.168.1.0/24", mode="auto", timeout=10))
+
+    await test_tool("advanced_smb_enum",
+        s.advanced_smb_enum(target="127.0.0.1", timeout=15))
+
+    await test_tool("enhanced_ssrf_scanner",
+        s.enhanced_ssrf_scanner(target="http://127.0.0.1/test", timeout=20))
+
+    await test_tool("enhanced_jwt_analyzer",
+        s.enhanced_jwt_analyzer(token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"))
+
+    await test_tool("enhanced_idor_scanner",
+        s.enhanced_idor_scanner(target="http://127.0.0.1/api/users", timeout=15))
+
+    await test_tool("enhanced_api_discovery",
+        s.enhanced_api_discovery(target="127.0.0.1", timeout=20))
+
+    await test_tool("enhanced_cors_scanner",
+        s.enhanced_cors_scanner(target="http://127.0.0.1", timeout=15))
+
+    await test_tool("enhanced_waf_bypass",
+        s.enhanced_waf_bypass(target="http://127.0.0.1", timeout=15))
+
+    await test_tool("cloud_storage_enum",
+        s.cloud_storage_enum(target="example.com", timeout=20))
+
+    await test_tool("exploitation_chain",
+        s.exploitation_chain(target="127.0.0.1", timeout=10))
 
     # ==================== SELF-AUDIT ====================
     print("\n[SELF-AUDIT]")
