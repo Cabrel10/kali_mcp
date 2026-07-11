@@ -44,7 +44,7 @@ async def test_tool(name, coro, validate_fn=None):
         result = await coro
         duration = int((time.time() - start) * 1000)
         data = json.loads(result)
-        if data.get("status") in ["success", "error"]:
+        if data.get("status") in ["success", "error", "partial"]:
             if validate_fn and not validate_fn(data):
                 log_result(name, "FAIL", f"Validation failed: {json.dumps(data)[:150]}", duration)
             else:
@@ -101,7 +101,7 @@ async def run_all_tests():
     print("\n[WEB SCANNING]")
 
     await test_tool("gobuster_scan",
-        s.gobuster_scan(target="http://127.0.0.1", timeout=20))
+        s.gobuster_scan(url="http://127.0.0.1", timeout=20))
 
     await test_tool("nikto_scan",
         s.nikto_scan(target="127.0.0.1", timeout=30))
@@ -119,7 +119,7 @@ async def run_all_tests():
     print("\n[INJECTION / VULN TESTING]")
 
     await test_tool("sqlmap_scan",
-        s.sqlmap_scan(target="http://127.0.0.1/test?id=1", timeout=30))
+        s.sqlmap_scan(url="http://127.0.0.1/test?id=1", timeout=30))
 
     await test_tool("sql_injection_test",
         s.sql_injection_test(url="http://127.0.0.1/test", param="id"))

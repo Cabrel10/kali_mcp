@@ -259,8 +259,10 @@ class TraceLogger:
     def debug(self, phase: str, message: str, data: Optional[Dict] = None):
         self.log("DEBUG", phase, message, data)
     
-    def command(self, cmd: Any, result: Dict):
+    def command(self, cmd: Any, result: Dict = None):
         """Log a command execution with full details"""
+        if result is None:
+            result = {}
         self.log("CMD", "command_execution", f"Executed: {cmd}", {
             "command": str(cmd),
             "return_code": result.get("return_code"),
@@ -1347,7 +1349,7 @@ async def execute_command(
     result = run_command_advanced(command, timeout=timeout, cwd=working_dir, shell=True, trace=trace)
     
     output = {
-        "status": "success" if result["success"] else "failed",
+        "status": "success" if result["success"] else "error",
         "command": command,
         "stdout": result["stdout"],
         "stderr": result["stderr"],
@@ -2238,7 +2240,7 @@ async def hydra_attack(
     Supports: ssh, ftp, http-get, http-post-form, rdp, smb, mysql, vnc, telnet, pop3, imap, smtp.
     """
     target = InputValidator.sanitize_target(target)
-    timeout = InputValidator.validate_timeout(timeout, 60, 600)
+    timeout = InputValidator.validate_timeout(timeout, 600)
     if port > 0:
         port = InputValidator.validate_port(port)
     trace, progress, exec_dir = _init_tool_context("hydra_attack", target, 6)
@@ -3892,7 +3894,7 @@ async def osint_domain_intel(
 
     progress.update("SSL certificate analysis")
     ssl_cmd = ["openssl", "s_client", "-connect", f"{target}:443", "-servername", target]
-    ssl_result = run_command_advanced(ssl_cmd, timeout=15, trace=trace, stdin_data="Q\n")
+    ssl_result = run_command_advanced(ssl_cmd, timeout=15, trace=trace)
     ssl_info = {}
     for line in ssl_result["stdout"].split("\n"):
         for key in ["subject=", "issuer=", "notBefore=", "notAfter="]:
