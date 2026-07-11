@@ -2,7 +2,7 @@
 
 **Professional Penetration Testing & Bug Bounty Platform with MCP Protocol**
 
-A comprehensive, forensic-grade penetration testing server with 46 tools, hierarchical session management, trace logging, tool chaining, and CVE cartography. Designed for AI-driven security operations via the Model Context Protocol (MCP).
+A comprehensive, forensic-grade penetration testing server with 59 tools, hierarchical session management, trace logging, tool chaining, and CVE cartography. Designed for AI-driven security operations via the Model Context Protocol (MCP).
 
 ---
 
@@ -61,8 +61,8 @@ async def tool_name(target: str, ...) -> str:
 
 ```
 MCP-Kali-Server/
-├── kali_mcp_server.py          # Main server (4975 lines, 46 tools)
-├── test_all_tools.py           # Full test suite (46 tool tests)
+├── kali_mcp_server.py          # Main server (7288 lines, 59 tools)
+├── test_all_tools.py           # Full test suite (59 tool tests)
 ├── main.py                     # Entry point
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # This file
@@ -197,6 +197,24 @@ MCP-Kali-Server/
 | `smart_contract_audit` | Solidity smart contract security analysis |
 | `defi_protocol_scan` | DeFi protocol security assessment |
 | `blockchain_tx_analyzer` | Blockchain transaction tracing and analysis |
+
+### Enhanced Detection (13) — Deep Vulnerability Discovery
+
+| Tool | Description |
+|------|-------------|
+| `smart_vulnerability_detector` | Intelligent vuln detection: 403 bypass, cloud SSRF, info disclosure, method enum |
+| `context_fuzzer` | Context-aware fuzzer: adapts wordlists per stack, 403/422/401 analysis, bypass |
+| `target_profiler` | Stack profiling with custom attack vectors per technology (Go/Python/PHP/AWS) |
+| `advanced_arp_discovery` | 4 fallback modes (arp-scan → nmap → ip neighbor → /proc/net/arp) + ARP spoofing detection |
+| `advanced_smb_enum` | Multi-tool SMB (enum4linux → smbmap → smbclient → nmap scripts) + EternalBlue check |
+| `enhanced_ssrf_scanner` | Cloud metadata (AWS/GCP/Azure), internal services, protocol payloads, blind SSRF |
+| `enhanced_jwt_analyzer` | alg:none bypass, key confusion, claim manipulation, kid injection, exploit generation |
+| `enhanced_idor_scanner` | UUID/base64/hash ID detection, horizontal + vertical privilege escalation |
+| `enhanced_api_discovery` | Swagger/OpenAPI parsing, GraphQL introspection, method probing, error-based params |
+| `enhanced_cors_scanner` | null origin, credentials+reflection, subdomain bypass, full takeover detection |
+| `enhanced_waf_bypass` | Active bypass per WAF type (Cloudflare/AWS/ModSec/Imperva), 14+ techniques |
+| `cloud_storage_enum` | AWS S3, GCS, Azure Blob enumeration with 25+ naming variants |
+| `exploitation_chain` | Auto-chains: SSRF→creds, SQLi→RCE, IDOR→dump, XSS→takeover, LFI→RCE |
 
 ### Self-Audit (1)
 
@@ -463,7 +481,7 @@ sudo apt install -y arp-scan enum4linux smbclient
 ## Testing
 
 ```bash
-# Run full test suite (46 tools)
+# Run full test suite (59 tools)
 python3 test_all_tools.py
 
 # Quick syntax check
