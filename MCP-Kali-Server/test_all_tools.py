@@ -299,7 +299,7 @@ async def test_parallel_executor():
 
 
 # ══════════════════════════════════════════════════════════════
-# SECTION 3: Module Existence & Signatures (24 tools)
+# SECTION 3: Module Existence & Signatures (26 tools)
 # ══════════════════════════════════════════════════════════════
 
 TOOL_SIGNATURES = {
@@ -327,6 +327,8 @@ TOOL_SIGNATURES = {
     "race_condition_tester": ["target", "modules"],
     "protocol_deep_scan": ["target", "depth"],
     "smart_fuzz_engine": ["target", "depth"],
+    "honeypot_detector": ["target", "depth"],
+    "auto_exploit": ["target", "strategy"],
 }
 
 
@@ -815,8 +817,123 @@ async def test_exec_smart_fuzz_engine():
         record("exec:smart_fuzz_engine", False, str(e))
 
 
+async def test_exec_honeypot_detector():
+    """Test honeypot_detector tool execution"""
+    try:
+        r = await srv.honeypot_detector(
+            target="127.0.0.1",
+            depth="stealth",
+            modules="banner_analysis,timing_analysis,signature_match",
+            timeout=30,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "target" in d
+        assert "honeypot_score" in d
+        assert "verdict" in d
+        assert d["verdict"] in ["LIKELY_HONEYPOT", "SUSPICIOUS", "LOW_RISK", "CLEAN"]
+        assert "indicators" in d
+        assert "known_honeypot_signatures" in d
+        assert len(d["known_honeypot_signatures"]) >= 5  # cowrie, dionaea, kippo, etc.
+        record("exec:honeypot_detector", True)
+    except Exception as e:
+        record("exec:honeypot_detector", False, str(e))
+
+
+async def test_exec_auto_exploit():
+    """Test auto_exploit tool execution in safe mode"""
+    try:
+        r = await srv.auto_exploit(
+            target="127.0.0.1",
+            strategy="safe",
+            modules="privesc_suggest,custom_chain",
+            timeout=30,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "target" in d
+        assert "strategy" in d
+        assert d["strategy"] == "safe"
+        assert "modules" in d
+        assert "summary" in d
+        # Privesc suggestions should always be present
+        if "privesc_suggest" in d["modules"]:
+            privesc = d["modules"]["privesc_suggest"]
+            assert "linux" in privesc
+            assert "windows" in privesc
+            assert len(privesc["linux"]) >= 5  # SUID, kernel, sudo, cron, etc.
+            assert len(privesc["windows"]) >= 4  # Token, unquoted paths, etc.
+            assert "tools" in privesc
+        record("exec:auto_exploit", True)
+    except Exception as e:
+        record("exec:auto_exploit", False, str(e))
+
+
+def test_honeypot_signatures_database():
+    """Verify honeypot signatures database is comprehensive"""
+    try:
+        sigs = srv.HONEYPOT_SIGNATURES
+        assert "cowrie" in sigs
+        assert "dionaea" in sigs
+        assert "kippo" in sigs
+        assert "glastopf" in sigs
+        assert "honeyd" in sigs
+        assert "tpot" in sigs
+        assert "conpot" in sigs
+        # Cowrie should have SSH banners
+        assert len(sigs["cowrie"]["ssh_banners"]) >= 1
+        assert len(sigs["cowrie"]["telltales"]) >= 1
+        # Dionaea should have multiple default ports
+        assert len(sigs["dionaea"]["default_ports"]) >= 5
+        record("honeypot_signatures_db", True)
+    except Exception as e:
+        record("honeypot_signatures_db", False, str(e))
+
+
+def test_honeypot_scoring_weights():
+    """Verify honeypot scoring weights exist"""
+    try:
+        scoring = srv.HONEYPOT_SCORING
+        assert "banner_match" in scoring
+        assert "known_signature" in scoring
+        assert "ttl_inconsistency" in scoring
+        assert "behavioral_anomaly" in scoring
+        assert scoring["known_signature"] >= 40  # Should be high weight
+        assert scoring["banner_match"] >= 30
+        record("honeypot_scoring_weights", True)
+    except Exception as e:
+        record("honeypot_scoring_weights", False, str(e))
+
+
+def test_auto_exploit_signature_enhanced():
+    """Verify auto_exploit has all expected sub-modules in source"""
+    try:
+        fn = srv.auto_exploit
+        src = inspect.getsource(fn)
+        # Verify all sub-modules
+        assert "msf_auto" in src, "auto_exploit should have msf_auto module"
+        assert "sqlmap_auto" in src, "auto_exploit should have sqlmap_auto module"
+        assert "hydra_auto" in src, "auto_exploit should have hydra_auto module"
+        assert "web_exploit" in src, "auto_exploit should have web_exploit module"
+        assert "custom_chain" in src, "auto_exploit should have custom_chain module"
+        assert "privesc_suggest" in src, "auto_exploit should have privesc_suggest module"
+        # Verify exploit capabilities
+        assert "msfconsole" in src, "Should use Metasploit"
+        assert "sqlmap" in src, "Should use sqlmap"
+        assert "hydra" in src, "Should use hydra"
+        assert "lfi_to_rce" in src, "Should have LFI→RCE chain"
+        assert "ssti_rce" in src, "Should have SSTI→RCE chain"
+        assert "ssrf_chain" in src, "Should have SSRF chain"
+        assert "SUID" in src or "suid" in src, "Should suggest SUID privesc"
+        assert "GTFOBins" in src or "gtfobins" in src, "Should reference GTFOBins"
+        assert "linpeas" in src.lower() or "LinPEAS" in src, "Should reference LinPEAS"
+        record("auto_exploit_enhanced", True)
+    except Exception as e:
+        record("auto_exploit_enhanced", False, str(e))
+
+
 # ══════════════════════════════════════════════════════════════
-# SECTION 7: Integration Test — Full Correlation Pipeline
+# SECTION 8: Integration Test — Full Correlation Pipeline
 # ══════════════════════════════════════════════════════════════
 
 def test_full_correlation_pipeline():
@@ -940,7 +1057,7 @@ def test_cross_module_interconnection():
 async def run_all():
     print("=" * 72)
     print("  Kali MCP Server v6.2 — Comprehensive Test Suite")
-    print("  24 Mega-Modules | Protocol Intelligence Layer | Full Coverage")
+    print("  26 Mega-Modules | Protocol Intelligence + Honeypot + AutoExploit")
     print("=" * 72)
     t0 = time.time()
 
@@ -959,7 +1076,7 @@ async def run_all():
     test_deep_output_parser()
     await test_parallel_executor()
 
-    print("\n--- Module Signatures (24 tools) ---")
+    print("\n--- Module Signatures (26 tools) ---")
     test_module_signatures()
 
     print("\n--- Async Execution Tests ---")
@@ -991,6 +1108,13 @@ async def run_all():
     test_exploit_advisor()
     await test_exec_protocol_deep_scan()
     await test_exec_smart_fuzz_engine()
+
+    print("\n--- Honeypot Detector + Auto-Exploit (5 tests) ---")
+    await test_exec_honeypot_detector()
+    await test_exec_auto_exploit()
+    test_honeypot_signatures_database()
+    test_honeypot_scoring_weights()
+    test_auto_exploit_signature_enhanced()
 
     print("\n--- Integration: Full Correlation Pipeline ---")
     test_full_correlation_pipeline()

