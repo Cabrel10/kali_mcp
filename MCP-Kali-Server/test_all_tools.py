@@ -299,7 +299,7 @@ async def test_parallel_executor():
 
 
 # ══════════════════════════════════════════════════════════════
-# SECTION 3: Module Existence & Signatures (22 tools)
+# SECTION 3: Module Existence & Signatures (24 tools)
 # ══════════════════════════════════════════════════════════════
 
 TOOL_SIGNATURES = {
@@ -325,6 +325,8 @@ TOOL_SIGNATURES = {
     "payload_factory": ["action", "target"],
     "forensics_engine": ["target", "modules"],
     "race_condition_tester": ["target", "modules"],
+    "protocol_deep_scan": ["target", "depth"],
+    "smart_fuzz_engine": ["target", "depth"],
 }
 
 
@@ -633,7 +635,188 @@ def test_race_condition_submodules():
 
 
 # ══════════════════════════════════════════════════════════════
-# SECTION 6: Integration Test — Full Correlation Pipeline
+# SECTION 6: Protocol Intelligence Layer (8 tests)
+# ══════════════════════════════════════════════════════════════
+
+def test_protocol_intelligence_imports():
+    """Verify protocol_intelligence module imports all classes"""
+    try:
+        from protocol_intelligence import (
+            ProtocolAnalyzer, SmartFuzzer, NetworkIntelligence, ExploitAdvisor,
+            TCPAnalysis, TLSAnalysis, HTTPAnalysis, DNSAnalysis, NetworkNode,
+            FuzzResult, FuzzReport, ExploitRecommendation
+        )
+        # Verify class methods exist
+        assert hasattr(ProtocolAnalyzer, 'analyze_tcp')
+        assert hasattr(ProtocolAnalyzer, 'analyze_tls')
+        assert hasattr(ProtocolAnalyzer, 'analyze_http')
+        assert hasattr(ProtocolAnalyzer, 'analyze_dns')
+        assert hasattr(SmartFuzzer, 'smart_fuzz')
+        assert hasattr(NetworkIntelligence, 'detect_os')
+        assert hasattr(ExploitAdvisor, 'recommend')
+        record("protocol_intelligence_imports", True)
+    except Exception as e:
+        record("protocol_intelligence_imports", False, str(e))
+
+
+async def test_protocol_analyzer_tcp():
+    """Test TCP analysis with localhost"""
+    try:
+        from protocol_intelligence import ProtocolAnalyzer, TCPAnalysis
+        result = await ProtocolAnalyzer.analyze_tcp("127.0.0.1", 22, timeout=3.0)
+        # Should return a TCPAnalysis even if connection fails
+        assert isinstance(result, TCPAnalysis)
+        assert result.target == "127.0.0.1"
+        assert result.port == 22
+        record("protocol_analyzer_tcp", True)
+    except Exception as e:
+        record("protocol_analyzer_tcp", False, str(e))
+
+
+async def test_protocol_analyzer_dns():
+    """Test DNS analysis capabilities"""
+    try:
+        from protocol_intelligence import ProtocolAnalyzer, DNSAnalysis
+        result = await ProtocolAnalyzer.analyze_dns("example.com", timeout=5.0)
+        assert isinstance(result, DNSAnalysis)
+        assert result.domain == "example.com"
+        # Should have at least A records for example.com
+        assert len(result.records) > 0 or result.zone_transfer_possible is not None
+        record("protocol_analyzer_dns", True)
+    except Exception as e:
+        record("protocol_analyzer_dns", False, str(e))
+
+
+def test_smart_fuzzer_payloads():
+    """Verify SmartFuzzer has comprehensive payload database"""
+    try:
+        from protocol_intelligence import SmartFuzzer
+        fuzzer = SmartFuzzer()
+        # Verify payload categories exist
+        assert "sqli" in fuzzer.PAYLOADS
+        assert "xss" in fuzzer.PAYLOADS
+        assert "ssti" in fuzzer.PAYLOADS
+        assert "lfi" in fuzzer.PAYLOADS
+        # Verify SQLi has tech-specific payloads
+        assert "mysql" in fuzzer.PAYLOADS["sqli"]
+        assert "postgresql" in fuzzer.PAYLOADS["sqli"]
+        assert "detection" in fuzzer.PAYLOADS["sqli"]
+        # Verify error patterns exist
+        assert "sqli" in fuzzer.ERROR_PATTERNS
+        assert "xss" in fuzzer.ERROR_PATTERNS
+        assert "ssti" in fuzzer.ERROR_PATTERNS
+        # Verify payload count is substantial
+        total_payloads = sum(
+            len(v) if isinstance(v, list) else sum(len(sv) for sv in v.values() if isinstance(sv, list))
+            for v in fuzzer.PAYLOADS.values()
+        )
+        assert total_payloads >= 30, f"Should have 30+ payloads, got {total_payloads}"
+        record("smart_fuzzer_payloads", True)
+    except Exception as e:
+        record("smart_fuzzer_payloads", False, str(e))
+
+
+def test_network_intelligence():
+    """Test NetworkIntelligence topology and OS detection"""
+    try:
+        from protocol_intelligence import NetworkIntelligence, TCPAnalysis, NetworkNode
+        ni = NetworkIntelligence()
+        # Add nodes with services matching ROLE_PATTERNS
+        node1 = ni.add_node("10.0.0.1", ports=[22, 80, 443], services=[
+            {"name": "ssh", "port": 22}, {"name": "http", "port": 80}, {"name": "https", "port": 443}
+        ])
+        node2 = ni.add_node("10.0.0.2", ports=[88, 389, 445, 53, 135], services=[
+            {"name": "kerberos", "port": 88}, {"name": "ldap", "port": 389},
+            {"name": "smb", "port": 445}, {"name": "dns", "port": 53}
+        ])
+        assert isinstance(node1, NetworkNode)
+        assert isinstance(node2, NetworkNode)
+        # Test OS detection from TTL
+        tcp_linux = TCPAnalysis(
+            target="10.0.0.1", port=22, state="open", ttl=64, window_size=5840,
+            mss=1460, os_hints=["Linux 2.6.x"], banner="SSH-2.0-OpenSSH_8.9p1",
+            response_time_ms=5.0, tcp_options=[]
+        )
+        os_name, confidence = ni.detect_os(tcp_linux)
+        assert "linux" in os_name.lower() or confidence > 0
+        # Test role detection (node2 has kerberos+ldap+smb+dns → domain_controller)
+        role = ni.detect_role(node2)
+        assert role == "domain_controller", f"Expected domain_controller, got {role}"
+        # Test attack surface
+        surface = ni.get_attack_surface()
+        assert "total_hosts" in surface
+        assert surface["total_hosts"] == 2
+        record("network_intelligence", True)
+    except Exception as e:
+        record("network_intelligence", False, str(e))
+
+
+def test_exploit_advisor():
+    """Test ExploitAdvisor recommendations"""
+    try:
+        from protocol_intelligence import ExploitAdvisor
+        # Test known vulnerable service
+        recs = ExploitAdvisor.recommend(
+            service="vsftpd", version="2.3.4",
+            os="Linux", technologies=[]
+        )
+        assert len(recs) >= 1
+        assert any("backdoor" in r.vulnerability.lower() or "CVE-2011-2523" in r.vulnerability for r in recs)
+        # Test technology-specific vulns
+        recs2 = ExploitAdvisor.recommend(
+            service="http", version="2.4.49",
+            os="Linux", technologies=["wordpress"]
+        )
+        assert len(recs2) >= 1
+        # Test payload generation
+        payload = ExploitAdvisor.get_payload_for_context(
+            vuln_type="sqli", technology="mysql", os="Linux"
+        )
+        assert "payloads" in payload
+        assert len(payload["payloads"]) > 0
+        record("exploit_advisor", True)
+    except Exception as e:
+        record("exploit_advisor", False, str(e))
+
+
+async def test_exec_protocol_deep_scan():
+    """Test protocol_deep_scan tool execution on localhost"""
+    try:
+        r = await srv.protocol_deep_scan(
+            target="127.0.0.1",
+            depth="stealth",
+            modules="tcp_fingerprint",
+            ports="22",
+            timeout=30,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "target" in d
+        record("exec:protocol_deep_scan", True)
+    except Exception as e:
+        record("exec:protocol_deep_scan", False, str(e))
+
+
+async def test_exec_smart_fuzz_engine():
+    """Test smart_fuzz_engine tool execution"""
+    try:
+        r = await srv.smart_fuzz_engine(
+            target="http://127.0.0.1",
+            depth="stealth",
+            vuln_types="xss",
+            method="GET",
+            timeout=15,
+        )
+        d = json.loads(r) if isinstance(r, str) else r
+        assert isinstance(d, dict)
+        assert "target" in d
+        record("exec:smart_fuzz_engine", True)
+    except Exception as e:
+        record("exec:smart_fuzz_engine", False, str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 7: Integration Test — Full Correlation Pipeline
 # ══════════════════════════════════════════════════════════════
 
 def test_full_correlation_pipeline():
@@ -757,7 +940,7 @@ def test_cross_module_interconnection():
 async def run_all():
     print("=" * 72)
     print("  Kali MCP Server v6.2 — Comprehensive Test Suite")
-    print("  22 Mega-Modules | 17 Classes | Intelligence Engine")
+    print("  24 Mega-Modules | Protocol Intelligence Layer | Full Coverage")
     print("=" * 72)
     t0 = time.time()
 
@@ -776,7 +959,7 @@ async def run_all():
     test_deep_output_parser()
     await test_parallel_executor()
 
-    print("\n--- Module Signatures (22 tools) ---")
+    print("\n--- Module Signatures (24 tools) ---")
     test_module_signatures()
 
     print("\n--- Async Execution Tests ---")
@@ -799,6 +982,16 @@ async def run_all():
     test_forensics_engine_submodules()
     test_race_condition_submodules()
 
+    print("\n--- Protocol Intelligence Layer (8 tests) ---")
+    test_protocol_intelligence_imports()
+    await test_protocol_analyzer_tcp()
+    await test_protocol_analyzer_dns()
+    test_smart_fuzzer_payloads()
+    test_network_intelligence()
+    test_exploit_advisor()
+    await test_exec_protocol_deep_scan()
+    await test_exec_smart_fuzz_engine()
+
     print("\n--- Integration: Full Correlation Pipeline ---")
     test_full_correlation_pipeline()
     test_cross_module_interconnection()
@@ -816,7 +1009,7 @@ async def run_all():
 
     print()
     if FAIL == 0:
-        print("  ALL TESTS PASSED — v6.2 Mythos-tier READY")
+        print("  ALL TESTS PASSED — v6.2 Protocol Intelligence READY")
     else:
         print(f"  {FAIL} test(s) failed")
     return FAIL == 0

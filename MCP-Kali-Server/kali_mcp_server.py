@@ -5683,10 +5683,525 @@ async def race_condition_tester(
 
 
 # ============================================================================
+# MODULE 23: PROTOCOL DEEP SCAN
+# Native protocol analysis: TCP/TLS/HTTP/DNS dissection, OS fingerprint,
+# technology detection, topology mapping — NO external tool reliance
+# ============================================================================
+
+# Import protocol intelligence layer
+try:
+    from protocol_intelligence import (
+        ProtocolAnalyzer, SmartFuzzer, NetworkIntelligence, ExploitAdvisor,
+        TCPAnalysis, TLSAnalysis, HTTPAnalysis, DNSAnalysis, NetworkNode,
+    )
+    HAS_PROTOCOL_INTEL = True
+except ImportError:
+    HAS_PROTOCOL_INTEL = False
+    logger.warning("protocol_intelligence.py not found — modules 23-24 degraded")
+
+
+@mcp.tool()
+async def protocol_deep_scan(
+    target: str,
+    depth: str = "deep",
+    modules: str = "all",
+    ports: str = "auto",
+    timeout: int = 600,
+) -> str:
+    """
+    Native protocol intelligence scanner. Understands TCP/TLS/HTTP/DNS at the byte level.
+    Does NOT just call external tools — performs native protocol dissection.
+
+    modules: all | tcp_fingerprint,tls_audit,http_intelligence,dns_recon,topology,exploit_advisor
+    ports: auto | comma-separated (e.g., 22,80,443,8080) | top100 | top1000
+
+    Returns: OS fingerprint, technology stack, security headers, WAF detection,
+             certificate analysis, fuzzable parameters, exploit recommendations.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("protocol_deep_scan", target, {"depth": depth})
+    results = {"target": target, "depth": depth, "modules": {}, "protocol_level": "native"}
+
+    if not HAS_PROTOCOL_INTEL:
+        return json.dumps({"error": "protocol_intelligence.py not available"})
+
+    try:
+        mod_list = modules.split(",") if modules != "all" else [
+            "tcp_fingerprint", "tls_audit", "http_intelligence", "dns_recon",
+            "topology", "exploit_advisor"
+        ]
+        hostname = target.split("://")[-1].split("/")[0].split(":")[0]
+
+        # Determine ports to scan
+        if ports == "auto":
+            port_list = [22, 80, 443, 8080, 8443, 3306, 5432, 6379, 27017, 445, 3389, 21]
+        elif ports == "top100":
+            port_list = [21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445,
+                         993, 995, 1723, 3306, 3389, 5432, 5900, 8080, 8443, 8888,
+                         27017, 6379, 9200, 11211, 1433, 1521, 2049, 5000, 5001,
+                         6443, 8000, 9000, 9090, 10000, 49152, 49153, 49154]
+        else:
+            port_list = [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()]
+
+        # === TCP FINGERPRINT ===
+        if "tcp_fingerprint" in mod_list:
+            tcp_results = {"open_ports": [], "os_detection": {}, "services": []}
+            network_intel = NetworkIntelligence()
+
+            # Parallel TCP analysis
+            async def scan_port(port):
+                return await ProtocolAnalyzer.analyze_tcp(hostname, port, timeout=3)
+
+            tasks = [scan_port(p) for p in port_list]
+            tcp_analyses = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for analysis in tcp_analyses:
+                if isinstance(analysis, Exception):
+                    continue
+                if analysis.state == "open":
+                    port_info = {
+                        "port": analysis.port,
+                        "state": "open",
+                        "ttl": analysis.ttl,
+                        "response_time_ms": round(analysis.response_time_ms, 1),
+                        "banner": analysis.banner[:200] if analysis.banner else "",
+                    }
+                    tcp_results["open_ports"].append(port_info)
+                    tcp_results["services"].append({
+                        "port": analysis.port,
+                        "banner": analysis.banner[:200],
+                        "os_hints": analysis.os_hints,
+                    })
+
+                    # Service identification from banner
+                    service_name = "unknown"
+                    banner_lower = analysis.banner.lower() if analysis.banner else ""
+                    if "ssh" in banner_lower:
+                        service_name = "ssh"
+                    elif "http" in banner_lower or "html" in banner_lower:
+                        service_name = "http"
+                    elif "ftp" in banner_lower:
+                        service_name = "ftp"
+                    elif "smtp" in banner_lower or "220" in banner_lower:
+                        service_name = "smtp"
+                    elif "mysql" in banner_lower:
+                        service_name = "mysql"
+                    elif "postgresql" in banner_lower:
+                        service_name = "postgresql"
+                    elif "redis" in banner_lower:
+                        service_name = "redis"
+
+                    network_intel.add_node(hostname, services=[{"name": service_name, "port": analysis.port}])
+
+            # OS detection from TTL patterns
+            open_analyses = [a for a in tcp_analyses
+                             if not isinstance(a, Exception) and a.state == "open"]
+            if open_analyses:
+                os_name, os_conf = network_intel.detect_os(open_analyses[0])
+                tcp_results["os_detection"] = {
+                    "os": os_name,
+                    "confidence": os_conf,
+                    "ttl": open_analyses[0].ttl,
+                }
+
+            # Firewall detection
+            all_analyses = [a for a in tcp_analyses if not isinstance(a, Exception)]
+            if all_analyses:
+                tcp_results["firewall"] = network_intel.detect_firewall(all_analyses)
+
+            results["modules"]["tcp_fingerprint"] = tcp_results
+            pentest_memory.store_finding(target, "protocol_deep_scan", "tcp_fingerprint",
+                                         {"open_ports": len(tcp_results["open_ports"]),
+                                          "os": tcp_results["os_detection"].get("os", "unknown")})
+
+        # === TLS AUDIT ===
+        if "tls_audit" in mod_list:
+            tls_results = {"analyses": []}
+            # Find TLS ports
+            tls_ports = [443, 8443, 4443]
+            if "tcp_fingerprint" in results.get("modules", {}):
+                for p in results["modules"]["tcp_fingerprint"]["open_ports"]:
+                    if p["port"] in [443, 8443, 4443, 636, 993, 995]:
+                        tls_ports.append(p["port"])
+            tls_ports = list(set(tls_ports))
+
+            for port in tls_ports[:5]:  # Max 5 TLS ports
+                try:
+                    tls = await ProtocolAnalyzer.analyze_tls(hostname, port, timeout=10)
+                    if tls.version:  # Successfully connected
+                        tls_info = {
+                            "port": port,
+                            "version": tls.version,
+                            "cipher_suite": tls.cipher_suite,
+                            "certificate": {
+                                "subject": tls.certificate.get("subject", ""),
+                                "issuer": tls.issuer,
+                                "san_names": tls.san_names[:10],
+                                "key_size": tls.key_size,
+                                "signature_algorithm": tls.signature_algorithm,
+                                "self_signed": tls.self_signed,
+                                "expired": tls.expired,
+                                "not_after": tls.not_after,
+                            },
+                            "vulnerabilities": tls.vulnerabilities,
+                            "weak_ciphers": tls.weak_ciphers,
+                            "supported_deprecated_protocols": tls.supported_protocols,
+                        }
+                        tls_results["analyses"].append(tls_info)
+
+                        # Register TLS vulns
+                        for vuln in tls.vulnerabilities:
+                            sev = "critical" if any(x in vuln for x in ["POODLE", "expired", "Weak key"]) else "high"
+                            vuln_correlator.add_vulnerability(VulnFinding(
+                                vuln_id=f"TLS-{port}-{vuln[:20]}",
+                                title=f"TLS: {vuln}",
+                                severity=sev,
+                                cvss_score=8.0 if sev == "critical" else 6.5,
+                                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                                target=target, port=port, service="tls",
+                                evidence=vuln, exploitable=True,
+                                exploit_ref="testssl.sh",
+                                kill_chain_phase="reconnaissance",
+                                mitre_techniques=["T1557.002"],
+                                remediation="Upgrade TLS to 1.2+, use strong ciphers, renew certificates.",
+                                confidence=0.9,
+                            ))
+                except Exception:
+                    pass
+
+            results["modules"]["tls_audit"] = tls_results
+
+        # === HTTP INTELLIGENCE ===
+        if "http_intelligence" in mod_list:
+            http_results = {"analyses": []}
+            # Find HTTP ports
+            http_ports = []
+            if "tcp_fingerprint" in results.get("modules", {}):
+                for p in results["modules"]["tcp_fingerprint"]["open_ports"]:
+                    if p["port"] in [80, 8080, 8000, 8888, 3000, 5000, 443, 8443]:
+                        http_ports.append(p["port"])
+            if not http_ports:
+                http_ports = [80, 443]
+
+            for port in http_ports[:5]:
+                scheme = "https" if port in [443, 8443, 4443] else "http"
+                url = f"{scheme}://{hostname}:{port}/"
+                try:
+                    http = await ProtocolAnalyzer.analyze_http(url, timeout=10)
+                    if http.status_code > 0:
+                        http_info = {
+                            "port": port,
+                            "url": url,
+                            "status_code": http.status_code,
+                            "server": http.server,
+                            "technologies": http.technologies,
+                            "framework": http.framework,
+                            "language": http.language,
+                            "waf_detected": http.waf_detected,
+                            "security_headers": http.security_headers,
+                            "cookies": http.cookies,
+                            "forms_found": len(http.forms),
+                            "parameters_found": len(http.parameters),
+                            "api_endpoints_found": len(http.api_endpoints),
+                            "parameters": http.parameters[:20],
+                            "api_endpoints": http.api_endpoints[:20],
+                            "links_count": len(http.links),
+                            "response_time_ms": round(http.response_time_ms, 1),
+                        }
+                        http_results["analyses"].append(http_info)
+
+                        # Store tech in memory
+                        if http.technologies:
+                            tech_data = {t["id"]: t["name"] for t in http.technologies}
+                            pentest_memory.store_tech(target, tech_data)
+
+                        # Register missing security headers
+                        missing_required = [
+                            h for h, info in http.security_headers.items()
+                            if info.get("required") and not info.get("present")
+                        ]
+                        if missing_required:
+                            vuln_correlator.add_vulnerability(VulnFinding(
+                                vuln_id=f"HTTP-HEADERS-{port}",
+                                title=f"Missing security headers: {', '.join(missing_required[:3])}",
+                                severity="medium",
+                                cvss_score=5.3,
+                                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+                                target=target, port=port, service="http",
+                                evidence=f"Missing: {missing_required}",
+                                exploitable=False,
+                                kill_chain_phase="reconnaissance",
+                                mitre_techniques=["T1595.002"],
+                                remediation="Add HSTS, CSP, X-Content-Type-Options headers.",
+                                confidence=1.0,
+                            ))
+                except Exception:
+                    pass
+
+            results["modules"]["http_intelligence"] = http_results
+
+        # === DNS RECON ===
+        if "dns_recon" in mod_list:
+            dns_result = await ProtocolAnalyzer.analyze_dns(hostname, timeout=10)
+            dns_info = {
+                "records": dns_result.records,
+                "nameservers": dns_result.nameservers,
+                "mail_servers": dns_result.mail_servers,
+                "zone_transfer_possible": dns_result.zone_transfer_possible,
+                "dnssec_enabled": dns_result.dnssec_enabled,
+                "wildcard": dns_result.wildcard,
+                "cdn_detected": dns_result.cdn_detected,
+                "hosting_provider": dns_result.hosting_provider,
+                "spf_record": dns_result.spf_record,
+                "dmarc_record": dns_result.dmarc_record,
+                "subdomains_from_zone_transfer": dns_result.subdomains[:50],
+            }
+            if dns_result.zone_transfer_possible:
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id="DNS-ZONE-TRANSFER",
+                    title="DNS Zone Transfer enabled",
+                    severity="high", cvss_score=7.5,
+                    cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                    target=target, port=53, service="dns",
+                    evidence=f"Zone transfer returned {len(dns_result.subdomains)} records",
+                    exploitable=True, exploit_ref="dig AXFR",
+                    kill_chain_phase="reconnaissance",
+                    mitre_techniques=["T1590.002"],
+                    remediation="Restrict zone transfers to authorized secondary nameservers.",
+                    confidence=1.0,
+                ))
+            results["modules"]["dns_recon"] = dns_info
+
+        # === EXPLOIT ADVISOR ===
+        if "exploit_advisor" in mod_list:
+            advisor_results = {"recommendations": []}
+            # Gather detected services and technologies
+            techs = []
+            for http_info in results.get("modules", {}).get("http_intelligence", {}).get("analyses", []):
+                techs.extend([t["name"] for t in http_info.get("technologies", [])])
+
+            # Get service banners
+            for svc in results.get("modules", {}).get("tcp_fingerprint", {}).get("services", []):
+                banner = svc.get("banner", "")
+                if banner:
+                    # Extract service and version from banner
+                    service = "unknown"
+                    version = ""
+                    if "SSH" in banner:
+                        service = "openssh"
+                        ver_match = re.search(r"OpenSSH[_\s](\d+\.\d+\w*)", banner)
+                        if ver_match:
+                            version = ver_match.group(1)
+                    elif "Apache" in banner:
+                        service = "apache"
+                        ver_match = re.search(r"Apache/(\d+\.\d+\.\d+)", banner)
+                        if ver_match:
+                            version = ver_match.group(1)
+                    elif "nginx" in banner.lower():
+                        service = "nginx"
+                        ver_match = re.search(r"nginx/(\d+\.\d+\.\d+)", banner)
+                        if ver_match:
+                            version = ver_match.group(1)
+
+                    if service != "unknown":
+                        recs = ExploitAdvisor.recommend(service, version, technologies=techs)
+                        for rec in recs:
+                            advisor_results["recommendations"].append({
+                                "service": rec.service,
+                                "version": rec.version,
+                                "vulnerability": rec.vulnerability,
+                                "exploit_module": rec.exploit_module,
+                                "confidence": rec.confidence,
+                                "payload": rec.payload_suggestion,
+                                "alternatives": rec.alternative_tools,
+                            })
+
+            # Technology-based recommendations
+            if techs:
+                tech_recs = ExploitAdvisor.recommend("http", technologies=list(set(techs)))
+                for rec in tech_recs:
+                    advisor_results["recommendations"].append({
+                        "service": rec.service,
+                        "vulnerability": rec.vulnerability,
+                        "exploit_module": rec.exploit_module,
+                        "confidence": rec.confidence,
+                        "alternatives": rec.alternative_tools,
+                    })
+
+            results["modules"]["exploit_advisor"] = advisor_results
+
+        # === TOPOLOGY ===
+        if "topology" in mod_list:
+            topo = {
+                "host": hostname,
+                "open_ports_count": len(results.get("modules", {}).get("tcp_fingerprint", {}).get("open_ports", [])),
+                "os": results.get("modules", {}).get("tcp_fingerprint", {}).get("os_detection", {}).get("os", "unknown"),
+                "technologies": list(set(t["name"] for a in results.get("modules", {}).get("http_intelligence", {}).get("analyses", []) for t in a.get("technologies", []))),
+                "network_role": "web_server" if any(p["port"] in [80, 443] for p in results.get("modules", {}).get("tcp_fingerprint", {}).get("open_ports", [])) else "server",
+            }
+            results["modules"]["topology"] = topo
+
+        # Intelligence summary
+        results["correlation"] = vuln_correlator.correlate(target)
+        results["kill_chain"] = kill_chain.get_progress(target)
+        results["intelligence_summary"] = {
+            "protocol_level": "native (no external tool dependency)",
+            "os_detected": results.get("modules", {}).get("tcp_fingerprint", {}).get("os_detection", {}).get("os", "unknown"),
+            "technologies": list(set(t["name"] for a in results.get("modules", {}).get("http_intelligence", {}).get("analyses", []) for t in a.get("technologies", []))),
+            "tls_issues": sum(len(a.get("vulnerabilities", [])) for a in results.get("modules", {}).get("tls_audit", {}).get("analyses", [])),
+            "parameters_discovered": sum(a.get("parameters_found", 0) for a in results.get("modules", {}).get("http_intelligence", {}).get("analyses", [])),
+            "exploit_recommendations": len(results.get("modules", {}).get("exploit_advisor", {}).get("recommendations", [])),
+        }
+
+        kill_chain.advance_phase(target, KillChainPhase.RECONNAISSANCE, "protocol_deep_scan",
+                                  [f"native_scan:{len(port_list)}_ports"])
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
+# MODULE 24: SMART FUZZ ENGINE
+# Contextual fuzzing with auto-parameter detection and response analysis
+# ============================================================================
+
+@mcp.tool()
+async def smart_fuzz_engine(
+    target: str,
+    depth: str = "deep",
+    vuln_types: str = "auto",
+    method: str = "GET",
+    custom_params: str = "",
+    timeout: int = 600,
+) -> str:
+    """
+    Intelligent fuzzer that UNDERSTANDS responses, not just sends payloads.
+    Auto-discovers parameters, selects payloads based on technology stack,
+    analyzes response differences (size, time, errors, reflection).
+
+    vuln_types: auto | comma-separated: sqli,xss,ssti,lfi,cmdi,ssrf,open_redirect
+    custom_params: optional comma-separated parameter names to force-test
+
+    Returns: discovered parameters, baseline established, anomalies detected,
+             vulnerability findings with evidence and confidence scores.
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution("smart_fuzz_engine", target, {"depth": depth})
+    results = {"target": target, "depth": depth, "modules": {}}
+
+    if not HAS_PROTOCOL_INTEL:
+        return json.dumps({"error": "protocol_intelligence.py not available"})
+
+    try:
+        fuzzer = SmartFuzzer()
+
+        # Determine vulnerability types
+        if vuln_types == "auto":
+            vt_list = None  # SmartFuzzer will auto-select based on tech
+        else:
+            vt_list = [v.strip() for v in vuln_types.split(",")]
+
+        # Ensure target is a URL
+        url = target
+        if not url.startswith("http"):
+            url = f"http://{target}"
+
+        # Run smart fuzzing
+        report = await fuzzer.smart_fuzz(url, depth=depth, vuln_types=vt_list, method=method)
+
+        results["modules"]["fuzzing"] = {
+            "parameters_discovered": report.parameters_found,
+            "total_requests_sent": report.total_requests,
+            "baseline": report.baseline,
+            "technologies_detected": report.technologies_detected,
+            "anomalies_found": len(report.anomalies),
+            "vulnerabilities_found": len(report.vulnerabilities),
+            "vulnerabilities": report.vulnerabilities,
+            "anomaly_details": [
+                {
+                    "parameter": a.parameter,
+                    "payload": a.payload,
+                    "anomaly_type": a.anomaly_type,
+                    "evidence": a.evidence,
+                    "status_code": a.status_code,
+                    "response_time_ms": round(a.response_time_ms, 1),
+                }
+                for a in report.anomalies[:20]  # Top 20 anomalies
+            ],
+        }
+
+        # Register vulnerabilities with VulnCorrelator
+        for vuln in report.vulnerabilities:
+            cvss_type_map = {
+                "sqli": "sqli", "xss": "xss_reflected", "ssti": "ssti",
+                "lfi": "lfi", "cmdi": "cmdi", "ssrf": "ssrf",
+            }
+            vuln_type = vuln.get("vulnerability_type", "")
+            if vuln_type in cvss_type_map:
+                score, vector, severity = CVSSCalculator.score_for_vuln_type(cvss_type_map[vuln_type])
+                vuln_correlator.add_vulnerability(VulnFinding(
+                    vuln_id=f"FUZZ-{vuln_type}-{vuln['parameter']}",
+                    title=f"Smart Fuzzer: {vuln_type.upper()} in parameter '{vuln['parameter']}'",
+                    severity=severity,
+                    cvss_score=score * vuln["confidence"],  # Scale by confidence
+                    cvss_vector=vector,
+                    target=target, port=0, service="http",
+                    evidence=f"Confidence: {vuln['confidence']}, Evidence: {vuln['evidence'][:200]}",
+                    exploitable=vuln["confidence"] >= 0.66,
+                    exploit_ref="smart_fuzz_engine",
+                    kill_chain_phase="exploitation" if vuln["confidence"] >= 0.66 else "weaponization",
+                    mitre_techniques=["T1190"],
+                    remediation=f"Input validation on parameter '{vuln['parameter']}'. Use parameterized queries for SQLi, output encoding for XSS.",
+                    confidence=vuln["confidence"],
+                ))
+
+        # Context-aware payload suggestions
+        if report.vulnerabilities:
+            results["modules"]["payload_suggestions"] = {}
+            for vuln in report.vulnerabilities[:5]:
+                vtype = vuln.get("vulnerability_type", "")
+                tech = report.technologies_detected[0] if report.technologies_detected else ""
+                ctx = ExploitAdvisor.get_payload_for_context(vtype, tech)
+                results["modules"]["payload_suggestions"][f"{vuln['parameter']}:{vtype}"] = {
+                    "advanced_payloads": ctx["payloads"][:5],
+                    "verification": ctx.get("verification", ""),
+                    "technology_specific": bool(tech),
+                }
+
+        # Intelligence
+        results["correlation"] = vuln_correlator.correlate(target)
+        results["intelligence_summary"] = {
+            "fuzzing_level": "intelligent (contextual, adaptive)",
+            "parameters_tested": report.parameters_found,
+            "requests_sent": report.total_requests,
+            "anomalies_detected": len(report.anomalies),
+            "confirmed_vulns": len([v for v in report.vulnerabilities if v["confidence"] >= 0.66]),
+            "probable_vulns": len([v for v in report.vulnerabilities if 0.33 <= v["confidence"] < 0.66]),
+            "technologies": report.technologies_detected,
+        }
+
+        if report.vulnerabilities:
+            kill_chain.advance_phase(target, KillChainPhase.EXPLOITATION, "smart_fuzz_engine",
+                                      [f"{v['vulnerability_type']}:{v['parameter']}" for v in report.vulnerabilities[:5]])
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
 # SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Starting Kali MCP Server v6 - Autonomous Pentest Engine")
-    logger.info("Architecture: 22 unified mega-modules")
+    logger.info("Starting Kali MCP Server v6.2 - Autonomous Pentest Engine")
+    logger.info("Architecture: 24 unified mega-modules + Protocol Intelligence Layer")
     mcp.run(transport="stdio")
