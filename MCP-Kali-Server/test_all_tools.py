@@ -905,6 +905,182 @@ def test_honeypot_scoring_weights():
         record("honeypot_scoring_weights", False, str(e))
 
 
+def test_stealth_config_levels():
+    """Test StealthConfig level configuration"""
+    try:
+        sc = srv.StealthConfig()
+        # Default level 0
+        assert sc.level == 0
+        assert sc.pre_command_delay() == 0
+
+        # Level 1: basic stealth
+        sc.set_level(1)
+        assert sc.level == 1
+        assert sc.min_delay > 0
+        assert sc.max_delay > sc.min_delay
+        ua = sc.get_user_agent()
+        assert "Mozilla" in ua
+        # Session-fixed UA at level 1
+        assert sc.get_user_agent() == ua
+
+        # Level 2: enhanced
+        sc.set_level(2)
+        assert sc.level == 2
+        assert sc.min_delay >= 0.5
+
+        # Level 3: maximum
+        sc.set_level(3)
+        assert sc.level == 3
+        assert sc.min_delay >= 1.0
+        nmap_flags = sc.get_nmap_stealth_flags()
+        assert "-D" in nmap_flags  # Decoys
+        assert "RND:5" in nmap_flags
+
+        # Status check
+        status = sc.get_status()
+        assert status["level"] == 3
+        assert status["level_name"] == "MAXIMUM"
+        assert status["features"]["nmap_decoys"] is True
+        assert status["features"]["packet_fragmentation"] is True
+
+        # Reset
+        sc.set_level(0)
+        assert sc.level == 0
+        record("stealth_config_levels", True)
+    except Exception as e:
+        record("stealth_config_levels", False, str(e))
+
+
+def test_stealth_nmap_adaptation():
+    """Test that nmap commands get stealth flags injected"""
+    try:
+        sc = srv.StealthConfig()
+
+        # Level 0: no change
+        sc.set_level(0)
+        cmd = ["nmap", "-sV", "10.0.0.1"]
+        adapted = sc.adapt_nmap_command(cmd)
+        assert adapted == cmd
+
+        # Level 2: should add timing + randomize
+        sc.set_level(2)
+        adapted = sc.adapt_nmap_command(["nmap", "-sV", "-T4", "10.0.0.1"])
+        assert "--scan-delay" in adapted
+        assert "--randomize-hosts" in adapted
+
+        # Level 3: should add decoys + fragmentation
+        sc.set_level(3)
+        adapted = sc.adapt_nmap_command(["nmap", "-sV", "10.0.0.1"])
+        assert "-D" in adapted
+        assert "RND:5" in adapted
+        assert "--mtu" in adapted
+
+        sc.set_level(0)
+        record("stealth_nmap_adaptation", True)
+    except Exception as e:
+        record("stealth_nmap_adaptation", False, str(e))
+
+
+def test_adaptive_timeouts():
+    """Test adaptive timeout calculation"""
+    try:
+        # nmap stealth should be ~90s
+        t = srv.get_adaptive_timeout(["nmap", "-sS"], 600, "stealth")
+        assert t <= 90, f"nmap stealth timeout should be ≤90, got {t}"
+
+        # nmap aggressive should be higher
+        t2 = srv.get_adaptive_timeout(["nmap", "-A"], 600, "aggressive")
+        assert t2 > t, f"aggressive ({t2}) should be > stealth ({t})"
+
+        # User timeout caps it
+        t3 = srv.get_adaptive_timeout(["nmap", "-A"], 30, "aggressive")
+        assert t3 == 30, f"User timeout should cap: expected 30, got {t3}"
+
+        # Unknown tool gets default
+        t4 = srv.get_adaptive_timeout(["unknown_tool"], 600, "deep")
+        assert t4 <= 120, f"Unknown tool should get default timeout"
+
+        # curl should be fast
+        t5 = srv.get_adaptive_timeout(["curl"], 600, "deep")
+        assert t5 <= 30, f"curl timeout should be ≤30, got {t5}"
+
+        record("adaptive_timeouts", True)
+    except Exception as e:
+        record("adaptive_timeouts", False, str(e))
+
+
+def test_xml_validation():
+    """Test XML validation and repair for truncated nmap output"""
+    try:
+        # Valid XML
+        valid = '<?xml version="1.0"?><nmaprun><host><ports><port portid="22"><state state="open"/></port></ports></host></nmaprun>'
+        assert srv.validate_xml_output(valid) == valid
+
+        # Truncated XML (missing closing tags)
+        truncated = '<?xml version="1.0"?><nmaprun><host><ports><port portid="22"><state state="open"/></port></ports></host>'
+        repaired = srv.validate_xml_output(truncated)
+        assert repaired != ""
+        assert "</nmaprun>" in repaired
+
+        # Empty input
+        assert srv.validate_xml_output("") == ""
+        assert srv.validate_xml_output("  ") == ""
+
+        # Non-XML
+        assert srv.validate_xml_output("Starting Nmap 7.94...") == ""
+
+        # XML with text prefix
+        mixed = 'Starting Nmap 7.94\n<?xml version="1.0"?><nmaprun><host></host></nmaprun>'
+        assert "<?xml" in srv.validate_xml_output(mixed)
+
+        record("xml_validation", True)
+    except Exception as e:
+        record("xml_validation", False, str(e))
+
+
+async def test_stealth_session_ops():
+    """Test stealth configuration via session_ops"""
+    try:
+        # Set level 2
+        r = await srv.session_ops(action="stealth_set", session_name="2")
+        d = json.loads(r)
+        assert d["config"]["level"] == 2
+        assert d["config"]["level_name"] == "ENHANCED"
+
+        # Check status
+        r2 = await srv.session_ops(action="stealth_status")
+        d2 = json.loads(r2)
+        assert d2["stealth"]["level"] == 2
+
+        # Health should show stealth
+        r3 = await srv.session_ops(action="health")
+        d3 = json.loads(r3)
+        assert "stealth" in d3
+        assert d3["version"] == "6.2.0"
+        assert "26" in d3["architecture"]
+
+        # Reset to 0
+        await srv.session_ops(action="stealth_set", session_name="0")
+
+        record("stealth_session_ops", True)
+    except Exception as e:
+        record("stealth_session_ops", False, str(e))
+
+
+def test_run_command_signature():
+    """Verify run_command has new parameters"""
+    try:
+        sig = inspect.signature(srv.run_command)
+        params = list(sig.parameters.keys())
+        assert "cmd" in params
+        assert "timeout" in params
+        assert "depth" in params, f"run_command should have 'depth' param, has {params}"
+        assert "partial_ok" in params, f"run_command should have 'partial_ok' param"
+        record("run_command_signature", True)
+    except Exception as e:
+        record("run_command_signature", False, str(e))
+
+
 def test_auto_exploit_signature_enhanced():
     """Verify auto_exploit has all expected sub-modules in source"""
     try:
@@ -1115,6 +1291,14 @@ async def run_all():
     test_honeypot_signatures_database()
     test_honeypot_scoring_weights()
     test_auto_exploit_signature_enhanced()
+
+    print("\n--- Stealth Layer + Adaptive Execution (6 tests) ---")
+    test_stealth_config_levels()
+    test_stealth_nmap_adaptation()
+    test_adaptive_timeouts()
+    test_xml_validation()
+    await test_stealth_session_ops()
+    test_run_command_signature()
 
     print("\n--- Integration: Full Correlation Pipeline ---")
     test_full_correlation_pipeline()

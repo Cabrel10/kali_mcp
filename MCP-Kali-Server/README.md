@@ -1,16 +1,28 @@
-# Kali MCP Server v6.2 — Autonomous Pentest Engine (Mythos-tier)
+# Kali MCP Server v6.2 — Autonomous Pentest Engine + Protocol Intelligence
 
-> 22 unified mega-modules | 17 intelligence classes | Kill chain tracking | CVSS v3.1 scoring | MITRE ATT&CK mapping | Parallel execution | Cross-module correlation | Digital forensics | Race condition testing
+> 26 unified mega-modules | Protocol Intelligence Layer | Honeypot Detection | Auto-Exploitation | Kill chain tracking | CVSS v3.1 scoring | MITRE ATT&CK mapping | Parallel execution | Cross-module correlation
 
 ## Architecture
 
 ```
-72 fragmented tools -> 22 unified mega-modules
-Manual decisions    -> Autonomous orchestration  
+72 fragmented tools -> 26 unified mega-modules
+Manual decisions    -> Autonomous orchestration + auto-exploitation
 Flat outputs        -> CVSS-scored, correlated, MITRE-mapped intelligence
 Sequential scans    -> Parallel execution with kill-chain tracking
 Static modules      -> Cross-module interconnection (findings feed next modules)
+Command wrappers    -> Native protocol dissection (TCP/TLS/HTTP/DNS)
+Blind scanning      -> Honeypot detection before engagement
+Manual exploitation -> Context-aware auto-exploit with adapted parameters
 ```
+
+### Protocol Intelligence Layer (4 classes) — `protocol_intelligence.py`
+
+| Class | Purpose |
+|-------|---------|
+| `ProtocolAnalyzer` | Native TCP/TLS/HTTP/DNS dissection without external tools. OS fingerprint from TTL/window, WAF detection (7+ signatures), technology fingerprinting (40+ patterns), security header audit |
+| `SmartFuzzer` | Auto-discovers parameters from HTML forms/JS/URLs. Establishes response baselines, detects anomalies (size/time/error). 85+ payloads: tech-specific SQLi (MySQL/PostgreSQL/MSSQL/Oracle), SSTI (Jinja2/Twig/Freemarker), XSS, LFI, CMDi, SSRF, Open Redirect |
+| `NetworkIntelligence` | Topology mapping with `networkx`. OS fingerprint from TTL, role detection (domain_controller, web_server, database, mail, etc.), subnet discovery, attack surface scoring |
+| `ExploitAdvisor` | Maps service+version to specific CVEs/Metasploit modules with confidence scores. Tech-specific payload generation (MySQL vs PostgreSQL SQLi, Jinja2 vs Twig SSTI) |
 
 ### Core Infrastructure (6 classes)
 

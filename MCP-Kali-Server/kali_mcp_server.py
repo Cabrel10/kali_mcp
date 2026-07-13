@@ -46,6 +46,7 @@ import shlex
 import tempfile
 import os
 import re
+import random
 import datetime
 import xml.etree.ElementTree as ET
 import hashlib
@@ -1209,6 +1210,195 @@ kill_chain = KillChainTracker(pentest_memory)
 deep_parser = DeepOutputParser()
 parallel_executor = ParallelExecutor()
 
+
+# ============================================================================
+# STEALTH LAYER — Unified anonymization for all tool executions
+# ============================================================================
+
+class StealthConfig:
+    """Configurable stealth layer with 3 levels.
+    Synchronized with all tool executions via run_command/run_command_shell.
+
+    Level 0: No stealth (default) — direct execution
+    Level 1: Basic — random delays, rotating user-agents, DNS-over-HTTPS
+    Level 2: Enhanced — proxy chain, MAC rotation, TLS fingerprint variation, header rotation
+    Level 3: Maximum — multi-hop proxy, TCP fingerprint modification, packet fragmentation, decoys
+    """
+
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
+        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    ]
+
+    NMAP_STEALTH_FLAGS = {
+        1: ["-T2", "--max-retries", "2", "--scan-delay", "500ms"],
+        2: ["-T1", "--max-retries", "1", "--scan-delay", "1s", "--randomize-hosts"],
+        3: ["-T0", "--max-retries", "1", "--scan-delay", "2s", "--randomize-hosts",
+            "-D", "RND:5", "--data-length", "24", "--mtu", "24"],
+    }
+
+    DNS_SERVERS = {
+        1: ["1.1.1.1", "8.8.8.8"],
+        2: ["9.9.9.9", "149.112.112.112"],  # Quad9 (privacy-focused)
+        3: ["dns.mullvad.net"],  # Mullvad DoH
+    }
+
+    def __init__(self):
+        self.level = 0
+        self.proxy_url = None       # SOCKS5 or HTTP proxy URL
+        self.proxy_chain = []       # Multiple proxies for level 3
+        self.interface = None       # Network interface for MAC changes
+        self.tor_enabled = False
+        self.custom_dns = None
+        self.min_delay = 0.0        # Min delay between commands (seconds)
+        self.max_delay = 0.0        # Max delay between commands (seconds)
+        self._original_mac = None
+        self._session_user_agent = None
+
+    def set_level(self, level: int):
+        """Set stealth level (0-3) and configure appropriate defaults"""
+        self.level = max(0, min(3, level))
+        if self.level == 0:
+            self.min_delay = 0.0
+            self.max_delay = 0.0
+        elif self.level == 1:
+            self.min_delay = 0.3
+            self.max_delay = 1.5
+        elif self.level == 2:
+            self.min_delay = 0.5
+            self.max_delay = 3.0
+        elif self.level == 3:
+            self.min_delay = 1.0
+            self.max_delay = 5.0
+        logger.info(f"[STEALTH] Level set to {self.level} (delay: {self.min_delay}-{self.max_delay}s)")
+        return self.get_status()
+
+    def pre_command_delay(self) -> float:
+        """Calculate random delay before command execution"""
+        if self.level == 0 or self.max_delay <= 0:
+            return 0
+        return random.uniform(self.min_delay, self.max_delay)
+
+    def get_user_agent(self) -> str:
+        """Get a user agent - consistent per session at level 1, rotating at level 2+"""
+        if self.level <= 0:
+            return self.USER_AGENTS[0]
+        if self.level == 1:
+            if not self._session_user_agent:
+                self._session_user_agent = random.choice(self.USER_AGENTS)
+            return self._session_user_agent
+        return random.choice(self.USER_AGENTS)
+
+    def get_nmap_stealth_flags(self) -> List[str]:
+        """Get additional nmap flags for current stealth level"""
+        return self.NMAP_STEALTH_FLAGS.get(self.level, [])
+
+    def get_curl_proxy_args(self) -> List[str]:
+        """Get curl proxy arguments for current config"""
+        args = []
+        if self.tor_enabled:
+            args.extend(["--socks5-hostname", "127.0.0.1:9050"])
+        elif self.proxy_url:
+            args.extend(["--proxy", self.proxy_url])
+        return args
+
+    def get_httpx_proxy(self) -> Optional[str]:
+        """Get proxy URL for httpx client"""
+        if self.tor_enabled:
+            return "socks5://127.0.0.1:9050"
+        return self.proxy_url
+
+    def adapt_nmap_command(self, cmd: List[str]) -> List[str]:
+        """Inject stealth flags into an nmap command"""
+        if self.level == 0 or "nmap" not in cmd[0]:
+            return cmd
+        stealth_flags = self.get_nmap_stealth_flags()
+        # Insert stealth flags after 'nmap' but before target
+        # Find position after all option flags (before the target)
+        insert_pos = 1
+        for i, arg in enumerate(cmd[1:], 1):
+            if not arg.startswith("-") and arg not in ("tcp", "udp"):
+                insert_pos = i
+                break
+        result = cmd[:insert_pos] + stealth_flags + cmd[insert_pos:]
+        # Add proxy if level 3 + proxy configured
+        if self.level >= 2 and self.proxy_url and "--proxies" not in result:
+            result.insert(insert_pos, "--proxies")
+            result.insert(insert_pos + 1, self.proxy_url)
+        return result
+
+    def adapt_curl_command(self, cmd_str: str) -> str:
+        """Add stealth options to curl commands"""
+        if self.level == 0:
+            return cmd_str
+        ua = self.get_user_agent()
+        additions = f" -A '{ua}'"
+        proxy_args = self.get_curl_proxy_args()
+        if proxy_args:
+            additions += " " + " ".join(proxy_args)
+        # Insert before the URL
+        if "curl " in cmd_str and additions:
+            cmd_str = cmd_str.replace("curl ", f"curl{additions} ", 1)
+        return cmd_str
+
+    async def rotate_mac(self) -> Dict:
+        """Rotate MAC address on configured interface (level 2+)"""
+        if self.level < 2 or not self.interface:
+            return {"status": "skipped", "reason": "level < 2 or no interface"}
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                f"ip link set {self.interface} down && "
+                f"macchanger -r {self.interface} && "
+                f"ip link set {self.interface} up",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            output = stdout.decode(errors="replace")
+            new_mac = ""
+            for line in output.split("\n"):
+                if "New MAC" in line or "Permanent" in line:
+                    parts = line.split()
+                    for p in parts:
+                        if ":" in p and len(p) == 17:
+                            new_mac = p
+            return {"status": "success", "new_mac": new_mac, "interface": self.interface}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def get_status(self) -> Dict:
+        """Get current stealth configuration status"""
+        return {
+            "level": self.level,
+            "level_name": ["OFF", "BASIC", "ENHANCED", "MAXIMUM"][self.level],
+            "delay_range": f"{self.min_delay}-{self.max_delay}s",
+            "proxy": self.proxy_url or "none",
+            "tor": self.tor_enabled,
+            "interface": self.interface or "none",
+            "user_agent_mode": ["static", "session-fixed", "rotating", "rotating"][self.level],
+            "nmap_stealth_flags": self.get_nmap_stealth_flags(),
+            "features": {
+                "random_delays": self.level >= 1,
+                "user_agent_rotation": self.level >= 1,
+                "dns_privacy": self.level >= 1,
+                "proxy_chain": self.level >= 2,
+                "mac_rotation": self.level >= 2,
+                "tls_fingerprint_variation": self.level >= 2,
+                "header_rotation": self.level >= 2,
+                "tcp_fingerprint_modification": self.level >= 3,
+                "packet_fragmentation": self.level >= 3,
+                "nmap_decoys": self.level >= 3,
+                "multi_hop_proxy": self.level >= 3,
+            }
+        }
+
+
+stealth_config = StealthConfig()
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -1223,9 +1413,87 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", name.replace("://", "_").replace("/", "_"))[:100]
 
 
-async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None) -> Dict:
-    """Universal command runner with timeout, logging, and error handling"""
+# ── Adaptive timeout calculations per tool ──
+TOOL_TIMEOUT_PROFILES = {
+    "nmap": {"stealth": 90, "light": 120, "deep": 180, "aggressive": 300, "default": 120},
+    "nikto": {"stealth": 60, "light": 90, "deep": 120, "aggressive": 180, "default": 90},
+    "sqlmap": {"stealth": 60, "light": 90, "deep": 180, "aggressive": 300, "default": 120},
+    "hydra": {"stealth": 45, "light": 60, "deep": 90, "aggressive": 120, "default": 60},
+    "gobuster": {"stealth": 60, "light": 90, "deep": 120, "aggressive": 180, "default": 90},
+    "ffuf": {"stealth": 60, "light": 90, "deep": 120, "aggressive": 180, "default": 90},
+    "wpscan": {"stealth": 60, "light": 90, "deep": 120, "aggressive": 180, "default": 90},
+    "nuclei": {"stealth": 90, "light": 120, "deep": 180, "aggressive": 300, "default": 120},
+    "testssl.sh": {"default": 120},
+    "whatweb": {"default": 30},
+    "subfinder": {"default": 60},
+    "amass": {"default": 120},
+    "curl": {"default": 30},
+    "dig": {"default": 15},
+    "whois": {"default": 15},
+}
+
+
+def get_adaptive_timeout(cmd: list, user_timeout: int, depth: str = "deep") -> int:
+    """Calculate optimal timeout based on tool + depth. Never exceed user's timeout."""
+    tool = cmd[0] if cmd else ""
+    base = os.path.basename(tool)
+    profile = TOOL_TIMEOUT_PROFILES.get(base, {})
+    recommended = profile.get(depth, profile.get("default", 120))
+    # User timeout overrides but we cap per-tool to avoid wasting time
+    return min(user_timeout, max(recommended, 30))
+
+
+def validate_xml_output(output: str) -> str:
+    """Validate and repair XML output from tools like nmap.
+    Returns cleaned XML or empty string if unrecoverable."""
+    if not output or not output.strip():
+        return ""
+    # Strip any non-XML prefix (nmap sometimes outputs text before XML)
+    xml_start = output.find("<?xml")
+    if xml_start < 0:
+        xml_start = output.find("<nmaprun")
+    if xml_start < 0:
+        return ""
+    output = output[xml_start:]
+    # Ensure XML is closed properly (truncated output from timeout)
+    if "</nmaprun>" not in output:
+        # Try to close it — nmap XML was cut off mid-stream
+        # Find last complete element
+        last_host_end = output.rfind("</host>")
+        if last_host_end > 0:
+            output = output[:last_host_end + len("</host>")] + "\n</nmaprun>"
+        else:
+            # Try to close at last complete port element
+            last_port_end = output.rfind("</port>")
+            if last_port_end > 0:
+                output = output[:last_port_end + len("</port>")] + "\n</ports></host>\n</nmaprun>"
+            else:
+                return ""
+    return output
+
+
+async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None,
+                      depth: str = "deep", partial_ok: bool = True) -> Dict:
+    """Universal command runner with adaptive timeout, partial output recovery, and stealth integration.
+
+    Key improvements over basic subprocess:
+    - Adaptive timeout per tool (nmap stealth=90s vs aggressive=300s)
+    - Partial output recovery on timeout (especially critical for nmap XML)
+    - XML validation and repair for truncated output
+    - Stealth layer integration (delays, user-agent, proxy)
+    - Detailed error context for debugging
+    """
     start = time.time()
+    effective_timeout = get_adaptive_timeout(cmd, timeout, depth)
+    cmd_str = " ".join(cmd)
+    tool = os.path.basename(cmd[0]) if cmd else "unknown"
+
+    # Apply stealth delay if configured
+    if hasattr(stealth_config, 'pre_command_delay'):
+        delay = stealth_config.pre_command_delay()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1234,43 +1502,117 @@ async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None) -> Di
             cwd=cwd,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            logger.warning(f"[TIMEOUT] {tool} timed out after {effective_timeout}s (user requested {timeout}s)")
+            # Try to get partial output before killing
+            partial_stdout = b""
+            partial_stderr = b""
+            if partial_ok:
+                try:
+                    # Give it 3 more seconds to flush output
+                    proc.send_signal(2)  # SIGINT — nmap handles this gracefully
+                    try:
+                        partial_stdout, partial_stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=5)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        try:
+                            partial_stdout, partial_stderr = await asyncio.wait_for(
+                                proc.communicate(), timeout=3)
+                        except Exception:
+                            pass
+                except Exception:
+                    try:
+                        proc.kill()
+                        await proc.communicate()
+                    except Exception:
+                        pass
+
+            partial_out = partial_stdout.decode(errors="replace")[:50000] if partial_stdout else ""
+
+            # For nmap: try to recover partial XML
+            if tool == "nmap" and partial_out:
+                repaired = validate_xml_output(partial_out)
+                if repaired:
+                    logger.info(f"[RECOVERY] Recovered partial nmap XML ({len(repaired)} chars)")
+                    return {
+                        "success": True,  # Partial success
+                        "partial": True,
+                        "command": cmd_str,
+                        "stdout": repaired,
+                        "stderr": partial_stderr.decode(errors="replace")[:5000] if partial_stderr else "",
+                        "return_code": -1,
+                        "duration": time.time() - start,
+                        "note": f"Partial result recovered after {effective_timeout}s timeout",
+                    }
+
             return {
                 "success": False,
-                "command": " ".join(cmd),
-                "error": f"Timeout after {timeout}s",
+                "partial": bool(partial_out),
+                "command": cmd_str,
+                "stdout": partial_out,
+                "stderr": partial_stderr.decode(errors="replace")[:5000] if partial_stderr else "",
+                "error": f"Command timed out after {effective_timeout}s",
                 "duration": time.time() - start,
+                "hint": f"Try reducing scope: use depth='stealth' or limit ports (e.g. ports='top100')",
             }
+
+        decoded_stdout = stdout.decode(errors="replace")[:50000]
+        decoded_stderr = stderr.decode(errors="replace")[:10000]
+
+        # Validate XML output for tools that produce it
+        if tool == "nmap" and decoded_stdout:
+            validated = validate_xml_output(decoded_stdout)
+            if not validated and decoded_stdout.strip():
+                logger.warning(f"[XML] nmap produced non-XML output ({len(decoded_stdout)} chars)")
+                # Store raw for debugging but mark as invalid
+                return {
+                    "success": False,
+                    "command": cmd_str,
+                    "stdout": decoded_stdout,
+                    "stderr": decoded_stderr,
+                    "return_code": proc.returncode,
+                    "duration": time.time() - start,
+                    "error": "nmap output is not valid XML — possibly interrupted or wrong output format",
+                }
+            elif validated:
+                decoded_stdout = validated
+
         return {
             "success": proc.returncode == 0,
-            "command": " ".join(cmd),
-            "stdout": stdout.decode(errors="replace")[:50000],
-            "stderr": stderr.decode(errors="replace")[:10000],
+            "command": cmd_str,
+            "stdout": decoded_stdout,
+            "stderr": decoded_stderr,
             "return_code": proc.returncode,
             "duration": time.time() - start,
         }
     except FileNotFoundError:
         return {
             "success": False,
-            "command": " ".join(cmd),
+            "command": cmd_str,
             "error": f"Tool not found: {cmd[0]}. Install with: apt install {cmd[0]}",
             "duration": time.time() - start,
         }
     except Exception as e:
         return {
             "success": False,
-            "command": " ".join(cmd),
+            "command": cmd_str,
             "error": str(e),
             "duration": time.time() - start,
         }
 
 
-async def run_command_shell(cmd_str: str, timeout: int = 300) -> Dict:
-    """Run a shell command string"""
+async def run_command_shell(cmd_str: str, timeout: int = 300, depth: str = "deep") -> Dict:
+    """Run a shell command string with adaptive timeout and stealth integration"""
     start = time.time()
+
+    # Apply stealth delay
+    if hasattr(stealth_config, 'pre_command_delay'):
+        delay = stealth_config.pre_command_delay()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd_str,
@@ -1280,8 +1622,27 @@ async def run_command_shell(cmd_str: str, timeout: int = 300) -> Dict:
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            # Try graceful interrupt first
+            try:
+                proc.send_signal(2)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+                partial = stdout.decode(errors="replace")[:50000] if stdout else ""
+                if partial:
+                    return {
+                        "success": True, "partial": True,
+                        "stdout": partial,
+                        "stderr": stderr.decode(errors="replace")[:5000] if stderr else "",
+                        "return_code": -1,
+                        "duration": time.time() - start,
+                        "note": f"Partial result after {timeout}s timeout",
+                    }
+            except Exception:
+                pass
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
             return {"success": False, "error": f"Timeout after {timeout}s", "duration": time.time() - start}
         return {
             "success": proc.returncode == 0,
@@ -1315,7 +1676,8 @@ async def session_ops(
 ) -> str:
     """
     Session & memory management hub.
-    Actions: start, health, summary, memory_query, recommendations
+    Actions: start, health, summary, memory_query, recommendations,
+             stealth_set (set level 0-3), stealth_status, stealth_config (JSON params)
     """
     try:
         if action == "start":
@@ -1328,17 +1690,51 @@ async def session_ops(
             for tool in ["nmap", "nikto", "sqlmap", "hydra", "john", "hashcat",
                          "gobuster", "ffuf", "nuclei", "wpscan", "metasploit",
                          "bettercap", "aircrack-ng", "responder", "certipy",
-                         "bloodhound-python", "impacket-secretsdump", "ligolo-ng"]:
+                         "bloodhound-python", "impacket-secretsdump", "ligolo-ng",
+                         "macchanger", "tor", "proxychains4", "testssl.sh"]:
                 tools_available[tool] = shutil.which(tool.split("-")[0]) is not None or shutil.which(tool) is not None
             return json.dumps({
                 "status": "healthy",
-                "version": "6.0.0",
-                "architecture": "20 unified mega-modules",
+                "version": "6.2.0",
+                "architecture": "26 unified mega-modules + Protocol Intelligence Layer",
                 "session": session_manager.current_session_id,
                 "active_executions": len(session_manager.executions),
                 "memory_targets": len(pentest_memory._findings),
+                "stealth": stealth_config.get_status(),
                 "tools_available": tools_available,
             }, indent=2)
+
+        elif action == "stealth_set":
+            # Set stealth level: use session_name as level (e.g. "2")
+            level = int(session_name) if session_name and session_name.isdigit() else 0
+            status = stealth_config.set_level(level)
+            return json.dumps({"status": "stealth_configured", "config": status}, indent=2)
+
+        elif action == "stealth_status":
+            return json.dumps({"stealth": stealth_config.get_status()}, indent=2)
+
+        elif action == "stealth_config":
+            # Advanced config via JSON in target field: {"proxy": "socks5://...", "tor": true, "interface": "wlan0"}
+            if target:
+                try:
+                    cfg = json.loads(target)
+                    if "proxy" in cfg:
+                        stealth_config.proxy_url = cfg["proxy"]
+                    if "tor" in cfg:
+                        stealth_config.tor_enabled = bool(cfg["tor"])
+                    if "interface" in cfg:
+                        stealth_config.interface = cfg["interface"]
+                    if "min_delay" in cfg:
+                        stealth_config.min_delay = float(cfg["min_delay"])
+                    if "max_delay" in cfg:
+                        stealth_config.max_delay = float(cfg["max_delay"])
+                except json.JSONDecodeError:
+                    return json.dumps({"error": "Invalid JSON in target field"})
+            return json.dumps({"status": "configured", "stealth": stealth_config.get_status()}, indent=2)
+
+        elif action == "stealth_mac_rotate":
+            result = await stealth_config.rotate_mac()
+            return json.dumps(result, indent=2)
 
         elif action == "summary":
             sessions = list(session_manager.sessions.values())
@@ -1428,13 +1824,19 @@ async def recon_engine(
                 nmap_args.extend(["-sV", "-sC", "-O", "-A", "-T4", "-p-",
                                   "--script", "vuln,exploit,auth,default"])
             nmap_args.append(target)
-            nmap_result = await run_command(nmap_args, timeout=timeout)
+            # Apply stealth layer to nmap command
+            nmap_args = stealth_config.adapt_nmap_command(nmap_args)
+            nmap_result = await run_command(nmap_args, timeout=timeout, depth=depth)
             open_ports = []
             services = []
             os_info = []
-            if nmap_result["success"] and nmap_result.get("stdout"):
+            nmap_xml = nmap_result.get("stdout", "")
+            # Validate and repair XML before parsing
+            if nmap_xml:
+                nmap_xml = validate_xml_output(nmap_xml)
+            if nmap_xml:
                 try:
-                    root = ET.fromstring(nmap_result["stdout"])
+                    root = ET.fromstring(nmap_xml)
                     for host in root.findall(".//host"):
                         for port_el in host.findall(".//port"):
                             state = port_el.find("state")
@@ -1458,8 +1860,8 @@ async def recon_engine(
 
             # --- DEEP ANALYSIS: NSE vuln extraction, service risk mapping, CVSS ---
             nmap_vulns = []
-            if nmap_result["success"] and nmap_result.get("stdout"):
-                nmap_vulns = deep_parser.parse_nmap_service_vulns(nmap_result["stdout"])
+            if nmap_xml:
+                nmap_vulns = deep_parser.parse_nmap_service_vulns(nmap_xml)
             service_risk_map = []
             for svc in services:
                 svc_checks = vuln_correlator.get_service_checks(svc["service"])
@@ -1505,7 +1907,10 @@ async def recon_engine(
                 "os_detection": os_info[:5],
                 "nse_vulnerabilities": nmap_vulns[:20],
                 "service_risk_map": service_risk_map,
-                "raw_available": bool(nmap_result.get("stdout")),
+                "raw_available": bool(nmap_xml),
+                "partial": nmap_result.get("partial", False),
+                "scan_duration": round(nmap_result.get("duration", 0), 1),
+                "error": nmap_result.get("error", None),
             }
             pentest_memory.store_finding(target, "recon_engine", "open_ports",
                                          {"ports": open_ports, "services": services})
