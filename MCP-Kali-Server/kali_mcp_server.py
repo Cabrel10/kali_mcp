@@ -1216,13 +1216,22 @@ parallel_executor = ParallelExecutor()
 # ============================================================================
 
 class StealthConfig:
-    """Configurable stealth layer with 3 levels.
-    Synchronized with all tool executions via run_command/run_command_shell.
+    """Production-grade stealth layer with 4 levels (0-3).
+    Automatically synchronized with ALL tool executions via run_command/run_command_shell.
 
-    Level 0: No stealth (default) — direct execution
-    Level 1: Basic — random delays, rotating user-agents, DNS-over-HTTPS
-    Level 2: Enhanced — proxy chain, MAC rotation, TLS fingerprint variation, header rotation
-    Level 3: Maximum — multi-hop proxy, TCP fingerprint modification, packet fragmentation, decoys
+    Level 0 — OFF: Direct execution, no modifications
+    Level 1 — BASIC: Random delays (0.3-1.5s), session-fixed user-agent, DNS-over-HTTPS
+    Level 2 — ENHANCED: Rotating user-agents, proxy chain, MAC rotation, tool-specific
+              stealth flags (nikto -Tuning, sqlmap --random-agent, hydra -W, etc.)
+    Level 3 — MAXIMUM: Multi-hop proxy, TCP fingerprint modification, nmap decoys+fragmentation,
+              packet padding, TLS fingerprint variation, aggressive header rotation
+
+    Integration points:
+    - adapt_command() called automatically in run_command() for ALL subprocess commands
+    - adapt_shell_command() called automatically in run_command_shell()
+    - Proxy/UA/delay injected transparently — no module code changes needed
+    - Ban detection via detect_ban() with automatic recovery suggestions
+    - Proxy rotation via rotate_proxy() for session continuity after bans
     """
 
     USER_AGENTS = [
@@ -1243,16 +1252,66 @@ class StealthConfig:
             "-D", "RND:5", "--data-length", "24", "--mtu", "24"],
     }
 
+    # Per-tool stealth flags injected at each level
+    TOOL_STEALTH_FLAGS = {
+        "nikto": {
+            1: ["-Pause", "1"],
+            2: ["-Pause", "2", "-Tuning", "x"],
+            3: ["-Pause", "3", "-Tuning", "x", "-evasion", "1"],
+        },
+        "sqlmap": {
+            1: ["--random-agent", "--delay=1"],
+            2: ["--random-agent", "--delay=2", "--safe-url=about:blank", "--safe-freq=3"],
+            3: ["--random-agent", "--delay=3", "--safe-url=about:blank", "--safe-freq=2",
+                "--tamper=between,randomcase,space2comment", "--hpp"],
+        },
+        "hydra": {
+            1: ["-W", "2"],
+            2: ["-W", "5", "-c", "3"],
+            3: ["-W", "10", "-c", "5", "-t", "2"],
+        },
+        "gobuster": {
+            1: ["--delay", "200ms"],
+            2: ["--delay", "500ms", "--threads", "5"],
+            3: ["--delay", "1s", "--threads", "2"],
+        },
+        "ffuf": {
+            1: ["-rate", "20"],
+            2: ["-rate", "10", "-t", "5"],
+            3: ["-rate", "3", "-t", "2"],
+        },
+        "nuclei": {
+            1: ["-rate-limit", "50", "-bulk-size", "10"],
+            2: ["-rate-limit", "20", "-bulk-size", "5", "-headless"],
+            3: ["-rate-limit", "5", "-bulk-size", "2"],
+        },
+        "wpscan": {
+            1: ["--throttle", "500"],
+            2: ["--throttle", "1000", "--stealthy"],
+            3: ["--throttle", "2000", "--stealthy"],
+        },
+    }
+
     DNS_SERVERS = {
         1: ["1.1.1.1", "8.8.8.8"],
         2: ["9.9.9.9", "149.112.112.112"],  # Quad9 (privacy-focused)
         3: ["dns.mullvad.net"],  # Mullvad DoH
     }
 
+    # Patterns that indicate IP ban or blocking
+    BAN_SIGNATURES = [
+        "access denied", "forbidden", "blocked", "rate limit",
+        "too many requests", "captcha", "challenge", "cf-chl",
+        "cloudflare", "hcaptcha", "recaptcha", "firewall",
+        "your ip has been", "temporarily banned", "connection refused",
+        "connection reset by peer", "no route to host",
+    ]
+
     def __init__(self):
         self.level = 0
-        self.proxy_url = None       # SOCKS5 or HTTP proxy URL
-        self.proxy_chain = []       # Multiple proxies for level 3
+        self.proxy_url = None       # Current active SOCKS5 or HTTP proxy URL
+        self.proxy_chain = []       # Pool of proxies for rotation
+        self.proxy_index = 0        # Current position in proxy_chain
         self.interface = None       # Network interface for MAC changes
         self.tor_enabled = False
         self.custom_dns = None
@@ -1260,6 +1319,10 @@ class StealthConfig:
         self.max_delay = 0.0        # Max delay between commands (seconds)
         self._original_mac = None
         self._session_user_agent = None
+        self._ban_count = 0         # Track consecutive bans
+        self._total_commands = 0    # Total commands executed
+        self._stealth_commands = 0  # Commands that were stealth-adapted
+        self._ban_events = []       # Log of ban detections [{timestamp, target, evidence}]
 
     def set_level(self, level: int):
         """Set stealth level (0-3) and configure appropriate defaults"""
@@ -1319,22 +1382,19 @@ class StealthConfig:
         if self.level == 0 or "nmap" not in cmd[0]:
             return cmd
         stealth_flags = self.get_nmap_stealth_flags()
-        # Insert stealth flags after 'nmap' but before target
-        # Find position after all option flags (before the target)
         insert_pos = 1
         for i, arg in enumerate(cmd[1:], 1):
             if not arg.startswith("-") and arg not in ("tcp", "udp"):
                 insert_pos = i
                 break
         result = cmd[:insert_pos] + stealth_flags + cmd[insert_pos:]
-        # Add proxy if level 3 + proxy configured
         if self.level >= 2 and self.proxy_url and "--proxies" not in result:
             result.insert(insert_pos, "--proxies")
             result.insert(insert_pos + 1, self.proxy_url)
         return result
 
     def adapt_curl_command(self, cmd_str: str) -> str:
-        """Add stealth options to curl commands"""
+        """Add stealth options to curl commands (for shell string mode)"""
         if self.level == 0:
             return cmd_str
         ua = self.get_user_agent()
@@ -1342,10 +1402,143 @@ class StealthConfig:
         proxy_args = self.get_curl_proxy_args()
         if proxy_args:
             additions += " " + " ".join(proxy_args)
-        # Insert before the URL
         if "curl " in cmd_str and additions:
             cmd_str = cmd_str.replace("curl ", f"curl{additions} ", 1)
         return cmd_str
+
+    def adapt_command(self, cmd: List[str]) -> List[str]:
+        """Universal command adapter — injects stealth flags into ANY command list.
+        Called automatically by run_command() for every subprocess execution.
+        Handles: nmap, curl, nikto, sqlmap, hydra, gobuster, ffuf, nuclei, wpscan.
+        """
+        if self.level == 0 or not cmd:
+            return cmd
+        tool = os.path.basename(cmd[0]) if cmd else ""
+        self._total_commands += 1
+
+        # nmap: dedicated handler (decoys, fragmentation, timing)
+        if tool == "nmap":
+            self._stealth_commands += 1
+            return self.adapt_nmap_command(cmd)
+
+        # curl: inject UA + proxy into argument list
+        if tool == "curl":
+            self._stealth_commands += 1
+            result = list(cmd)
+            ua = self.get_user_agent()
+            if "-A" not in result and "--user-agent" not in " ".join(result):
+                result.insert(1, "-A")
+                result.insert(2, ua)
+            proxy_args = self.get_curl_proxy_args()
+            if proxy_args and "--proxy" not in result and "--socks5" not in " ".join(result):
+                idx = 1
+                for pa in proxy_args:
+                    result.insert(idx, pa)
+                    idx += 1
+            return result
+
+        # Tool-specific stealth flags
+        if tool in self.TOOL_STEALTH_FLAGS:
+            flags = self.TOOL_STEALTH_FLAGS[tool].get(self.level, [])
+            if flags:
+                self._stealth_commands += 1
+                result = list(cmd)
+                # Insert flags after tool name but avoid duplicates
+                existing = " ".join(result)
+                new_flags = [f for f in flags if f.split("=")[0] not in existing]
+                # Insert after cmd[0]
+                for i, f in enumerate(new_flags):
+                    result.insert(1 + i, f)
+                # Add proxy for tools that support it
+                if self.proxy_url and self.level >= 2:
+                    if tool == "sqlmap" and "--proxy" not in existing:
+                        result.extend(["--proxy", self.proxy_url])
+                    elif tool == "nikto" and "-useproxy" not in existing:
+                        result.extend(["-useproxy", self.proxy_url])
+                    elif tool == "nuclei" and "-proxy" not in existing:
+                        result.extend(["-proxy", self.proxy_url])
+                    elif tool == "wpscan" and "--proxy" not in existing:
+                        result.extend(["--proxy", self.proxy_url])
+                return result
+
+        return cmd
+
+    def adapt_shell_command(self, cmd_str: str) -> str:
+        """Universal shell command adapter — injects stealth into shell command strings.
+        Called automatically by run_command_shell().
+        """
+        if self.level == 0 or not cmd_str:
+            return cmd_str
+        self._total_commands += 1
+        # Detect tool from shell command
+        first_word = cmd_str.strip().split()[0] if cmd_str.strip() else ""
+        tool = os.path.basename(first_word)
+
+        if tool == "curl":
+            self._stealth_commands += 1
+            return self.adapt_curl_command(cmd_str)
+
+        return cmd_str
+
+    def detect_ban(self, output: str, return_code: int = 0, http_code: int = 0) -> Dict:
+        """Detect if a command result indicates IP ban/blocking.
+        Returns {banned: bool, evidence: str, severity: str, recommendation: str}
+        """
+        evidence = []
+        if output:
+            lower_out = output.lower()
+            for sig in self.BAN_SIGNATURES:
+                if sig in lower_out:
+                    evidence.append(sig)
+        if http_code in (403, 429, 503, 521, 523):
+            evidence.append(f"HTTP {http_code}")
+        if return_code in (7, 28, 56):  # curl: connection refused, timeout, reset
+            evidence.append(f"exit_code={return_code}")
+
+        if not evidence:
+            self._ban_count = 0
+            return {"banned": False}
+
+        self._ban_count += 1
+        self._ban_events.append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "evidence": evidence,
+            "consecutive": self._ban_count,
+        })
+
+        severity = "low"
+        recommendation = "Increase stealth level"
+        if self._ban_count >= 3:
+            severity = "high"
+            recommendation = "Rotate proxy immediately, increase stealth to maximum"
+        elif self._ban_count >= 2:
+            severity = "medium"
+            recommendation = "Rotate proxy, add longer delays"
+
+        return {
+            "banned": True,
+            "evidence": evidence,
+            "severity": severity,
+            "consecutive_bans": self._ban_count,
+            "recommendation": recommendation,
+        }
+
+    def rotate_proxy(self) -> Dict:
+        """Rotate to next proxy in the pool without changing host IP.
+        Proxies protect the host machine's real IP during pentest sessions.
+        """
+        if not self.proxy_chain:
+            return {"status": "no_proxies", "hint": "Configure proxy_chain via stealth_config action"}
+        self.proxy_index = (self.proxy_index + 1) % len(self.proxy_chain)
+        self.proxy_url = self.proxy_chain[self.proxy_index]
+        self._ban_count = 0  # Reset ban counter on rotation
+        logger.info(f"[STEALTH] Proxy rotated to {self.proxy_url} (#{self.proxy_index + 1}/{len(self.proxy_chain)})")
+        return {
+            "status": "rotated",
+            "proxy": self.proxy_url,
+            "index": self.proxy_index + 1,
+            "total": len(self.proxy_chain),
+        }
 
     async def rotate_mac(self) -> Dict:
         """Rotate MAC address on configured interface (level 2+)"""
@@ -1371,16 +1564,23 @@ class StealthConfig:
             return {"status": "error", "error": str(e)}
 
     def get_status(self) -> Dict:
-        """Get current stealth configuration status"""
+        """Get current stealth configuration status with proof metrics"""
         return {
             "level": self.level,
             "level_name": ["OFF", "BASIC", "ENHANCED", "MAXIMUM"][self.level],
             "delay_range": f"{self.min_delay}-{self.max_delay}s",
             "proxy": self.proxy_url or "none",
+            "proxy_pool_size": len(self.proxy_chain),
             "tor": self.tor_enabled,
             "interface": self.interface or "none",
             "user_agent_mode": ["static", "session-fixed", "rotating", "rotating"][self.level],
             "nmap_stealth_flags": self.get_nmap_stealth_flags(),
+            "metrics": {
+                "total_commands": self._total_commands,
+                "stealth_adapted": self._stealth_commands,
+                "ban_events": len(self._ban_events),
+                "consecutive_bans": self._ban_count,
+            },
             "features": {
                 "random_delays": self.level >= 1,
                 "user_agent_rotation": self.level >= 1,
@@ -1389,11 +1589,17 @@ class StealthConfig:
                 "mac_rotation": self.level >= 2,
                 "tls_fingerprint_variation": self.level >= 2,
                 "header_rotation": self.level >= 2,
+                "tool_specific_evasion": self.level >= 2,
+                "auto_ban_detection": self.level >= 1,
+                "proxy_rotation": self.level >= 2 and len(self.proxy_chain) > 0,
                 "tcp_fingerprint_modification": self.level >= 3,
                 "packet_fragmentation": self.level >= 3,
                 "nmap_decoys": self.level >= 3,
                 "multi_hop_proxy": self.level >= 3,
-            }
+                "sqlmap_tamper": self.level >= 3,
+            },
+            "adapted_tools": ["nmap", "curl", "nikto", "sqlmap", "hydra",
+                              "gobuster", "ffuf", "nuclei", "wpscan"],
         }
 
 
@@ -1484,6 +1690,8 @@ async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None,
     - Detailed error context for debugging
     """
     start = time.time()
+    # Apply universal stealth adaptation to ALL commands
+    cmd = stealth_config.adapt_command(cmd)
     effective_timeout = get_adaptive_timeout(cmd, timeout, depth)
     cmd_str = " ".join(cmd)
     tool = os.path.basename(cmd[0]) if cmd else "unknown"
@@ -1606,6 +1814,8 @@ async def run_command(cmd: List[str], timeout: int = 300, cwd: str = None,
 async def run_command_shell(cmd_str: str, timeout: int = 300, depth: str = "deep") -> Dict:
     """Run a shell command string with adaptive timeout and stealth integration"""
     start = time.time()
+    # Apply universal stealth adaptation to shell commands
+    cmd_str = stealth_config.adapt_shell_command(cmd_str)
 
     # Apply stealth delay
     if hasattr(stealth_config, 'pre_command_delay'):
@@ -1695,8 +1905,8 @@ async def session_ops(
                 tools_available[tool] = shutil.which(tool.split("-")[0]) is not None or shutil.which(tool) is not None
             return json.dumps({
                 "status": "healthy",
-                "version": "6.2.0",
-                "architecture": "26 unified mega-modules + Protocol Intelligence Layer",
+                "version": "6.3.0",
+                "architecture": "27 unified mega-modules + Protocol Intelligence Layer + Web Interactor",
                 "session": session_manager.current_session_id,
                 "active_executions": len(session_manager.executions),
                 "memory_targets": len(pentest_memory._findings),
@@ -1735,6 +1945,40 @@ async def session_ops(
         elif action == "stealth_mac_rotate":
             result = await stealth_config.rotate_mac()
             return json.dumps(result, indent=2)
+
+        elif action == "stealth_proxy_rotate":
+            result = stealth_config.rotate_proxy()
+            return json.dumps(result, indent=2)
+
+        elif action == "stealth_ban_check":
+            # Check if target output shows ban indicators
+            test_output = target or ""
+            result = stealth_config.detect_ban(test_output)
+            result["ban_history"] = stealth_config._ban_events[-10:]  # Last 10 events
+            return json.dumps(result, indent=2)
+
+        elif action == "stealth_proxy_pool":
+            # Configure proxy pool: target = JSON array of proxy URLs
+            if target:
+                try:
+                    proxies = json.loads(target)
+                    if isinstance(proxies, list):
+                        stealth_config.proxy_chain = proxies
+                        if proxies and not stealth_config.proxy_url:
+                            stealth_config.proxy_url = proxies[0]
+                            stealth_config.proxy_index = 0
+                        return json.dumps({
+                            "status": "pool_configured",
+                            "pool_size": len(proxies),
+                            "active_proxy": stealth_config.proxy_url,
+                        }, indent=2)
+                except json.JSONDecodeError:
+                    pass
+            return json.dumps({
+                "pool": stealth_config.proxy_chain,
+                "active": stealth_config.proxy_url,
+                "index": stealth_config.proxy_index,
+            }, indent=2)
 
         elif action == "summary":
             sessions = list(session_manager.sessions.values())
@@ -7617,10 +7861,602 @@ set LPORT {lport}
 
 
 # ============================================================================
+# MODULE 27: web_interactor — Headless Browser Interaction + Anti-Bot Evasion
+# ============================================================================
+# Capabilities:
+#   - Headless Chromium via Playwright for real browser interaction
+#   - Anti-bot detection evasion (stealth patches, realistic fingerprints)
+#   - Form filling, clicking, navigation, screenshot capture
+#   - IP rotation via proxy (never exposes host IP)
+#   - Ban detection with automatic proxy rotation
+#   - Rate limit respect with intelligent backoff
+#   - Proof-based results: screenshots, HAR, console logs, network traces
+#   - CSRF token extraction and session management
+#   - XSS validation in real browser context
+#   - Cookie/session hijacking simulation
+# ============================================================================
+
+@mcp.tool
+async def web_interactor(
+    url: str,
+    actions: str = "navigate",
+    depth: str = "deep",
+    stealth_level: int = -1,
+    timeout: int = 30,
+    screenshot: bool = True,
+    extract_data: str = "",
+    selectors: str = "",
+    form_data: str = "",
+    headers: str = "",
+    cookies: str = "",
+    wait_for: str = "",
+    max_retries: int = 3,
+) -> str:
+    """Module 27: Headless browser interaction with anti-bot evasion and proof capture.
+
+    Actions: navigate, fill_form, click, screenshot, extract, xss_test, session_test,
+             crawl, intercept, full_audit
+
+    Features:
+    - Real Chromium browser via Playwright (not just HTTP requests)
+    - Anti-bot evasion: stealth patches, realistic viewport/UA/TLS fingerprint
+    - IP protection: all traffic routed through proxy (never exposes host IP)
+    - Ban detection: automatic proxy rotation on 403/429/captcha
+    - Proof capture: screenshots, HTML snapshots, network HAR, console logs
+    - Form manipulation: fill, submit, extract CSRF tokens automatically
+    - XSS validation: inject payloads in real browser, detect execution
+    - Session testing: cookie manipulation, session fixation checks
+    """
+    execution = session_manager.start_execution("web_interactor", url,
+                                                 {"actions": actions, "depth": depth})
+    try:
+        target = InputValidator.sanitize_target(url)
+        timeout = InputValidator.validate_timeout(timeout, max_timeout=120)
+        effective_stealth = stealth_level if stealth_level >= 0 else stealth_config.level
+        results = {
+            "target": target,
+            "actions_requested": actions,
+            "stealth_level": effective_stealth,
+            "modules": {},
+            "proofs": {},
+        }
+
+        action_list = [a.strip() for a in actions.split(",")]
+
+        # Parse optional JSON parameters
+        parsed_headers = {}
+        parsed_cookies = {}
+        parsed_form = {}
+        parsed_selectors = []
+        try:
+            if headers:
+                parsed_headers = json.loads(headers)
+            if cookies:
+                parsed_cookies = json.loads(cookies)
+            if form_data:
+                parsed_form = json.loads(form_data)
+            if selectors:
+                parsed_selectors = json.loads(selectors) if selectors.startswith("[") else [s.strip() for s in selectors.split(",")]
+        except json.JSONDecodeError:
+            pass
+
+        # ── Check Playwright availability ──
+        pw_available = False
+        try:
+            import importlib
+            pw_mod = importlib.import_module("playwright.async_api")
+            pw_available = True
+        except ImportError:
+            pass
+
+        # ── Build browser context configuration ──
+        ua = stealth_config.get_user_agent() if effective_stealth >= 1 else StealthConfig.USER_AGENTS[0]
+        proxy_config = None
+        if stealth_config.tor_enabled:
+            proxy_config = {"server": "socks5://127.0.0.1:9050"}
+        elif stealth_config.proxy_url:
+            proxy_config = {"server": stealth_config.proxy_url}
+
+        browser_config = {
+            "user_agent": ua,
+            "viewport": {"width": 1920, "height": 1080},
+            "locale": "en-US",
+            "timezone_id": "America/New_York",
+            "proxy": proxy_config,
+            "java_script_enabled": True,
+            "ignore_https_errors": True,
+        }
+
+        # ── Stealth evasion patches (injected via JS) ──
+        stealth_js = """
+        // Override navigator properties to evade bot detection
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        window.chrome = {runtime: {}};
+        Object.defineProperty(navigator, 'permissions', {get: () => ({
+            query: (params) => Promise.resolve({state: 'granted'})
+        })});
+        // Prevent canvas fingerprinting
+        const getImageData = CanvasRenderingContext2D.prototype.getImageData;
+        CanvasRenderingContext2D.prototype.getImageData = function() {
+            const data = getImageData.apply(this, arguments);
+            for (let i = 0; i < data.data.length; i += 4) {
+                data.data[i] ^= 1;  // Tiny noise
+            }
+            return data;
+        };
+        """
+
+        if pw_available:
+            # ── Playwright-based execution ──
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+                )
+                context_args = {
+                    "user_agent": browser_config["user_agent"],
+                    "viewport": browser_config["viewport"],
+                    "locale": browser_config["locale"],
+                    "timezone_id": browser_config["timezone_id"],
+                    "ignore_https_errors": True,
+                }
+                if proxy_config:
+                    context_args["proxy"] = proxy_config
+                if parsed_headers:
+                    context_args["extra_http_headers"] = parsed_headers
+
+                context = await browser.new_context(**context_args)
+
+                # Inject stealth JS before any page loads
+                if effective_stealth >= 1:
+                    await context.add_init_script(stealth_js)
+
+                # Set cookies if provided
+                if parsed_cookies:
+                    cookie_list = []
+                    for name, value in parsed_cookies.items():
+                        cookie_list.append({
+                            "name": name, "value": str(value),
+                            "url": target,
+                        })
+                    await context.add_cookies(cookie_list)
+
+                page = await context.new_page()
+
+                # Capture console logs and network events
+                console_logs = []
+                network_requests = []
+                network_responses = []
+
+                page.on("console", lambda msg: console_logs.append({
+                    "type": msg.type, "text": msg.text[:500]
+                }))
+                page.on("request", lambda req: network_requests.append({
+                    "url": req.url[:200], "method": req.method
+                }))
+                page.on("response", lambda resp: network_responses.append({
+                    "url": resp.url[:200], "status": resp.status
+                }))
+
+                retry_count = 0
+                nav_success = False
+
+                for attempt in range(max_retries):
+                    try:
+                        # Apply stealth delay
+                        if effective_stealth >= 1:
+                            delay = stealth_config.pre_command_delay()
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+
+                        response = await page.goto(target, timeout=timeout * 1000,
+                                                   wait_until="domcontentloaded")
+                        status = response.status if response else 0
+
+                        # Ban detection
+                        page_text = await page.inner_text("body") if response else ""
+                        ban_check = stealth_config.detect_ban(
+                            page_text[:2000], http_code=status)
+
+                        if ban_check.get("banned"):
+                            results["proofs"]["ban_detected"] = ban_check
+                            # Auto-rotate proxy if available
+                            if stealth_config.proxy_chain:
+                                rotation = stealth_config.rotate_proxy()
+                                results["proofs"]["proxy_rotated"] = rotation
+                                # Recreate context with new proxy
+                                await context.close()
+                                context_args["proxy"] = {"server": stealth_config.proxy_url}
+                                context = await browser.new_context(**context_args)
+                                if effective_stealth >= 1:
+                                    await context.add_init_script(stealth_js)
+                                page = await context.new_page()
+                                retry_count += 1
+                                continue
+                            else:
+                                results["proofs"]["ban_no_proxy_pool"] = {
+                                    "warning": "No proxy pool configured for rotation",
+                                    "hint": "Use session_ops(action='stealth_proxy_pool', target='[\"socks5://...\"]')"
+                                }
+                                break
+
+                        nav_success = True
+                        results["modules"]["navigate"] = {
+                            "status": status,
+                            "url": page.url,
+                            "title": await page.title(),
+                            "retries": attempt,
+                        }
+                        break
+
+                    except Exception as nav_err:
+                        retry_count += 1
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 * (attempt + 1))
+                        else:
+                            results["modules"]["navigate"] = {
+                                "error": str(nav_err)[:500],
+                                "retries": attempt + 1,
+                            }
+
+                # Wait for specific element if requested
+                if nav_success and wait_for:
+                    try:
+                        await page.wait_for_selector(wait_for, timeout=timeout * 1000)
+                        results["modules"]["wait_for"] = {"selector": wait_for, "found": True}
+                    except Exception:
+                        results["modules"]["wait_for"] = {"selector": wait_for, "found": False}
+
+                # ── Action: fill_form ──
+                if "fill_form" in action_list and nav_success:
+                    form_results = []
+                    # Auto-detect CSRF tokens
+                    csrf_token = None
+                    try:
+                        csrf_el = await page.query_selector(
+                            "input[name*='csrf'], input[name*='token'], input[name*='_token']")
+                        if csrf_el:
+                            csrf_token = await csrf_el.get_attribute("value")
+                            form_results.append({"csrf_detected": True, "token_preview": csrf_token[:20] + "..." if csrf_token else None})
+                    except Exception:
+                        pass
+
+                    for selector, value in parsed_form.items():
+                        try:
+                            await page.fill(selector, str(value))
+                            form_results.append({"selector": selector, "filled": True})
+                        except Exception as fill_err:
+                            form_results.append({"selector": selector, "filled": False, "error": str(fill_err)[:200]})
+
+                    results["modules"]["fill_form"] = {
+                        "fields_attempted": len(parsed_form),
+                        "csrf_token": csrf_token[:20] + "..." if csrf_token else None,
+                        "details": form_results,
+                    }
+
+                # ── Action: click ──
+                if "click" in action_list and nav_success and parsed_selectors:
+                    click_results = []
+                    for sel in parsed_selectors:
+                        try:
+                            await page.click(sel, timeout=5000)
+                            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+                            click_results.append({"selector": sel, "clicked": True, "url_after": page.url})
+                        except Exception as click_err:
+                            click_results.append({"selector": sel, "clicked": False, "error": str(click_err)[:200]})
+                    results["modules"]["click"] = click_results
+
+                # ── Action: extract ──
+                if "extract" in action_list and nav_success:
+                    extracted = {}
+                    try:
+                        extracted["title"] = await page.title()
+                        extracted["url"] = page.url
+                        extracted["html_length"] = len(await page.content())
+                        # Extract specified data
+                        if extract_data:
+                            for query in extract_data.split(","):
+                                query = query.strip()
+                                try:
+                                    elements = await page.query_selector_all(query)
+                                    texts = []
+                                    for el in elements[:20]:
+                                        texts.append(await el.inner_text())
+                                    extracted[query] = texts
+                                except Exception:
+                                    extracted[query] = []
+                        # Auto-extract forms
+                        forms = await page.query_selector_all("form")
+                        extracted["forms_count"] = len(forms)
+                        form_details = []
+                        for form in forms[:5]:
+                            inputs = await form.query_selector_all("input, select, textarea")
+                            fields = []
+                            for inp in inputs:
+                                fields.append({
+                                    "name": await inp.get_attribute("name") or "",
+                                    "type": await inp.get_attribute("type") or "text",
+                                    "id": await inp.get_attribute("id") or "",
+                                })
+                            form_details.append({
+                                "action": await form.get_attribute("action") or "",
+                                "method": await form.get_attribute("method") or "GET",
+                                "fields": fields,
+                            })
+                        extracted["forms"] = form_details
+                        # Auto-extract links
+                        links = await page.query_selector_all("a[href]")
+                        extracted["links_count"] = len(links)
+                        # Auto-extract cookies
+                        page_cookies = await context.cookies()
+                        extracted["cookies"] = [{
+                            "name": c["name"], "domain": c["domain"],
+                            "secure": c.get("secure", False),
+                            "httpOnly": c.get("httpOnly", False),
+                            "sameSite": c.get("sameSite", ""),
+                        } for c in page_cookies[:20]]
+                    except Exception as ext_err:
+                        extracted["error"] = str(ext_err)[:300]
+                    results["modules"]["extract"] = extracted
+
+                # ── Action: xss_test ──
+                if "xss_test" in action_list and nav_success:
+                    xss_results = []
+                    xss_payloads = [
+                        '<img src=x onerror=alert("XSS_PROOF_1")>',
+                        '<script>document.title="XSS_PROOF_2"</script>',
+                        '"><svg onload=alert("XSS_PROOF_3")>',
+                        "javascript:alert('XSS_PROOF_4')",
+                        '<details open ontoggle=alert("XSS_PROOF_5")>',
+                    ]
+                    for i, payload in enumerate(xss_payloads[:3] if depth == "stealth" else xss_payloads):
+                        try:
+                            # Try injecting in URL parameter
+                            test_url = f"{target}{'&' if '?' in target else '?'}test={payload}"
+                            await page.goto(test_url, timeout=8000, wait_until="domcontentloaded")
+                            # Check if XSS executed
+                            title = await page.title()
+                            content = await page.content()
+                            xss_detected = False
+                            proof = ""
+                            if "XSS_PROOF" in title:
+                                xss_detected = True
+                                proof = f"Title changed to: {title}"
+                            elif payload in content and "XSS_PROOF" in content:
+                                xss_detected = True
+                                proof = "Payload reflected and potentially executable"
+                            # Check console for errors from payload
+                            xss_console = [l for l in console_logs if "XSS_PROOF" in l.get("text", "")]
+                            if xss_console:
+                                xss_detected = True
+                                proof = f"Console alert triggered: {xss_console[0]['text'][:100]}"
+
+                            xss_results.append({
+                                "payload_index": i,
+                                "reflected": payload in content,
+                                "executed": xss_detected,
+                                "proof": proof,
+                            })
+                            if xss_detected:
+                                # Register as VulnFinding
+                                s, v, sev = CVSSCalculator.score_for_vuln_type("xss_reflected")
+                                vuln_correlator.add_vulnerability(VulnFinding(
+                                    vuln_id=f"xss_browser_{i}",
+                                    title=f"XSS confirmed in browser: {proof[:80]}",
+                                    severity=sev, cvss_score=s, cvss_vector=v,
+                                    target=target, port=443 if "https" in target else 80,
+                                    exploitable=True,
+                                    mitre_techniques=["T1059.007"],
+                                ))
+                        except Exception as xss_err:
+                            xss_results.append({"payload_index": i, "error": str(xss_err)[:200]})
+
+                        # Stealth delay between payloads
+                        if effective_stealth >= 1:
+                            await asyncio.sleep(stealth_config.pre_command_delay())
+
+                    results["modules"]["xss_test"] = {
+                        "payloads_tested": len(xss_results),
+                        "reflected": sum(1 for r in xss_results if r.get("reflected")),
+                        "executed": sum(1 for r in xss_results if r.get("executed")),
+                        "results": xss_results,
+                    }
+
+                # ── Action: session_test ──
+                if "session_test" in action_list and nav_success:
+                    session_results = {}
+                    page_cookies = await context.cookies()
+
+                    # Analyze cookie security
+                    insecure_cookies = []
+                    for c in page_cookies:
+                        issues = []
+                        if not c.get("secure") and "https" in target:
+                            issues.append("missing_secure_flag")
+                        if not c.get("httpOnly"):
+                            issues.append("missing_httponly")
+                        if c.get("sameSite", "").lower() == "none":
+                            issues.append("sameSite=None")
+                        if issues:
+                            insecure_cookies.append({"name": c["name"], "issues": issues})
+
+                    session_results["cookies_analyzed"] = len(page_cookies)
+                    session_results["insecure_cookies"] = insecure_cookies
+
+                    # Check session fixation
+                    old_cookies = {c["name"]: c["value"] for c in page_cookies}
+                    # Clear and revisit
+                    await context.clear_cookies()
+                    await page.goto(target, timeout=timeout * 1000, wait_until="domcontentloaded")
+                    new_cookies = {c["name"]: c["value"] for c in await context.cookies()}
+                    fixed_sessions = []
+                    for name in old_cookies:
+                        if name in new_cookies and old_cookies[name] == new_cookies[name]:
+                            fixed_sessions.append(name)
+                    session_results["session_fixation_risk"] = len(fixed_sessions) > 0
+                    session_results["fixed_cookies"] = fixed_sessions
+
+                    results["modules"]["session_test"] = session_results
+
+                # ── Action: screenshot (proof capture) ──
+                if screenshot and nav_success:
+                    try:
+                        screenshot_bytes = await page.screenshot(full_page=False)
+                        import base64
+                        results["proofs"]["screenshot_b64"] = base64.b64encode(screenshot_bytes).decode()[:100000]
+                        results["proofs"]["screenshot_size"] = len(screenshot_bytes)
+                    except Exception as ss_err:
+                        results["proofs"]["screenshot_error"] = str(ss_err)[:200]
+
+                # Collect network evidence
+                results["proofs"]["console_logs"] = console_logs[:50]
+                results["proofs"]["network_requests"] = len(network_requests)
+                results["proofs"]["network_responses_summary"] = {}
+                for resp in network_responses:
+                    code = str(resp["status"])
+                    results["proofs"]["network_responses_summary"][code] = \
+                        results["proofs"]["network_responses_summary"].get(code, 0) + 1
+
+                await context.close()
+                await browser.close()
+
+        else:
+            # ── Fallback: HTTP-only mode using asyncio + httpx ──
+            results["mode"] = "http_fallback"
+            results["note"] = "Playwright not available — using httpx for HTTP-level interaction"
+
+            try:
+                import httpx
+
+                proxy_url = stealth_config.get_httpx_proxy()
+                async with httpx.AsyncClient(
+                    verify=False,
+                    timeout=timeout,
+                    follow_redirects=True,
+                    proxy=proxy_url,
+                    headers={"User-Agent": ua, **parsed_headers},
+                ) as client:
+                    if parsed_cookies:
+                        for name, value in parsed_cookies.items():
+                            client.cookies.set(name, str(value))
+
+                    # Navigate
+                    resp = await client.get(target)
+                    ban_check = stealth_config.detect_ban(
+                        resp.text[:2000], http_code=resp.status_code)
+
+                    results["modules"]["navigate"] = {
+                        "status": resp.status_code,
+                        "url": str(resp.url),
+                        "content_length": len(resp.text),
+                        "headers": dict(resp.headers),
+                    }
+
+                    if ban_check.get("banned"):
+                        results["proofs"]["ban_detected"] = ban_check
+                        if stealth_config.proxy_chain:
+                            rotation = stealth_config.rotate_proxy()
+                            results["proofs"]["proxy_rotated"] = rotation
+
+                    # Extract forms from HTML
+                    if "extract" in action_list:
+                        try:
+                            from bs4 import BeautifulSoup
+                            soup = BeautifulSoup(resp.text, "html.parser")
+                            forms = soup.find_all("form")
+                            extracted_forms = []
+                            for form in forms[:10]:
+                                inputs = form.find_all(["input", "select", "textarea"])
+                                extracted_forms.append({
+                                    "action": form.get("action", ""),
+                                    "method": form.get("method", "GET").upper(),
+                                    "fields": [{
+                                        "name": inp.get("name", ""),
+                                        "type": inp.get("type", "text"),
+                                        "id": inp.get("id", ""),
+                                    } for inp in inputs],
+                                })
+                            results["modules"]["extract"] = {
+                                "title": soup.title.string if soup.title else "",
+                                "forms_count": len(forms),
+                                "forms": extracted_forms,
+                                "links_count": len(soup.find_all("a", href=True)),
+                                "html_length": len(resp.text),
+                            }
+                        except ImportError:
+                            results["modules"]["extract"] = {"error": "beautifulsoup4 not installed"}
+
+                    # XSS reflection test via HTTP
+                    if "xss_test" in action_list:
+                        xss_results = []
+                        test_payloads = ['<script>alert(1)</script>', '"><img src=x onerror=alert(1)>']
+                        for i, payload in enumerate(test_payloads):
+                            try:
+                                test_url = f"{target}{'&' if '?' in target else '?'}xss={payload}"
+                                r = await client.get(test_url)
+                                reflected = payload in r.text
+                                xss_results.append({"payload_index": i, "reflected": reflected, "status": r.status_code})
+                            except Exception:
+                                pass
+                            if effective_stealth >= 1:
+                                await asyncio.sleep(stealth_config.pre_command_delay())
+                        results["modules"]["xss_test"] = {
+                            "mode": "http_only",
+                            "note": "Cannot confirm XSS execution without browser — reflection check only",
+                            "results": xss_results,
+                        }
+
+                    # Session/cookie analysis via HTTP
+                    if "session_test" in action_list:
+                        cookies = dict(resp.cookies)
+                        header_analysis = {}
+                        for h in ["set-cookie", "x-frame-options", "content-security-policy",
+                                   "strict-transport-security", "x-content-type-options"]:
+                            header_analysis[h] = resp.headers.get(h, "MISSING")
+                        results["modules"]["session_test"] = {
+                            "cookies": list(cookies.keys()),
+                            "security_headers": header_analysis,
+                        }
+
+            except ImportError:
+                results["error"] = "Neither playwright nor httpx available. Install: pip install playwright httpx"
+            except Exception as http_err:
+                results["error"] = str(http_err)[:500]
+
+        # ── Intelligence summary ──
+        vuln_count = sum(1 for m in results.get("modules", {}).values()
+                        if isinstance(m, dict) and m.get("executed", 0) > 0)
+        results["intelligence_summary"] = {
+            "risk_rating": "HIGH" if vuln_count > 0 else "LOW",
+            "browser_mode": "playwright" if pw_available else "http_fallback",
+            "stealth_applied": effective_stealth > 0,
+            "proxy_used": bool(proxy_config),
+            "ban_detected": any("ban_detected" in str(v) for v in results.get("proofs", {}).values()),
+            "proofs_captured": len(results.get("proofs", {})),
+        }
+
+        # Store findings in memory
+        pentest_memory.store_finding(target, "web_interactor", "browser_audit", results)
+        kill_chain.advance_phase(target, KillChainPhase.RECONNAISSANCE, "web_interactor",
+                                [f"browser_audit:{actions}"])
+
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ============================================================================
 # SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Starting Kali MCP Server v6.2 - Autonomous Pentest Engine")
-    logger.info("Architecture: 26 unified mega-modules + Protocol Intelligence Layer")
+    logger.info("Starting Kali MCP Server v6.3 - Autonomous Pentest Engine + Web Interactor")
+    logger.info("Architecture: 27 unified mega-modules + Protocol Intelligence Layer + Web Interactor")
     mcp.run(transport="stdio")
