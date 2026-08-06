@@ -7,7 +7,14 @@ from pathlib import Path
 
 from gateway.audit import AuditLog
 from gateway.mcp_client import InMemoryMCPClient
-from gateway.ollama import ModelRoles, OllamaOrchestrator, PlanError
+from gateway.ollama import (
+    DOLPHIN_PHI_MODEL,
+    PHI4_MODEL,
+    HTTPOllamaTransport,
+    ModelRoles,
+    OllamaOrchestrator,
+    PlanError,
+)
 
 
 class FakeTransport:
@@ -17,16 +24,26 @@ class FakeTransport:
 
     async def generate(self, model, prompt, *, schema=None):
         self.calls.append({"model": model, "prompt": prompt, "schema": schema})
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class OllamaOrchestratorTests(unittest.TestCase):
-    def test_three_expected_local_models_have_distinct_roles(self):
+    def test_phi4_is_primary_for_all_roles_with_dolphin_fallback(self):
         roles = ModelRoles()
-        self.assertEqual(roles.router, "qwen3:1.7b")
-        self.assertEqual(roles.analyzer, "qwen2.5-coder:3b")
-        self.assertEqual(roles.validator, "llama3.2:3b")
-        self.assertEqual(len({roles.router, roles.analyzer, roles.validator}), 3)
+        self.assertEqual(roles.router, PHI4_MODEL)
+        self.assertEqual(roles.analyzer, PHI4_MODEL)
+        self.assertEqual(roles.validator, PHI4_MODEL)
+        self.assertEqual(roles.fallback, DOLPHIN_PHI_MODEL)
+        self.assertNotIn("smollm", " ".join(vars(roles).values()).lower())
+
+    def test_transport_timeout_is_strictly_bounded(self):
+        self.assertEqual(HTTPOllamaTransport(timeout_seconds=30).timeout_seconds, 30)
+        for invalid in (0, 121):
+            with self.assertRaises(ValueError):
+                HTTPOllamaTransport(timeout_seconds=invalid)
 
     def test_router_accepts_only_strict_known_tool_json(self):
         transport = FakeTransport([
@@ -40,7 +57,31 @@ class OllamaOrchestratorTests(unittest.TestCase):
         plan = asyncio.run(orchestrator.plan("inventory localhost", allowed_tools={"recon_engine"}))
         self.assertEqual(plan.tool, "recon_engine")
         self.assertEqual(plan.arguments["target"], "localhost")
-        self.assertEqual(transport.calls[0]["model"], "qwen3:1.7b")
+        self.assertEqual(transport.calls[0]["model"], PHI4_MODEL)
+
+    def test_transport_failure_retries_once_with_dolphin_phi(self):
+        transport = FakeTransport([
+            RuntimeError("primary unavailable"),
+            json.dumps({
+                "tool": "recon_engine",
+                "arguments": {"target": "localhost"},
+                "rationale": "Fallback local inventory",
+            }),
+        ])
+        orchestrator = OllamaOrchestrator(transport=transport)
+        plan = asyncio.run(orchestrator.plan("inventory", allowed_tools={"recon_engine"}))
+        self.assertEqual(plan.tool, "recon_engine")
+        self.assertEqual(
+            [call["model"] for call in transport.calls],
+            [PHI4_MODEL, DOLPHIN_PHI_MODEL],
+        )
+
+    def test_invalid_primary_output_is_not_retried_with_fallback(self):
+        transport = FakeTransport(["not-json"])
+        orchestrator = OllamaOrchestrator(transport=transport)
+        with self.assertRaises(PlanError):
+            asyncio.run(orchestrator.plan("inventory", allowed_tools={"recon_engine"}))
+        self.assertEqual(len(transport.calls), 1)
 
     def test_unknown_or_hallucinated_tool_is_rejected(self):
         transport = FakeTransport([
@@ -66,9 +107,10 @@ class OllamaOrchestratorTests(unittest.TestCase):
         orchestrator = OllamaOrchestrator(transport=transport)
         review = asyncio.run(orchestrator.review({"target": "localhost", "ports": [8000]}))
         self.assertTrue(review["validation"]["valid"])
-        self.assertEqual([call["model"] for call in transport.calls], [
-            "qwen2.5-coder:3b", "llama3.2:3b"
-        ])
+        self.assertEqual(
+            [call["model"] for call in transport.calls],
+            [PHI4_MODEL, PHI4_MODEL],
+        )
 
 
 class MCPClientAndAuditTests(unittest.TestCase):

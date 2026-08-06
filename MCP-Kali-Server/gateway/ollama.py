@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
+import os
 from typing import Any, Protocol
 from urllib import error, request
 
@@ -12,11 +13,18 @@ class PlanError(ValueError):
     pass
 
 
+PHI4_MODEL = "hf.co/mradermacher/Phi-4-Mini-Abliterated-GGUF:Q4_K_M"
+DOLPHIN_PHI_MODEL = "dolphin-phi:latest"
+
+
 @dataclass(frozen=True)
 class ModelRoles:
-    router: str = "qwen3:1.7b"
-    analyzer: str = "qwen2.5-coder:3b"
-    validator: str = "llama3.2:3b"
+    """Use Phi-4 for every constrained reasoning role with one local fallback."""
+
+    router: str = os.getenv("OLLAMA_PRIMARY_MODEL", PHI4_MODEL)
+    analyzer: str = os.getenv("OLLAMA_PRIMARY_MODEL", PHI4_MODEL)
+    validator: str = os.getenv("OLLAMA_PRIMARY_MODEL", PHI4_MODEL)
+    fallback: str = os.getenv("OLLAMA_FALLBACK_MODEL", DOLPHIN_PHI_MODEL)
 
 
 @dataclass(frozen=True)
@@ -31,8 +39,21 @@ class OllamaTransport(Protocol):
 
 
 class HTTPOllamaTransport:
-    def __init__(self, base_url: str = "http://127.0.0.1:11434") -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:11434",
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        configured_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
+        )
+        if not 1 <= configured_timeout <= 120:
+            raise ValueError("Ollama timeout must be between 1 and 120 seconds")
+        self.timeout_seconds = configured_timeout
 
     def _generate_sync(self, model: str, prompt: str, schema: dict[str, Any] | None) -> str:
         payload: dict[str, Any] = {
@@ -50,7 +71,7 @@ class HTTPOllamaTransport:
             method="POST",
         )
         try:
-            with request.urlopen(req, timeout=120) as response:
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
                 result = json.load(response)
         except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Ollama request failed: {exc}") from exc
@@ -117,6 +138,27 @@ class OllamaOrchestrator:
         self.transport = transport or HTTPOllamaTransport()
         self.roles = roles or ModelRoles()
 
+    async def _generate(
+        self,
+        model: str,
+        prompt: str,
+        *,
+        schema: dict[str, Any],
+    ) -> str:
+        """Retry transport failures once with the explicit local fallback model."""
+        try:
+            return await self.transport.generate(model, prompt, schema=schema)
+        except (RuntimeError, TimeoutError, asyncio.TimeoutError) as primary_error:
+            if model == self.roles.fallback:
+                raise
+            try:
+                return await self.transport.generate(self.roles.fallback, prompt, schema=schema)
+            except (RuntimeError, TimeoutError, asyncio.TimeoutError) as fallback_error:
+                raise RuntimeError(
+                    f"Ollama primary model {model!r} and fallback "
+                    f"{self.roles.fallback!r} both failed"
+                ) from fallback_error
+
     async def plan(self, objective: str, *, allowed_tools: set[str]) -> ToolPlan:
         if not objective.strip() or not allowed_tools:
             raise PlanError("objective and at least one allowed tool are required")
@@ -125,7 +167,7 @@ class OllamaOrchestrator:
             "Select exactly one tool from this allowlist: "
             f"{sorted(allowed_tools)}. Return strict JSON only. Objective: {objective}"
         )
-        raw = await self.transport.generate(self.roles.router, prompt, schema=_PLAN_SCHEMA)
+        raw = await self._generate(self.roles.router, prompt, schema=_PLAN_SCHEMA)
         data = _strict_object(raw, {"tool", "arguments", "rationale"}, {"tool", "arguments", "rationale"})
         if data["tool"] not in allowed_tools:
             raise PlanError("model selected a tool outside the explicit allowlist")
@@ -135,7 +177,7 @@ class OllamaOrchestrator:
 
     async def review(self, tool_result: dict[str, Any]) -> dict[str, Any]:
         safe_result = json.dumps(tool_result, sort_keys=True, default=str)[:50_000]
-        analysis_raw = await self.transport.generate(
+        analysis_raw = await self._generate(
             self.roles.analyzer,
             "Analyze this authorized pentest result. Do not invent evidence. Return strict JSON: " + safe_result,
             schema=_ANALYSIS_SCHEMA,
@@ -145,7 +187,7 @@ class OllamaOrchestrator:
             {"summary", "severity", "findings"},
             {"summary", "severity", "findings"},
         )
-        validation_raw = await self.transport.generate(
+        validation_raw = await self._generate(
             self.roles.validator,
             "Validate that this analysis is supported by the supplied result. Return strict JSON only. "
             + json.dumps({"result": tool_result, "analysis": analysis}, default=str)[:60_000],

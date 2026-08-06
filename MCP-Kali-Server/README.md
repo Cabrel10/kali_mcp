@@ -1,18 +1,30 @@
 # Kali MCP Server v6.3 — Autonomous Pentest Engine + Protocol Intelligence + Web Interactor
 
-> 27 unified mega-modules | Protocol Intelligence Layer | Web Interactor (Playwright) | Honeypot Detection | Auto-Exploitation | Universal Stealth (9 tools) | Kill chain tracking | CVSS v3.1 scoring | MITRE ATT&CK mapping | Parallel execution | Cross-module correlation
+> 27 unified mega-modules | Protocol Intelligence Layer | Web Interactor (Playwright) | Honeypot Detection | Gateway-enforced scope | CVSS v3.1 scoring | MITRE ATT&CK mapping | Parallel execution | Cross-module correlation
+
+---
+
+## AI-Powered Architecture (v6.3+)
+
+The constrained local orchestration uses:
+- **Phi-4-Mini Abliterated** as the unified router, analyzer, and validator;
+- **dolphin-phi** as a one-shot fallback for transport/model failures;
+- strict JSON schemas and an explicit MCP tool allowlist;
+- bounded Ollama requests and detection-only Nuclei execution.
+
+**Current status:** safety-hardening in progress. Do not treat model output or a successful scan as authorization. External Nuclei targets require an exact `NUCLEI_ALLOWED_TARGETS` entry and a non-empty authorization reference. Automatic exploitation tools remain disabled at the gateway boundary.
 
 ## Architecture
 
 ```
 72 fragmented tools -> 27 unified mega-modules
-Manual decisions    -> Autonomous orchestration + auto-exploitation
+Manual decisions    -> Constrained orchestration + human approval for active tools
 Flat outputs        -> CVSS-scored, correlated, MITRE-mapped intelligence
 Sequential scans    -> Parallel execution with kill-chain tracking
 Static modules      -> Cross-module interconnection (findings feed next modules)
 Command wrappers    -> Native protocol dissection (TCP/TLS/HTTP/DNS)
 Blind scanning      -> Honeypot detection before engagement
-Manual exploitation -> Context-aware auto-exploit with adapted parameters
+Automatic exploits  -> Disabled at the gateway boundary
 No browser testing  -> Headless Playwright with anti-bot evasion + proof capture
 Exposed IP          -> Universal proxy chain + IP rotation (never expose host)
 ```
