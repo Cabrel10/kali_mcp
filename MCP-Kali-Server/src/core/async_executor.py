@@ -9,8 +9,9 @@ import subprocess
 import random
 import os
 import signal
+import shutil
 import psutil
-from typing import Tuple, List, Dict, Optional, Any
+from typing import Tuple, List, Dict, Optional, Any, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -127,6 +128,52 @@ class AsyncExecutor:
                 -1
             )
     
+    async def run_exec(
+        self,
+        arguments: Sequence[str],
+        timeout: int | None = None,
+        env: Optional[Dict[str, str]] = None,
+        rate_limit: bool = True,
+    ) -> Tuple[str, str, int]:
+        """Execute an argument vector without a shell or string interpolation."""
+        if not arguments or not all(isinstance(item, str) and item for item in arguments):
+            raise ValueError("arguments must be a non-empty sequence of strings")
+        timeout = timeout or self.config.SCAN_TIMEOUT
+        if rate_limit and self.config.ENABLE_RATE_LIMITING:
+            await self._apply_rate_limit()
+
+        exec_env = os.environ.copy()
+        if env:
+            exec_env.update(env)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *arguments,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=exec_env,
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+                return "", f"KILLED after {timeout}s timeout", -1
+        except (OSError, ValueError) as exc:
+            return "", f"Exception during execution: {exc}", -1
+
+        return (
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+            process.returncode or 0,
+        )
+
     async def run_command_with_proxy(
         self,
         command: str,
@@ -302,13 +349,13 @@ class AsyncExecutor:
         Returns:
             True if tool is available, False otherwise
         """
-        stdout, stderr, returncode = await self.run_command(
-            f"which {tool_name}",
-            timeout=5,
-            rate_limit=False
-        )
-        
-        return returncode == 0 and stdout.strip() != ""
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            return False
+        candidate = tool_name.strip()
+        if "/" in candidate:
+            path = Path(candidate)
+            return path.is_file() and os.access(path, os.X_OK)
+        return shutil.which(candidate) is not None
     
     async def get_command_output_lines(
         self,
