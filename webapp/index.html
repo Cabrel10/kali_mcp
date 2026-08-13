@@ -6,7 +6,7 @@
 <title>MCP-Clean Portal</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 900px;
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 960px;
          margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
   h1 { color: #58a6ff; margin-bottom: 4px; }
   .sub { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
@@ -19,6 +19,7 @@
            border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }
   button:hover { background: #2ea043; }
   button:disabled { background: #21262d; color: #8b949e; cursor: wait; }
+  button.sec { background: #1f6feb; } button.sec:hover { background: #388bfd; }
   label { font-size: 13px; color: #8b949e; }
   select, input[type=number] { background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
            border-radius: 6px; padding: 6px 8px; font-size: 13px; }
@@ -27,15 +28,25 @@
               font-size: 14px; line-height: 1.6; }
   .meta { color: #8b949e; font-size: 12px; margin-top: 8px; }
   .err { color: #f85149; }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: #58a6ff;
+            animation: blink 1s step-start infinite; vertical-align: text-bottom; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #toolsPanel { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                padding: 14px; margin-top: 20px; display: none; }
+  #toolsPanel h3 { margin: 0 0 10px; color: #58a6ff; font-size: 15px; }
+  #toolsList { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool { background: #21262d; border: 1px solid #30363d; border-radius: 20px;
+          padding: 4px 12px; font-size: 12px; color: #79c0ff; }
 </style>
 </head>
 <body>
-<h1>&#7370;&#65039; MCP-Clean Portal</h1>
-<div class="sub">Chat avec Phi-4-Mini (Abliterated, Q4_K_M) via Ollama &mdash; box CPU-only, g&eacute;n&eacute;ration lente sous charge ADAN, patience.</div>
+<h1>&#128737;&#65039; MCP-Clean Portal</h1>
+<div class="sub">Chat streaming avec Phi-4-Mini (Abliterated, Q4_K_M) via Ollama &mdash; box CPU-only sous charge ADAN : les tokens arrivent progressivement (SSE).</div>
 
-<textarea id="prompt" rows="4" placeholder="Pose ta question à phi-4..."></textarea>
+<textarea id="prompt" rows="4" placeholder="Pose ta question à phi-4... (Ctrl+Entrée pour envoyer)"></textarea>
 <div class="row">
   <button id="sendBtn" onclick="sendChat()">Envoyer</button>
+  <button class="sec" onclick="loadTools()">Outils MCP</button>
   <label>Tokens <input type="number" id="numPredict" value="150" min="10" max="1024" style="width:70px"></label>
   <label>Temp&eacute;rature
     <select id="temp">
@@ -45,8 +56,13 @@
     </select>
   </label>
 </div>
-<div id="response"><span class="meta">La r&eacute;ponse de phi-4 appara&icirc;tra ici.</span></div>
+<div id="response"><span class="meta">La r&eacute;ponse de phi-4 appara&icirc;tra ici, en direct.</span></div>
 <div class="meta" id="stats"></div>
+
+<div id="toolsPanel">
+  <h3>Outils MCP expos&eacute;s (<span id="toolCount">0</span>)</h3>
+  <div id="toolsList"></div>
+</div>
 
 <script>
 async function sendChat() {
@@ -56,11 +72,13 @@ async function sendChat() {
   const respDiv = document.getElementById('response');
   const statsDiv = document.getElementById('stats');
   btn.disabled = true;
-  respDiv.innerHTML = '<span class="meta">phi-4 r&eacute;fl&eacute;chit... (CPU-only, peut prendre 1-3 min sous charge)</span>';
+  respDiv.innerHTML = '<span id="txt"></span><span class="cursor"></span>';
   statsDiv.innerText = '';
+  const txtSpan = document.getElementById('txt');
   const t0 = Date.now();
+  let full = '';
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -69,22 +87,52 @@ async function sendChat() {
         temperature: parseFloat(document.getElementById('temp').value)
       })
     });
-    const data = await res.json();
-    if (data.error) {
-      respDiv.innerHTML = '<span class="err">Erreur: ' + data.error + '</span>';
-    } else {
-      respDiv.innerText = data.response || '(réponse vide)';
-      const dt = ((Date.now() - t0) / 1000).toFixed(1);
-      statsDiv.innerText = data.eval_count
-        ? data.eval_count + ' tokens en ' + data.eval_seconds + 's (' +
-          (data.eval_count / Math.max(data.eval_seconds, 0.1)).toFixed(1) + ' tok/s) — total ' + dt + 's'
-        : 'total ' + dt + 's';
+    if (!res.body) { respDiv.innerHTML = '<span class="err">Pas de flux</span>'; btn.disabled=false; return; }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        try {
+          const obj = JSON.parse(line.slice(5).trim());
+          if (obj.error) { txtSpan.innerHTML = '<span class="err">Erreur: ' + obj.error + '</span>'; continue; }
+          if (obj.token) { full += obj.token; txtSpan.textContent = full; }
+        } catch (e) { /* chunk partiel */ }
+      }
     }
+    const cur = respDiv.querySelector('.cursor'); if (cur) cur.remove();
+    if (!full) txtSpan.innerHTML = '<span class="meta">(réponse vide)</span>';
+    const dt = ((Date.now() - t0) / 1000).toFixed(1);
+    statsDiv.innerText = full.length + ' caractères en ' + dt + 's';
   } catch (e) {
     respDiv.innerHTML = '<span class="err">Réseau: ' + e.message + '</span>';
   }
   btn.disabled = false;
 }
+
+async function loadTools() {
+  const panel = document.getElementById('toolsPanel');
+  const list = document.getElementById('toolsList');
+  try {
+    const res = await fetch('/api/tools');
+    const data = await res.json();
+    document.getElementById('toolCount').innerText = data.count;
+    list.innerHTML = data.tools.map(t => '<span class="tool">' + t + '</span>').join('');
+    panel.style.display = 'block';
+    panel.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    list.innerHTML = '<span class="err">Erreur: ' + e.message + '</span>';
+    panel.style.display = 'block';
+  }
+}
+
 document.getElementById('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat();
 });

@@ -115,3 +115,16 @@ sans impact sur le serveur MCP (n'utilise pas redis).
 - [ ] Corriger `.gemini/settings.json` avec les chemins réels
 - [ ] Portail client avec quota/abonnement par session + wallet (gestion frais) — **pas encore fait**
 - [ ] Intégrer Nuclei (P1), bridge Metasploit (P2), Faraday reporting (P3)
+
+---
+
+## Portail Web (13 août 2026)
+
+**MCP-Clean Portal : http://localhost:8100** (8098/8099 occupés par wings/Pterodactyl)
+
+- `GET /` : interface de chat sombre, streaming SSE (phi-4 s'exprime en direct, plus de timeout sous charge ADAN)
+- `GET /api/health` : statut + modèle (`hf.co/mradermacher/Phi-4-Mini-Abliterated-GGUF:Q4_K_M`)
+- `POST /api/chat` : mode non-streaming (tests courts uniquement)
+- `POST /api/chat/stream` : **streaming SSE recommandé** (tokens progressifs)
+- `GET /api/tools` : liste les **63 outils MCP** du serveur Kali
+- Démarrage reproductible : `./webapp/start_web.sh`
