@@ -438,8 +438,12 @@ def agent_loop(req: LoopRequest):
                         "result": text})
 
         # 2) boucle LLM
+        # NB: .replace() et non .format() — le template contient des accolades
+        # littérales (exemple ARGS: {"parametre": "valeur"}) qui casseraient
+        # str.format avec KeyError.
         messages = [
-            {"role": "system", "content": _LOOP_SYSTEM.format(tools=_tools_prompt())},
+            {"role": "system",
+             "content": _LOOP_SYSTEM.replace("{tools}", _tools_prompt())},
             {"role": "user", "content": req.message},
         ]
         while step < req.max_steps:
