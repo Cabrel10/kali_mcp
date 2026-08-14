@@ -74,6 +74,7 @@ class AgentRequest(BaseModel):
     tool: str | None = None          # forcer un outil précis (clic panneau)
     tool_arg: str | None = None      # argument principal (domain/target/url...)
     reasoning: bool = False
+    summarize: bool = False          # synthèse phi-4 (lent sous contention CPU)
     temperature: float = 0.2
     max_tokens: int = 300
 
@@ -245,6 +246,11 @@ def agent(req: AgentRequest):
             arguments = _arguments_for(req.tool, arg)
             result = MCP.call_tool(req.tool, arguments)
             executed = {"tool": req.tool, "arguments": arguments, "result": result}
+            # Sans summarize : on renvoie le résultat réel immédiatement,
+            # sans attendre phi-4 (lent quand le CPU est saturé par ADAN).
+            if not req.summarize:
+                return {"reply": _tool_text(result), "executed": executed,
+                        "usage": usage, "summary": False}
             # Demande à phi-4 de résumer le résultat réel.
             summary_prompt = (
                 f"Tu as exécuté l'outil {req.tool} avec {arguments}. "
@@ -255,7 +261,8 @@ def agent(req: AgentRequest):
                 [{"role": "user", "content": summary_prompt}],
                 max_tokens=req.max_tokens, temperature=req.temperature)
             _acc(usage, d)
-            return {"reply": _content(d), "executed": executed, "usage": usage}
+            return {"reply": _content(d), "executed": executed, "usage": usage,
+                    "summary": True}
 
         # Mode conversation : on donne le schéma d'outils à phi-4.
         system = (
