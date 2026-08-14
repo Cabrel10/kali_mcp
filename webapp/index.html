@@ -3,139 +3,239 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP-Clean Portal</title>
+<title>MCP-Clean Console</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 960px;
-         margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
-  h1 { color: #58a6ff; margin-bottom: 4px; }
-  .sub { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
-  textarea { width: 100%; padding: 12px; background: #21262d; color: #c9d1d9;
-             border: 1px solid #30363d; border-radius: 6px; font-size: 14px;
-             font-family: inherit; resize: vertical; }
-  textarea:focus { outline: none; border-color: #58a6ff; }
-  .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  button { padding: 10px 24px; background: #238636; color: #fff; border: none;
-           border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }
-  button:hover { background: #2ea043; }
-  button:disabled { background: #21262d; color: #8b949e; cursor: wait; }
-  button.sec { background: #1f6feb; } button.sec:hover { background: #388bfd; }
-  label { font-size: 13px; color: #8b949e; }
-  select, input[type=number] { background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-           border-radius: 6px; padding: 6px 8px; font-size: 13px; }
-  #response { background: #161b22; padding: 16px; border-radius: 8px; margin-top: 20px;
-              white-space: pre-wrap; min-height: 100px; border: 1px solid #30363d;
-              font-size: 14px; line-height: 1.6; }
-  .meta { color: #8b949e; font-size: 12px; margin-top: 8px; }
-  .err { color: #f85149; }
-  .cursor { display: inline-block; width: 8px; height: 15px; background: #58a6ff;
-            animation: blink 1s step-start infinite; vertical-align: text-bottom; }
-  @keyframes blink { 50% { opacity: 0; } }
-  #toolsPanel { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-                padding: 14px; margin-top: 20px; display: none; }
-  #toolsPanel h3 { margin: 0 0 10px; color: #58a6ff; font-size: 15px; }
-  #toolsList { display: flex; flex-wrap: wrap; gap: 6px; }
-  .tool { background: #21262d; border: 1px solid #30363d; border-radius: 20px;
-          padding: 4px 12px; font-size: 12px; color: #79c0ff; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0;
+         background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+
+  /* ===== Barre du haut ===== */
+  header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 18px;
+           display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; color: #58a6ff; margin: 0; }
+  .stat { font-size: 12px; color: #8b949e; }
+  .stat b { color: #79c0ff; font-size: 14px; }
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8b949e; }
+  .switch { position: relative; width: 36px; height: 20px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; inset: 0; background: #30363d; border-radius: 20px; transition: .2s; }
+  .slider:before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px;
+                   background: #8b949e; border-radius: 50%; transition: .2s; }
+  input:checked + .slider { background: #238636; }
+  input:checked + .slider:before { transform: translateX(16px); background: #fff; }
+
+  /* ===== Layout principal ===== */
+  main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Panneau outils (gauche) */
+  #toolsPane { width: 280px; min-width: 280px; background: #161b22; border-right: 1px solid #30363d;
+               overflow-y: auto; padding: 14px; }
+  #toolsPane h2 { font-size: 13px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px;
+                  margin: 0 0 12px; }
+  .cat { margin-bottom: 14px; }
+  .cat-name { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-bottom: 6px;
+              padding-bottom: 3px; border-bottom: 1px solid #21262d; }
+  .tool-btn { display: block; width: 100%; text-align: left; background: none; border: none;
+              color: #79c0ff; padding: 4px 8px; font-size: 12.5px; cursor: pointer;
+              border-radius: 4px; font-family: inherit; }
+  .tool-btn:hover { background: #21262d; color: #fff; }
+  .tool-btn:before { content: "▸ "; color: #30363d; }
+
+  /* Zone conversation (droite) */
+  #chatPane { flex: 1; display: flex; flex-direction: column; }
+  #history { flex: 1; overflow-y: auto; padding: 18px; }
+  .exchange { margin-bottom: 18px; border: 1px solid #21262d; border-radius: 10px; overflow: hidden; }
+  .ex-q { background: #1f2937; padding: 10px 14px; font-size: 13.5px; color: #e6edf3;
+          border-left: 3px solid #58a6ff; }
+  .ex-q .who { font-size: 10px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+  .ex-a { background: #161b22; padding: 10px 14px; font-size: 13.5px; line-height: 1.6;
+          white-space: pre-wrap; border-left: 3px solid #238636; }
+  .ex-a .who { font-size: 10px; color: #3fb950; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+  .ex-tool { background: #0d1117; padding: 8px 14px; font-size: 11.5px; color: #d2a8ff;
+             border-top: 1px solid #21262d; font-family: monospace; white-space: pre-wrap; }
+  .ex-tool .badge { background: #6e40c9; color: #fff; padding: 1px 8px; border-radius: 10px;
+                    font-size: 10px; margin-right: 6px; }
+  .ex-meta { background: #0d1117; padding: 4px 14px; font-size: 10.5px; color: #484f58;
+             border-top: 1px solid #21262d; }
+  .empty { color: #484f58; text-align: center; margin-top: 60px; font-size: 14px; }
+
+  /* Zone de saisie */
+  #inputBar { border-top: 1px solid #30363d; padding: 14px 18px; background: #161b22; }
+  #inputBar textarea { width: 100%; padding: 11px; background: #0d1117; color: #c9d1d9;
+             border: 1px solid #30363d; border-radius: 8px; font-size: 13.5px; font-family: inherit;
+             resize: none; }
+  #inputBar textarea:focus { outline: none; border-color: #58a6ff; }
+  .inputRow { display: flex; gap: 10px; align-items: center; margin-top: 9px; }
+  #sendBtn { padding: 9px 26px; background: #238636; color: #fff; border: none; border-radius: 7px;
+             cursor: pointer; font-size: 13px; font-weight: 600; }
+  #sendBtn:hover { background: #2ea043; }
+  #sendBtn:disabled { background: #21262d; color: #8b949e; cursor: wait; }
+  .hint { font-size: 11px; color: #484f58; margin-left: auto; }
+  #pendingTool { background: #6e40c9; color: #fff; font-size: 11px; padding: 4px 12px;
+                 border-radius: 12px; display: none; align-items: center; gap: 8px; }
+  #pendingTool .x { cursor: pointer; font-weight: bold; }
 </style>
 </head>
 <body>
-<h1>&#128737;&#65039; MCP-Clean Portal</h1>
-<div class="sub">Chat streaming avec Phi-4-Mini (Abliterated, Q4_K_M) via Ollama &mdash; box CPU-only sous charge ADAN : les tokens arrivent progressivement (SSE).</div>
 
-<textarea id="prompt" rows="4" placeholder="Pose ta question à phi-4... (Ctrl+Entrée pour envoyer)"></textarea>
-<div class="row">
-  <button id="sendBtn" onclick="sendChat()">Envoyer</button>
-  <button class="sec" onclick="loadTools()">Outils MCP</button>
-  <label>Tokens <input type="number" id="numPredict" value="150" min="10" max="1024" style="width:70px"></label>
-  <label>Temp&eacute;rature
-    <select id="temp">
-      <option value="0.1">0.1 (précis)</option>
-      <option value="0.7" selected>0.7 (équilibré)</option>
-      <option value="1.0">1.0 (créatif)</option>
+<header>
+  <h1>&#128737;&#65039; MCP-Clean Console</h1>
+  <div class="stat">Tokens session&nbsp;: <b id="tokIn">0</b> in / <b id="tokOut">0</b> out (total <b id="tokTot">0</b>)</div>
+  <div class="toggle">
+    <span>Reasoning</span>
+    <label class="switch"><input type="checkbox" id="reasoning"><span class="slider"></span></label>
+  </div>
+  <div class="toggle">
+    <span>Temp</span>
+    <select id="temp" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px">
+      <option value="0.1">0.1</option><option value="0.2" selected>0.2</option>
+      <option value="0.7">0.7</option><option value="1.0">1.0</option>
     </select>
-  </label>
-</div>
-<div id="response"><span class="meta">La r&eacute;ponse de phi-4 appara&icirc;tra ici, en direct.</span></div>
-<div class="meta" id="stats"></div>
+  </div>
+  <div class="stat" style="margin-left:auto" id="modelInfo">phi-4-mini</div>
+</header>
 
-<div id="toolsPanel">
-  <h3>Outils MCP expos&eacute;s (<span id="toolCount">0</span>)</h3>
-  <div id="toolsList"></div>
-</div>
+<main>
+  <!-- Outils à gauche -->
+  <aside id="toolsPane">
+    <h2>Outils MCP (<span id="toolCount">…</span>)</h2>
+    <div id="toolCats"></div>
+  </aside>
+
+  <!-- Conversation à droite -->
+  <section id="chatPane">
+    <div id="history"><div class="empty">Pose une question, ou clique sur un outil à gauche.<br>phi-4 décidera d'appeler un outil MCP si pertinent.</div></div>
+    <div id="inputBar">
+      <div style="display:flex;gap:8px;margin-bottom:8px"><span id="pendingTool"><span id="pendingToolName"></span><span class="x" onclick="clearPending()">✕</span></span></div>
+      <textarea id="prompt" rows="3" placeholder="Ex : fais un dns_recon sur example.com ... (Ctrl+Entrée pour envoyer)"></textarea>
+      <div class="inputRow">
+        <button id="sendBtn" onclick="send()">Envoyer</button>
+        <span class="hint">Ctrl+Entrée pour envoyer</span>
+      </div>
+    </div>
+  </section>
+</main>
 
 <script>
-async function sendChat() {
-  const prompt = document.getElementById('prompt').value.trim();
-  if (!prompt) return;
-  const btn = document.getElementById('sendBtn');
-  const respDiv = document.getElementById('response');
-  const statsDiv = document.getElementById('stats');
-  btn.disabled = true;
-  respDiv.innerHTML = '<span id="txt"></span><span class="cursor"></span>';
-  statsDiv.innerText = '';
-  const txtSpan = document.getElementById('txt');
-  const t0 = Date.now();
-  let full = '';
-  try {
-    const res = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        prompt: prompt,
-        num_predict: parseInt(document.getElementById('numPredict').value) || 150,
-        temperature: parseFloat(document.getElementById('temp').value)
-      })
-    });
-    if (!res.body) { respDiv.innerHTML = '<span class="err">Pas de flux</span>'; btn.disabled=false; return; }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop();
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith('data:')) continue;
-        try {
-          const obj = JSON.parse(line.slice(5).trim());
-          if (obj.error) { txtSpan.innerHTML = '<span class="err">Erreur: ' + obj.error + '</span>'; continue; }
-          if (obj.token) { full += obj.token; txtSpan.textContent = full; }
-        } catch (e) { /* chunk partiel */ }
-      }
-    }
-    const cur = respDiv.querySelector('.cursor'); if (cur) cur.remove();
-    if (!full) txtSpan.innerHTML = '<span class="meta">(réponse vide)</span>';
-    const dt = ((Date.now() - t0) / 1000).toFixed(1);
-    statsDiv.innerText = full.length + ' caractères en ' + dt + 's';
-  } catch (e) {
-    respDiv.innerHTML = '<span class="err">Réseau: ' + e.message + '</span>';
-  }
-  btn.disabled = false;
-}
+let tokIn = 0, tokOut = 0;
+let pendingTool = null;
+const history = document.getElementById('history');
 
 async function loadTools() {
-  const panel = document.getElementById('toolsPanel');
-  const list = document.getElementById('toolsList');
   try {
     const res = await fetch('/api/tools');
     const data = await res.json();
     document.getElementById('toolCount').innerText = data.count;
-    list.innerHTML = data.tools.map(t => '<span class="tool">' + t + '</span>').join('');
-    panel.style.display = 'block';
-    panel.scrollIntoView({ behavior: 'smooth' });
+    const cats = data.categories || {};
+    const container = document.getElementById('toolCats');
+    container.innerHTML = '';
+    for (const [cat, tools] of Object.entries(cats)) {
+      const div = document.createElement('div');
+      div.className = 'cat';
+      div.innerHTML = '<div class="cat-name">' + cat + '</div>' +
+        tools.map(t => '<button class="tool-btn" onclick="pickTool(\'' + t + '\')">' + t + '</button>').join('');
+      container.appendChild(div);
+    }
   } catch (e) {
-    list.innerHTML = '<span class="err">Erreur: ' + e.message + '</span>';
-    panel.style.display = 'block';
+    document.getElementById('toolCats').innerHTML = '<div class="empty">Erreur chargement outils</div>';
   }
 }
 
+function pickTool(name) {
+  pendingTool = name;
+  document.getElementById('pendingTool').style.display = 'inline-flex';
+  document.getElementById('pendingToolName').innerText = 'Outil: ' + name;
+  document.getElementById('prompt').placeholder = 'Cible pour ' + name + ' (ex: example.com) ...';
+  document.getElementById('prompt').focus();
+}
+function clearPending() {
+  pendingTool = null;
+  document.getElementById('pendingTool').style.display = 'none';
+  document.getElementById('prompt').placeholder = 'Ex : fais un dns_recon sur example.com ...';
+}
+
+async function send() {
+  const promptEl = document.getElementById('prompt');
+  const message = promptEl.value.trim();
+  if (!message) return;
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+  promptEl.value = '';
+
+  const empty = history.querySelector('.empty');
+  if (empty) empty.remove();
+
+  // Carte d'échange
+  const ex = document.createElement('div');
+  ex.className = 'exchange';
+  ex.innerHTML =
+    '<div class="ex-q"><div class="who">Vous</div>' + escapeHtml(message) + '</div>' +
+    '<div class="ex-a"><div class="who">Phi-4</div><span class="reply">… réflexion (CPU-only, patience) …</span></div>';
+  history.appendChild(ex);
+  history.scrollTop = history.scrollHeight;
+  const replySpan = ex.querySelector('.reply');
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch('/api/agent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: message,
+        tool: pendingTool,
+        tool_arg: pendingTool ? message : null,
+        reasoning: document.getElementById('reasoning').checked,
+        temperature: parseFloat(document.getElementById('temp').value),
+        max_tokens: 300
+      })
+    });
+    const data = await res.json();
+
+    // Compteur de tokens
+    if (data.usage) {
+      tokIn += data.usage.prompt_tokens || 0;
+      tokOut += data.usage.completion_tokens || 0;
+      document.getElementById('tokIn').innerText = tokIn;
+      document.getElementById('tokOut').innerText = tokOut;
+      document.getElementById('tokTot').innerText = tokIn + tokOut;
+    }
+
+    // Outil exécuté ?
+    if (data.executed) {
+      const toolDiv = document.createElement('div');
+      toolDiv.className = 'ex-tool';
+      const resText = (data.executed.result && data.executed.result.content)
+        ? data.executed.result.content.map(c => c.text || '').join(' ')
+        : JSON.stringify(data.executed.result);
+      toolDiv.innerHTML = '<span class="badge">OUTIL</span><b>' + escapeHtml(data.executed.tool) + '</b>' +
+        ' ' + escapeHtml(JSON.stringify(data.executed.arguments)) +
+        '\n' + escapeHtml(resText.slice(0, 800));
+      ex.insertBefore(toolDiv, ex.querySelector('.ex-a'));
+    }
+
+    replySpan.textContent = data.error ? ('Erreur: ' + data.error) : (data.reply || '(réponse vide)');
+
+    const meta = document.createElement('div');
+    meta.className = 'ex-meta';
+    meta.innerText = ((Date.now() - t0) / 1000).toFixed(1) + 's' +
+      (data.executed ? ' • outil: ' + data.executed.tool : ' • sans outil');
+    ex.appendChild(meta);
+  } catch (e) {
+    replySpan.textContent = 'Erreur réseau: ' + e.message;
+  }
+  history.scrollTop = history.scrollHeight;
+  clearPending();
+  btn.disabled = false;
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 document.getElementById('prompt').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat();
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
 });
+loadTools();
 </script>
 </body>
 </html>
