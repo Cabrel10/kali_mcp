@@ -15,6 +15,7 @@ import json
 import re
 import threading
 import urllib.request
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -77,6 +78,15 @@ class AgentRequest(BaseModel):
     summarize: bool = False          # synthèse phi-4 (lent sous contention CPU)
     temperature: float = 0.2
     max_tokens: int = 300
+
+
+class LoopRequest(BaseModel):
+    message: str
+    session_id: str | None = None    # pour pouvoir interrompre la session
+    max_steps: int = 8               # outils max enchaînés automatiquement
+    reasoning: bool = False
+    temperature: float = 0.2
+    max_tokens: int = 350
 
 
 # ---------------------------------------------------------------------------
@@ -378,5 +388,258 @@ def chat_stream(req: ChatRequest):
                         break
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ===========================================================================
+# AGENT AUTONOME EN BOUCLE — phi-4 PILOTE (cerveau)
+# ---------------------------------------------------------------------------
+# L'utilisateur envoie une requête. phi-4 interprète, choisit un outil MCP,
+# on l'exécute pour de vrai (stdio FastMCP), on rend le résultat à phi-4 qui
+# interprète puis DÉCIDE de l'outil suivant, et ainsi de suite jusqu'à
+# réponse finale. Chaque étape est streamée en SSE. Interruptible via /api/agent/stop.
+# ---------------------------------------------------------------------------
+
+# sessions actives : session_id -> threading.Event (set() = demande d'arrêt)
+_STOP_FLAGS: dict[str, threading.Event] = {}
+
+_LOOP_SYSTEM = (
+    "Tu es un agent de sécurité offensif AUTONOME. Tu pilotes des outils MCP. "
+    "Pour répondre à la demande, enchaîne les outils : appelle un outil via un "
+    "tool_call, lis le résultat, puis appelle l'outil suivant si nécessaire. "
+    "Ne t'arrête que quand tu as assez d'informations pour répondre. "
+    "Quand tu as terminé, réponds directement en français, factuel et concis. "
+    "N'appelle JAMAIS deux fois le même outil avec les mêmes arguments."
+)
+
+
+def _sse(obj):
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _extract_text_tool_call(content: str, known: set[str]):
+    """phi-4-mini écrit parfois l'appel d'outil en texte JSON au lieu d'un
+    tool_calls structuré. On le détecte et on le convertit en vrai appel.
+    Formats tolérés : [{"type":"function","function":{"name":X,...}}],
+    {"name": X, "arguments": {...}}, ou tout JSON contenant "name": <outil>."""
+    if not content:
+        return None
+    # 1) chercher un bloc JSON qui contient un nom d'outil connu
+    for m in re.finditer(r"[\[{].*?[\]}]", content, re.S):
+        chunk = m.group(0)
+        try:
+            data = json.loads(chunk)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        items = data if isinstance(data, list) else [data]
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fn = it.get("function", it)
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if name in known:
+                args = fn.get("arguments") or fn.get("parameters") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        args = {}
+                return name, args
+    # 2) fallback : un nom d'outil apparaît seul dans le texte court
+    if len(content) < 120:
+        for name in known:
+            if re.search(rf"\b{re.escape(name)}\b", content):
+                return name, {}
+    return None
+
+
+_TARGET_RE = re.compile(
+    r"(?:https?://)?([a-zA-Z0-9](?:[a-zA-Z0-9\-]*\.)+[a-zA-Z]{2,}|\d{1,3}(?:\.\d{1,3}){3})")
+
+
+def _extract_target(message: str):
+    m = _TARGET_RE.search(message or "")
+    return m.group(0) if m else None
+
+
+def _pre_route(message: str, known: set[str]):
+    """Pré-routeur déterministe : si le message nomme explicitement un outil,
+    on l'exécute immédiatement (sans attendre la décision LLM, lente en CPU-only).
+    Retourne (name, args) ou None."""
+    if not message:
+        return None
+    low = message.lower()
+    for name in sorted(known, key=len, reverse=True):  # plus long d'abord
+        if re.search(rf"\b{re.escape(name.lower())}\b", low):
+            target = _extract_target(message)
+            args = {}
+            if target:
+                key = {"dns_recon": "domain", "osint_whois_info": "domain",
+                       "osint_domain_reputation": "domain", "subdomain_enum": "domain",
+                       "check_site_legitimacy": "domain", "web_tech_detect": "url",
+                       "nmap_scan": "target"}.get(name, "target")
+                args = {key: ("http://" + target if key == "url"
+                              and not target.startswith("http") else target)}
+            return name, args
+    return None
+
+
+@app.post("/api/agent/stop")
+def agent_stop(payload: dict):
+    """Interrompt la boucle de réflexion d'une session (bouton Stop)."""
+    sid = (payload or {}).get("session_id")
+    flag = _STOP_FLAGS.get(sid)
+    if flag is not None:
+        flag.set()
+        return {"stopped": True, "session_id": sid}
+    return {"stopped": False, "error": "session_inconnue", "session_id": sid}
+
+
+@app.post("/api/agent/loop")
+def agent_loop(req: LoopRequest):
+    """Boucle autonome : phi-4 choisit -> exécute -> interprète -> enchaîne.
+    Stream SSE : thinking / tool_call / tool_result / final / stopped / error."""
+    session_id = req.session_id or uuid.uuid4().hex[:12]
+    stop = threading.Event()
+    _STOP_FLAGS[session_id] = stop
+
+    messages = [
+        {"role": "system", "content": _LOOP_SYSTEM},
+        {"role": "user", "content": req.message},
+    ]
+    tools_schema = _ollama_tools_schema()
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+    known = {t["function"]["name"] for t in tools_schema}
+    # Pré-routage déterministe : si le message nomme un outil, on l'exécute
+    # IMMÉDIATEMENT (résultat en ~2-5 s), sans attendre la 1re décision LLM.
+    pre = _pre_route(req.message, known)
+    if pre:
+        messages[1] = {"role": "user", "content": req.message}
+
+    def _run_tool(step, name, args):
+        """Exécute un outil MCP et rend le résultat à phi-4."""
+        try:
+            result = MCP.call_tool(name, args, timeout=120)
+        except Exception as e:
+            result = {"error": str(e)}
+        return result
+
+    def gen():
+        try:
+            yield _sse({"type": "session", "session_id": session_id,
+                        "max_steps": req.max_steps})
+            step = 0
+            pending = pre  # outil pré-routé (peut être None)
+
+            while step < req.max_steps:
+                # --- interruption demandée ? ---
+                if stop.is_set():
+                    yield _sse({"type": "stopped", "step": step})
+                    return
+
+                if pending is not None:
+                    # ===== exécution immédiate (pré-routage, zéro attente LLM) =====
+                    step += 1
+                    name, args = pending
+                    pending = None
+                    yield _sse({"type": "tool_call", "step": step,
+                                "tool": name, "arguments": args,
+                                "source": "pre_route"})
+                    if stop.is_set():
+                        yield _sse({"type": "stopped", "step": step})
+                        return
+                    result = _run_tool(step, name, args)
+                    yield _sse({"type": "tool_result", "step": step,
+                                "tool": name, "result": _tool_text(result)})
+                    messages.append({"role": "assistant", "content":
+                                     f"J'exécute l'outil {name}."})
+                    messages.append({"role": "tool", "name": name,
+                                     "content": _tool_text(result)[:2500]})
+                    continue  # phi-4 interprétera au tour suivant
+
+                # ===== décision LLM (petits tokens = plus rapide) =====
+                step += 1
+                yield _sse({"type": "thinking", "step": step})
+                try:
+                    d = _call_ollama_chat(messages, tools=tools_schema,
+                                          max_tokens=120,  # décision = court
+                                          temperature=req.temperature)
+                except Exception as e:
+                    yield _sse({"type": "error", "step": step,
+                                "message": f"ollama: {e}"})
+                    return
+                _acc(usage, d)
+                msg = d.get("message", {}) or {}
+                tool_calls = msg.get("tool_calls") or []
+
+                # phi-4-mini sérialise parfois le tool-call en TEXTE
+                if not tool_calls:
+                    parsed = _extract_text_tool_call(_content(d), known)
+                    if parsed:
+                        tool_calls = [{"function": {"name": parsed[0],
+                                                    "arguments": parsed[1]}}]
+                        yield _sse({"type": "text_tool_call", "step": step,
+                                    "note": "tool-call texte converti"})
+
+                # --- phi-4 n'appelle plus d'outil -> réponse finale ---
+                if not tool_calls:
+                    # si le contenu est vide (modèle a juste décidé), on demande
+                    # une vraie synthèse avec plus de tokens
+                    reply = _content(d)
+                    if not reply.strip():
+                        try:
+                            d2 = _call_ollama_chat(
+                                messages + [{"role": "user", "content":
+                                             "Réponds maintenant à la demande "
+                                             "initiale, en français, concis."}],
+                                max_tokens=req.max_tokens,
+                                temperature=req.temperature)
+                            _acc(usage, d2)
+                            reply = _content(d2)
+                        except Exception:
+                            pass
+                    yield _sse({"type": "final", "step": step,
+                                "reply": reply, "usage": usage})
+                    return
+
+                # --- phi-4 a choisi un outil -> exécution réelle ---
+                fn = tool_calls[0].get("function", {})
+                name = fn.get("name")
+                args = fn.get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                yield _sse({"type": "tool_call", "step": step,
+                            "tool": name, "arguments": args,
+                            "source": "llm"})
+                if stop.is_set():
+                    yield _sse({"type": "stopped", "step": step})
+                    return
+                result = _run_tool(step, name, args)
+                yield _sse({"type": "tool_result", "step": step,
+                            "tool": name, "result": _tool_text(result)})
+                messages.append(msg)
+                messages.append({"role": "tool", "name": name,
+                                 "content": _tool_text(result)[:2500]})
+
+            # budget d'étapes épuisé -> synthèse finale
+            try:
+                d = _call_ollama_chat(
+                    messages + [{"role": "user", "content":
+                                 "Résume maintenant les résultats obtenus, "
+                                 "en français, concis."}],
+                    max_tokens=req.max_tokens, temperature=req.temperature)
+                _acc(usage, d)
+                yield _sse({"type": "final", "reply": _content(d),
+                            "usage": usage, "note": "max_steps_atteint"})
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"synthese: {e}",
+                            "usage": usage})
+        finally:
+            _STOP_FLAGS.pop(session_id, None)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
