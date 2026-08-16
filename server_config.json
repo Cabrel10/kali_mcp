@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kali": {
+      "command": "/home/ubuntu/webapp/MORNINGSTAR/miniconda3/envs/trading_env/bin/python",
+      "args": ["/home/ubuntu/webapp/MORNINGSTAR/mcp/kali_mcp_clean/MCP-Kali-Server/kali_mcp_server_optimized.py"]
+    }
+  }
+}

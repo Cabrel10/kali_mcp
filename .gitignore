@@ -43,3 +43,8 @@ config.yaml
 # System Files
 .DS_Store
 Thumbs.db
+
+# Portal v2 runtime artifacts
+webapp/logs/
+webapp/portal_history.db
+*.pyc
