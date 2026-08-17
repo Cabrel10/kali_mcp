@@ -269,7 +269,7 @@ def ollama_tools_schema():
     return out
 
 
-def ollama_chat(messages, model, max_tokens=400, temperature=0.4,
+def ollama_chat(messages, model, max_tokens=400, temperature=0.0,
                 timeout=900, use_tools=True):
     payload = {"model": model, "messages": messages, "stream": False,
                "options": {"temperature": temperature, "num_predict": max_tokens}}
@@ -412,7 +412,7 @@ class ChatIn(BaseModel):
     session_id: str | None = None
     model: str | None = None
     max_steps: int = 10
-    temperature: float = 0.4
+    temperature: float = 0.0
     max_tokens: int = 500
 
 
