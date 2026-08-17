@@ -325,22 +325,70 @@ def parse_text_call(content):
             except json.JSONDecodeError:
                 args = {}
         return name, args
-    for jm in re.finditer(r"\{[^{}]*\}", content):
+    # Fallback JSON — STRICT: extraction equilibree (gere l'imbrication) +
+    # structure d'intention explicite requise ("tool", "function", ou "name"
+    # accompagne de "arguments"/"args", ou "done"). Un {"name": "..."} isole
+    # dans du texte narratif n'est PAS un appel d'outil.
+    for cand in _json_objects(content):
         try:
-            obj = json.loads(jm.group(0))
+            obj = json.loads(cand)
         except json.JSONDecodeError:
             continue
-        name = (obj.get("function") or {}).get("name") or obj.get("name")
+        if not isinstance(obj, dict):
+            continue
+        if "done" in obj:  # signal de fin explicite, pas un appel
+            continue
+        name = None
+        args = {}
+        if "tool" in obj:  # format strict: {"tool": ..., "args"/"arguments": ...}
+            name = obj.get("tool")
+            args = obj.get("args") or obj.get("arguments") or {}
+        elif isinstance(obj.get("function"), dict):  # style natif
+            name = obj["function"].get("name")
+            args = obj["function"].get("arguments") or {}
+        elif "name" in obj and ("arguments" in obj or "args" in obj):
+            name = obj.get("name")
+            args = obj.get("arguments") or obj.get("args") or {}
         if name in KNOWN:
-            args = (obj.get("function") or {}).get("arguments") \
-                or obj.get("arguments") or {}
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except json.JSONDecodeError:
                     args = {}
+            if not isinstance(args, dict):
+                args = {}
             return name, args
     return None
+
+
+def _json_objects(text):
+    """Genere les sous-chaines JSON equilibrees ({...}) en gerant
+    l'imbrication et les chaines (accolades dans les strings ignorees)."""
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield text[start:i + 1]
+                    start = -1
 
 
 def system_prompt():
