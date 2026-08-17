@@ -699,6 +699,145 @@ def chat_stop(payload: dict):
     return {"stopped": bool(flag), "session_id": sid}
 
 
+# ---------------------------------------------------------------------------
+# ALIAS DE COMPATIBILITE V1 (2026-08-17)
+# L'UI (index.html) appelle /api/agent, /api/agent/loop, /api/agent/stop.
+# server_v2 n'exposait que /api/chat/* -> UI cassee. On re-expose le contrat
+# v1 en deleguant a la logique v2 (memes SSE events: session/thinking/
+# tool_call/tool_result/final/stopped/error).
+# ---------------------------------------------------------------------------
+_TARGET_RE = re.compile(
+    r"((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\b\d{1,3}(?:\.\d{1,3}){3}\b|https?://\S+)")
+
+
+def _arguments_for(tool_name: str, arg):
+    """Mappe l'argument libre vers le 1er param requis du schema reel."""
+    schema = MCP.schema_of(tool_name)
+    required = schema.get("required", []) or []
+    if not required:
+        return {}
+    key = required[0]
+    value = (arg or "").strip()
+    if not value:
+        m = _TARGET_RE.search(arg or "")
+        value = m.group(1) if m else ""
+    return {key: value} if value else {}
+
+
+def _pre_route(message: str):
+    """Si le message nomme explicitement UN SEUL outil connu -> execution
+    immediate (sans attendre le LLM)."""
+    low = (message or "").lower()
+    hits = [name for name in KNOWN if name.lower() in low]
+    if len(hits) != 1:
+        return None
+    name = hits[0]
+    m = _TARGET_RE.search(message or "")
+    arg = m.group(1) if m else None
+    return name, _arguments_for(name, arg)
+
+
+class AgentRequest(BaseModel):
+    message: str
+    tool: str | None = None
+    tool_arg: str | None = None
+    reasoning: bool = False
+    summarize: bool = False
+    temperature: float = 0.0
+    max_tokens: int = 300
+
+
+class LoopRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+    max_steps: int = 8
+    reasoning: bool = False
+    temperature: float = 0.0
+    max_tokens: int = 350
+
+
+@app.post("/api/agent")
+def agent_direct(req: AgentRequest, request: Request):
+    """Chemin rapide v1 : outil epingle/nomme -> execution directe."""
+    ip = request.client.host if request.client else "?"
+    if not rate_ok(ip):
+        return JSONResponse({"error": "rate_limit", "detail":
+                             "10 req/min max"}, status_code=429)
+    tool = req.tool
+    args: dict = {}
+    if tool and tool not in KNOWN:
+        return {"error": f"outil inconnu: {tool}",
+                "known_tools": sorted(KNOWN)}
+    if not tool:
+        routed = _pre_route(req.message)
+        if routed:
+            tool, args = routed
+    if not tool:
+        try:
+            d = ollama_chat([{"role": "user", "content": req.message}],
+                            DEFAULT_MODEL, req.max_tokens, req.temperature,
+                            use_tools=False)
+        except Exception as e:
+            return {"error": f"ollama: {e}"}
+        usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
+                 "completion_tokens": d.get("eval_count", 0)}
+        _usage["tokens_in"] += d.get("prompt_eval_count", 0)
+        _usage["tokens_out"] += d.get("eval_count", 0)
+        return {"reply": _content(d), "executed": None, "usage": usage}
+    if not args:
+        args = _arguments_for(tool, req.tool_arg or req.message)
+    clean, verr = validate_args(tool, args)
+    if verr:
+        return {"error": f"validation: {verr}", "tool": tool}
+    result = MCP.call_tool(tool, clean)
+    if result.get("error"):
+        text = f"ERREUR outil: {result['error']}"
+    else:
+        text = result.get("content", "") or "(sortie vide)"
+    reply = text
+    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0}
+    if req.summarize and not result.get("error"):
+        try:
+            d = ollama_chat(
+                [{"role": "user", "content":
+                  f"Resultat de l'outil {tool}:\n{text[:3000]}\n\n"
+                  "Resume ce resultat en francais, de facon concise."}],
+                DEFAULT_MODEL, req.max_tokens, req.temperature,
+                use_tools=False)
+            usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
+                     "completion_tokens": d.get("eval_count", 0)}
+            reply = _content(d) or text
+        except Exception:
+            reply = text
+    return {
+        "reply": reply,
+        "executed": {
+            "tool": tool,
+            "arguments": clean,
+            "result": {"content": [{"text": text}],
+                       "is_error": bool(result.get("is_error") or
+                                        result.get("error"))},
+        },
+        "usage": usage,
+    }
+
+
+@app.post("/api/agent/loop")
+def agent_loop_alias(req: LoopRequest, request: Request):
+    """Alias v1 -> boucle autonome v2 (/api/chat/stream). Meme contrat SSE."""
+    return chat_stream(
+        ChatIn(message=req.message, session_id=req.session_id,
+               max_steps=req.max_steps, temperature=req.temperature,
+               max_tokens=req.max_tokens),
+        request)
+
+
+@app.post("/api/agent/stop")
+def agent_stop_alias(payload: dict):
+    """Alias v1 -> /api/chat/stop."""
+    return chat_stop(payload)
+
+
 @app.get("/api/metrics")
 def metrics():
     with _db_lock, _db() as c:
