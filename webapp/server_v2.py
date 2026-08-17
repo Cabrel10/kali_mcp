@@ -689,13 +689,21 @@ def chat_stream(req: ChatIn, request: Request):
                 continue
             sig = f"{name}{json.dumps(clean, sort_keys=True)}"
             if sig in executed:
-                reply = ("Appel identique déjà exécuté — boucle interrompue "
-                         "par le contrôleur. Résultats obtenus :\n\n"
-                         + "\n\n".join(results_log)[-3000:])
-                db_event(sid, "duplicate_call_blocked", {"tool": name})
-                yield _sse({"type": "final", "reply": reply, "usage": usage})
-                return
-            executed.add(sig)
+                # check_task / list_tasks sont des outils de POLLING : un appel
+                # identique répété est légitime (le statut évolue). On n'ajoute
+                # pas ces signatures à l'anti-boucle, sinon impossible de poller
+                # une tâche background plus d'une fois par session.
+                if name in ("check_task", "list_tasks", "get_task_stats"):
+                    pass  # polling autorisé, pas de blocage
+                else:
+                    reply = ("Appel identique déjà exécuté — boucle interrompue "
+                             "par le contrôleur. Résultats obtenus :\n\n"
+                             + "\n\n".join(results_log)[-3000:])
+                    db_event(sid, "duplicate_call_blocked", {"tool": name})
+                    yield _sse({"type": "final", "reply": reply, "usage": usage})
+                    return
+            else:
+                executed.add(sig)
             step += 1
             _usage["tool_calls"] += 1
             yield _sse({"type": "tool_call", "step": step, "tool": name,
@@ -721,11 +729,28 @@ def chat_stream(req: ChatIn, request: Request):
             yield _sse({"type": "tool_result", "step": step, "tool": name,
                         "status": status, "duration_ms": dur_ms,
                         "result": text[:8000]})
+            # Détection tâche background : si l'outil renvoie
+            # {"status": "background_started", "task_id": ...}, on injecte
+            # une consigne de polling explicite vers check_task (sinon le
+            # modèle ne sait pas que le résultat arrive plus tard).
+            poll_hint = ""
+            if '"background_started"' in text and '"task_id"' in text:
+                try:
+                    tid = json.loads(text).get("task_id", "")
+                except (json.JSONDecodeError, AttributeError):
+                    tid = ""
+                if tid:
+                    poll_hint = (f"\n\n[TACHE EN ARRIERE-PLAN] L'outil a démarré "
+                                 f"en tâche de fond (task_id={tid}). Pour suivre "
+                                 f"sa progression, appelle check_task avec "
+                                 f"task_id=\"{tid}\". Le scan peut prendre "
+                                 f"plusieurs minutes — tu peux continuer d'autres "
+                                 f"actions entre deux vérifications.")
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content":
                              f"Résultat de l'outil {name} :\n{text[:2500]}\n\n"
                              "Analyse ce résultat et décide librement de la "
-                             "suite (autre outil ou conclusion)."})
+                             "suite (autre outil ou conclusion)." + poll_hint})
         db_touch(sid, status="max_steps")
         yield _sse({"type": "final",
                     "reply": "Budget d'étapes atteint. Résultats :\n\n"
