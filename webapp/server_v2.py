@@ -745,6 +745,7 @@ class AgentRequest(BaseModel):
     summarize: bool = False
     temperature: float = 0.0
     max_tokens: int = 300
+    model: str | None = None
 
 
 class LoopRequest(BaseModel):
@@ -754,6 +755,7 @@ class LoopRequest(BaseModel):
     reasoning: bool = False
     temperature: float = 0.0
     max_tokens: int = 350
+    model: str | None = None
 
 
 @app.post("/api/agent")
@@ -775,8 +777,8 @@ def agent_direct(req: AgentRequest, request: Request):
     if not tool:
         try:
             d = ollama_chat([{"role": "user", "content": req.message}],
-                            DEFAULT_MODEL, req.max_tokens, req.temperature,
-                            use_tools=False)
+                            req.model or DEFAULT_MODEL, req.max_tokens,
+                            req.temperature, use_tools=False)
         except Exception as e:
             return {"error": f"ollama: {e}"}
         usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
@@ -802,7 +804,7 @@ def agent_direct(req: AgentRequest, request: Request):
                 [{"role": "user", "content":
                   f"Resultat de l'outil {tool}:\n{text[:3000]}\n\n"
                   "Resume ce resultat en francais, de facon concise."}],
-                DEFAULT_MODEL, req.max_tokens, req.temperature,
+                req.model or DEFAULT_MODEL, req.max_tokens, req.temperature,
                 use_tools=False)
             usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
                      "completion_tokens": d.get("eval_count", 0)}
@@ -828,7 +830,7 @@ def agent_loop_alias(req: LoopRequest, request: Request):
     return chat_stream(
         ChatIn(message=req.message, session_id=req.session_id,
                max_steps=req.max_steps, temperature=req.temperature,
-               max_tokens=req.max_tokens),
+               max_tokens=req.max_tokens, model=req.model),
         request)
 
 

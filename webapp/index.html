@@ -88,7 +88,13 @@
       <option value="0.7">0.7</option><option value="1.0">1.0</option>
     </select>
   </div>
-  <div class="stat" style="margin-left:auto" id="modelInfo">phi-4-mini · agent autonome</div>
+  <div class="toggle">
+    <span>Modèle</span>
+    <select id="modelSel" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px;max-width:260px">
+      <option value="">chargement…</option>
+    </select>
+  </div>
+  <div class="stat" style="margin-left:auto" id="modelInfo">agent autonome</div>
 </header>
 
 <main>
@@ -117,6 +123,26 @@ let pendingTool = null;
 let currentSession = null;   // session_id de la boucle en cours
 let currentReader = null;    // reader SSE pour abort local
 const history = document.getElementById('history');
+async function loadModels() {
+  const sel = document.getElementById('modelSel');
+  const info = document.getElementById('modelInfo');
+  try {
+    const res = await fetch('/api/models');
+    const data = await res.json();
+    const models = data.models || [];
+    sel.innerHTML = '';
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m.split('/').pop().split(':')[0];
+      sel.appendChild(opt);
+    }
+    const def = data.model_default || models[0] || '';
+    sel.value = def;
+    info.textContent = (def.split('/').pop().split(':')[0] || '?') + ' · agent autonome';
+    sel.onchange = () => { info.textContent = sel.value.split('/').pop().split(':')[0] + ' · agent autonome'; };
+  } catch (e) { sel.innerHTML = '<option value="">(défaut serveur)</option>'; }
+}
+loadModels();
 
 async function loadTools() {
   try {
@@ -248,6 +274,7 @@ async function send() {
         max_steps: 8,
         reasoning: document.getElementById('reasoning').checked,
         temperature: parseFloat(document.getElementById('temp').value),
+        model: document.getElementById('modelSel').value || undefined,
         max_tokens: 350
       }) });
 
