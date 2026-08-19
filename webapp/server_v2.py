@@ -418,6 +418,61 @@ def parse_text_call(content):
     return None
 
 
+# Détecteur de NARRATION d'outil (phi-4-mini) : le modèle décrit qu'il va
+# appeler un outil au lieu d'émettre les lignes TOOL:/ARGS:. On ne le
+# transforme PAS en appel (trop risqué) ; on renvoie un recentrage borné.
+# Heuristique : mention d'un nom d'outil connu OU d'un vocabulaire d'appel
+# ("appeler", "requête API", "utiliser l'outil"...) SANS ligne TOOL:.
+_NARRATION_HINTS = re.compile(
+    r"(?:appeler?|appelle|requ[êe]te\s+api|utiliser?\s+l['’]?outil|"
+    r"function[_\s]?call|call\s+the\s+tool|faire\s+une\s+requ[êe]te|"
+    r"invoquer|ex[ée]cuter\s+l['’]?outil|nous\s+devrions|je\s+vais\s+appeler|"
+    r"recherchez?\s+l['’]?outil|acc[ée]der\s+[àa]\s+un\s+outil|"
+    r"j['’]aurais\s+besoin\s+d['’]acc[ée]der|besoin\s+d['’]un\s+outil|"
+    r"s['’]il\s+existe\s+un\s+outil|si\s+un\s+outil)",
+    re.IGNORECASE)
+# Mention générique d'un outil/du système d'outils (phi-4 ne cite pas
+# toujours le nom exact ; il parle d'« un outil disponible »).
+_TOOL_WORD = re.compile(r"\b(?:outil|tool|outils|tools)\b", re.IGNORECASE)
+
+
+def looks_like_tool_narration(content):
+    """True si le texte NARRE un appel d'outil sans le formater.
+    Sert uniquement à décider d'un recentrage borné, jamais à exécuter."""
+    if not content:
+        return False
+    if _TOOL_RE.search(content):   # déjà bien formaté -> pas de narration
+        return False
+    low = content.lower()
+    mentions_tool = (any(k.lower() in low for k in KNOWN)
+                     or bool(_TOOL_WORD.search(content)))
+    return bool(_NARRATION_HINTS.search(content) and mentions_tool)
+
+
+def suggest_tools(query, limit=8):
+    """Suggère des noms d'outils du catalogue pertinents pour `query`,
+    par recouvrement de tokens. Sert à recentrer un petit modèle (phi-4)
+    qui hallucine un nom au lieu d'en choisir un du catalogue."""
+    import re as _re
+    qtokens = set(_re.findall(r"[a-zàâçéèêëîïôûùüÿ0-9]+", (query or "").lower()))
+    # quelques synonymes FR -> mots-clés de noms d'outils
+    syn = {"tache": "task", "taches": "task", "tâche": "task",
+           "tâches": "task", "liste": "list", "lister": "list",
+           "statut": "status", "etat": "status", "scan": "scan",
+           "reseau": "network", "réseau": "network", "port": "port"}
+    for fr, en in syn.items():
+        if fr in qtokens:
+            qtokens.add(en)
+    scored = []
+    for name in KNOWN:
+        ntoks = set(name.lower().replace("-", "_").split("_"))
+        overlap = len(qtokens & ntoks)
+        if overlap:
+            scored.append((overlap, name))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [n for _, n in scored[:limit]]
+
+
 def _json_objects(text):
     """Genere les sous-chaines JSON equilibrees ({...}) en gerant
     l'imbrication et les chaines (accolades dans les strings ignorees)."""
@@ -470,6 +525,16 @@ pas nécessaire.
 Quand un outil est utile, appelle-le sur deux lignes exactement ainsi :
 TOOL: nom_exact
 ARGS: {{"parametre": "valeur"}}
+
+EXEMPLE — pour « liste les taches », ecris exactement :
+TOOL: list_tasks
+ARGS: {{}}
+
+CRUCIAL : pour appeler un outil, ECRIS les deux lignes TOOL:/ARGS: — ne
+raconte JAMAIS ce que tu ferais (« je vais appeler… », « nous devrions… »,
+« pour utiliser l'outil… »). Soit tu ecris TOOL:/ARGS:, soit tu reponds
+directement a la question. Toute narration d'un appel sans les lignes
+TOOL:/ARGS: est un echec.
 
 Ne suppose jamais qu'un outil a réussi : vérifie son résultat. N'utilise pas
 un outil uniquement parce qu'il existe. Choisis librement la méthode la plus
@@ -675,6 +740,7 @@ def chat_stream(req: ChatIn, request: Request):
         results_log = []
         step = 0
         val_errs = 0  # erreurs de validation consecutives (anti-boucle)
+        narration_nudges = 0  # recentrages "narration d'outil" (borné, phi-4)
         yield _sse({"type": "session", "session_id": sid, "model": model})
         log.bind(session=sid).info("user_message", text=req.message[:200])
         db_message(sid, "user", req.message)
@@ -730,6 +796,30 @@ def chat_stream(req: ChatIn, request: Request):
                 calls = [parsed] if parsed else []
 
             if not calls:
+                # Recentrage borné : le modèle NARRE un appel d'outil (phi-4)
+                # sans émettre TOOL:/ARGS:. On lui rappelle le format une fois
+                # (max 2) au lieu de traiter la narration comme réponse finale.
+                if (looks_like_tool_narration(content)
+                        and narration_nudges < 2):
+                    narration_nudges += 1
+                    sugg = suggest_tools(req.message)
+                    sugg_txt = (("Outils pertinents du catalogue : "
+                                 + ", ".join(sugg) + ".\n") if sugg else "")
+                    db_event(sid, "tool_narration_nudge",
+                             {"attempt": narration_nudges, "suggested": sugg})
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content":
+                        "Tu as DÉCRIT un appel d'outil sans l'émettre, ou tu as "
+                        "inventé un nom d'outil. Choisis un nom EXACT du "
+                        "catalogue système (ne l'invente pas).\n"
+                        + sugg_txt +
+                        "Réponds MAINTENANT avec exactement ces deux lignes "
+                        "(rien d'autre) :\n"
+                        "TOOL: nom_exact_du_catalogue\n"
+                        "ARGS: {}\n"
+                        "Sinon, réponds directement à la question sans "
+                        "mentionner d'outil."})
+                    continue
                 # Réponse finale en langage naturel — Phi reste libre
                 db_message(sid, "assistant", content,
                            d.get("prompt_eval_count", 0), d.get("eval_count", 0))
