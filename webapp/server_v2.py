@@ -269,17 +269,60 @@ def ollama_tools_schema():
     return out
 
 
-def ollama_chat(messages, model, max_tokens=400, temperature=0.0,
-                timeout=900, use_tools=True):
-    payload = {"model": model, "messages": messages, "stream": False,
-               "options": {"temperature": temperature, "num_predict": max_tokens}}
-    if use_tools:
-        payload["tools"] = ollama_tools_schema()
+# Cache des capacites par modele (decouvert a la 1ere erreur Ollama).
+# Confirme par diagnostic 2026-08-19 :
+# - gemma3-4b-it-abliterated : HTTP 400 "does not support tools" -> on
+#   bascule sur use_tools=False (convention texte TOOL:/ARGS: du prompt).
+# - qwen3 : modele "thinking" -> sans think:false, tout le budget
+#   num_predict est consomme en raisonnement interne et content="".
+_MODEL_CAPS = {}  # model -> {"tools": bool}
+
+
+def _post_ollama(payload, timeout):
     req = urllib.request.Request(
         OLLAMA_CHAT, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
+
+
+def ollama_chat(messages, model, max_tokens=400, temperature=0.0,
+                timeout=900, use_tools=True):
+    caps = _MODEL_CAPS.setdefault(model, {"tools": True})
+    payload = {"model": model, "messages": messages, "stream": False,
+               "options": {"temperature": temperature, "num_predict": max_tokens}}
+    # qwen3 et autres modeles a raisonnement : coupe le thinking interne
+    # pour que num_predict serve la reponse, pas la reflexion cachee.
+    if "qwen3" in model or "deepseek-r1" in model or "qwq" in model:
+        payload["think"] = False
+    if use_tools and caps["tools"]:
+        payload["tools"] = ollama_tools_schema()
+    try:
+        d = _post_ollama(payload, timeout)
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()
+        except Exception:
+            pass
+        # Le modele ne supporte pas les tools -> desactivation permanente
+        # pour ce modele et retry immediat sans tools (canal texte).
+        if e.code == 400 and "does not support tools" in body and "tools" in payload:
+            caps["tools"] = False
+            log.info("model_no_native_tools", model=model)
+            payload.pop("tools")
+            d = _post_ollama(payload, timeout)
+        else:
+            raise
+    # done_reason=length + contenu vide : le budget a ete mange (souvent
+    # par le thinking residuel). Un seul retry a budget x3.
+    if (d.get("done_reason") == "length" and not _content(d)
+            and not (d.get("message", {}) or {}).get("tool_calls")):
+        payload["options"]["num_predict"] = max_tokens * 3
+        log.info("ollama_retry_extended_budget", model=model,
+                 num_predict=max_tokens * 3)
+        d = _post_ollama(payload, timeout)
+    return d
 
 
 def _content(d):
