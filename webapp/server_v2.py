@@ -33,6 +33,7 @@ from mcp.client.stdio import stdio_client
 
 BASE = Path(__file__).parent
 INDEX = BASE / "index_v2.html"
+LOGS_PAGE = BASE / "logs_v2.html"
 DB_PATH = BASE / "portal_history.db"
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -658,6 +659,43 @@ def tools():
                     "schema": {"properties": s.get("properties", {}) or {},
                                "required": s.get("required", []) or []}})
     return {"count": len(out), "tools": out}
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_page():
+    """Page d'observabilité : commandes réellement exécutées + logs bruts."""
+    return LOGS_PAGE.read_text(encoding="utf-8")
+
+
+@app.get("/api/tools/log")
+def tools_log(session: str = "", limit: int = 100):
+    """Journal d'exécution des outils MCP : commande réelle + sortie brute.
+
+    Le modèle ne sert que d'orchestrateur ; CETTE vue montre ce qui a
+    réellement tourné côté MCP (nom, arguments, durée, statut, sortie).
+    """
+    limit = max(1, min(int(limit), 500))
+    with _db() as c:
+        q = ("SELECT tc.id, tc.session_id, tc.tool_name, tc.arguments_json, "
+             "tc.started_at, tc.finished_at, tc.duration_ms, tc.status, "
+             "tr.result_text, tr.error, tr.size_bytes "
+             "FROM tool_calls tc "
+             "LEFT JOIN tool_results tr ON tr.tool_call_id = tc.id ")
+        params = []
+        if session:
+            q += "WHERE tc.session_id=? "
+            params.append(session)
+        q += "ORDER BY tc.id DESC LIMIT ?"
+        params.append(limit)
+        rows = [dict(r) for r in c.execute(q, params).fetchall()]
+    for r in rows:
+        try:
+            r["arguments"] = json.loads(r.pop("arguments_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            r["arguments"] = {}
+        txt = r.get("result_text") or ""
+        r["result_text"] = deescape_unicode(txt)[:20000]
+    return {"count": len(rows), "calls": rows}
 
 
 # -- Sessions ---------------------------------------------------------------
