@@ -131,6 +131,7 @@
       <textarea id="msgInput" rows="3" placeholder="Décris ta demande… (Entrée = envoyer, Maj+Entrée = saut de ligne)"></textarea>
       <div class="inputRow">
         <select id="modelSel"></select>
+        <span id="modelInfo" class="hint" style="opacity:.85"></span>
         <button id="sendBtn">Envoyer</button>
         <button id="stopBtn">■ Stop</button>
         <span class="hint">max 10 étapes · Phi libre, aucun préprompt-routeur</span>
@@ -191,6 +192,20 @@ fetch('/api/models').then(r=>r.json()).then(d=>{
     if (m.includes('Phi-4')) o.selected = true;
     sel.appendChild(o);
   });
+});
+// Changer de modèle DOIT repartir sur une session propre : sinon l'historique
+// (créé avec l'ancien modèle) reste lié à l'ancienne session côté serveur et
+// l'utilisateur croit que le changement est ignoré. On force une nouvelle
+// session à chaque changement de modèle, et on l'affiche.
+document.addEventListener('change', function(e){
+  if (e.target && e.target.id === 'modelSel') {
+    sessionId = null;  // la prochaine requête créera une session avec ce modèle
+    const info = $('modelInfo');
+    if (info) info.textContent = 'modèle : ' + e.target.value;
+    const hist = $('history');
+    if (hist) hist.innerHTML = '<div class="empty">Modèle sélectionné : <b>'
+      + e.target.value + '</b>. Nouvelle session au prochain message.</div>';
+  }
 });
 
 // ---------- tools (découverte dynamique) ----------
@@ -315,7 +330,12 @@ async function sendMessage(forced){
       for (const p of parts) {
         if (!p.startsWith('data: ')) continue;
         let ev; try { ev = JSON.parse(p.slice(6)); } catch(e){ continue; }
-        if (ev.type === 'thinking') {
+        if (ev.type === 'session') {
+          // Preuve visible du modèle réellement retenu par le serveur.
+          if (ev.session_id) sessionId = ev.session_id;
+          const info = $('modelInfo');
+          if (info && ev.model) info.textContent = 'modèle actif : ' + ev.model;
+        } else if (ev.type === 'thinking') {
           if (!thinkEl) { thinkEl = document.createElement('div');
             thinkEl.className = 'step-think'; $('history').appendChild(thinkEl); }
           thinkEl.innerHTML = `<span class="spin">◌</span> Phi-4 raisonne… (étape ${ev.step})`;
