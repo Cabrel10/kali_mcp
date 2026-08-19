@@ -305,7 +305,19 @@ def _native_calls(d):
 
 
 _TOOL_RE = re.compile(r"TOOL\s*:\s*([A-Za-z_][A-Za-z0-9_]*)", re.I)
-_ARGS_RE = re.compile(r"ARGS\s*:\s*(\{.*?\})\s*(?:\n|$)", re.I | re.S)
+_ARGS_MARK_RE = re.compile(r"ARGS\s*:", re.I)
+
+
+def _args_json_after(content, pos):
+    """Extrait le 1er objet JSON equilibre ({...}) apres la position pos.
+    Gere l'imbrication (contrairement a une regex non-gourmande qui casse
+    sur {"a": {"b": 1}}) et les accolades dans les chaines."""
+    i = content.find("{", pos)
+    if i < 0:
+        return None
+    for cand in _json_objects(content[i:]):
+        return cand
+    return None
 
 
 def parse_text_call(content):
@@ -318,12 +330,14 @@ def parse_text_call(content):
     if m and m.group(1) in KNOWN:
         name = m.group(1)
         args = {}
-        am = _ARGS_RE.search(content)
+        am = _ARGS_MARK_RE.search(content, m.end())
         if am:
-            try:
-                args = json.loads(am.group(1))
-            except json.JSONDecodeError:
-                args = {}
+            raw = _args_json_after(content, am.end())
+            if raw:
+                try:
+                    args = json.loads(raw)
+                except json.JSONDecodeError:
+                    args = {}
         return name, args
     # Fallback JSON — STRICT: extraction equilibree (gere l'imbrication) +
     # structure d'intention explicite requise ("tool", "function", ou "name"
@@ -617,6 +631,7 @@ def chat_stream(req: ChatIn, request: Request):
         executed = set()
         results_log = []
         step = 0
+        val_errs = 0  # erreurs de validation consecutives (anti-boucle)
         yield _sse({"type": "session", "session_id": sid, "model": model})
         log.bind(session=sid).info("user_message", text=req.message[:200])
         db_message(sid, "user", req.message)
@@ -631,6 +646,15 @@ def chat_stream(req: ChatIn, request: Request):
         for h in reversed(hist):
             if h["role"] in ("user", "assistant"):
                 messages.append({"role": h["role"], "content": h["content"]})
+            elif h["role"] == "tool":
+                # Resultats d'outils persistes (fix reprise de session) :
+                # re-injectes en role 'user' pour rester compatibles avec
+                # les modeles sans support natif du role 'tool'.
+                messages.append({"role": "user",
+                                 "content": f"[historique outil] "
+                                            f"{h['content'][:1500]}"})
+            # role 'tool_call' : ligne technique de trace, non rechargee
+            # (le resultat persiste via le message 'tool' ci-dessus).
 
         while step < req.max_steps:
             if stop.is_set():
@@ -679,14 +703,31 @@ def chat_stream(req: ChatIn, request: Request):
             # Contrôleur technique : validation schéma + anti-boucle
             clean, verr = validate_args(name, args)
             if verr:
+                val_errs += 1
                 db_event(sid, "validation_error",
-                         {"tool": name, "args": args, "error": verr})
+                         {"tool": name, "args": args, "error": verr,
+                          "consecutive": val_errs})
+                if val_errs >= 3:
+                    # Sans ce garde-fou, `continue` ne consomme aucun step :
+                    # un modele qui repete des arguments invalides boucle a
+                    # l'infini (ni budget d'etapes ni timeout ne bornent la
+                    # boucle). 3 echecs consecutifs -> arret propre.
+                    reply = (f"Validation impossible apres {val_errs} "
+                             f"tentatives consecutives ({name}: {verr}). "
+                             "Boucle interrompue par le controleur. "
+                             "Resultats obtenus :\n\n"
+                             + "\n\n".join(results_log)[-3000:])
+                    db_touch(sid, status="validation_abort")
+                    yield _sse({"type": "final", "reply": reply,
+                                "usage": usage})
+                    return
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content":
                                  f"Erreur technique de validation pour "
                                  f"{name}: {verr}. Corrige les arguments ou "
                                  f"choisis une autre approche."})
                 continue
+            val_errs = 0  # validation reussie -> reset du compteur
             sig = f"{name}{json.dumps(clean, sort_keys=True)}"
             if sig in executed:
                 # check_task / list_tasks sont des outils de POLLING : un appel
@@ -746,6 +787,10 @@ def chat_stream(req: ChatIn, request: Request):
                                  f"task_id=\"{tid}\". Le scan peut prendre "
                                  f"plusieurs minutes — tu peux continuer d'autres "
                                  f"actions entre deux vérifications.")
+            # Persiste le resultat dans l'historique (role 'tool') : sans
+            # cela, une reprise de session rechargeait les echanges user/
+            # assistant mais perdait TOUT le contexte des resultats d'outils.
+            db_message(sid, "tool", f"[{name}] {text[:2500]}")
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content":
                              f"Résultat de l'outil {name} :\n{text[:2500]}\n\n"
