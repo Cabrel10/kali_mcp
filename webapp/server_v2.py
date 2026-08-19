@@ -540,6 +540,20 @@ Ne suppose jamais qu'un outil a réussi : vérifie son résultat. N'utilise pas
 un outil uniquement parce qu'il existe. Choisis librement la méthode la plus
 pertinente.
 
+RÈGLE D'HONNÊTETÉ (absolue) :
+- Ne PRÉTENDS JAMAIS avoir exécuté un outil que tu n'as pas réellement appelé
+  via TOOL:/ARGS:. Un outil n'est « exécuté » que si tu vois un bloc
+  « Résultat de l'outil … » dans la conversation.
+- N'INVENTE JAMAIS de résultat, de sortie, de score, de statut ni de valeur.
+  Ne rapporte QUE ce qui apparaît littéralement dans un « Résultat de l'outil ».
+- Une tâche démarrée en arrière-plan (status=background_started) N'EST PAS
+  terminée : tu dois appeler check_task(task_id) pour obtenir le vrai résultat.
+  Tant que check_task n'a pas renvoyé les données, dis « en cours », jamais
+  « terminé » ni « réussi ».
+- Si l'utilisateur te demande « quels résultats as-tu obtenus ? », liste
+  UNIQUEMENT les outils réellement appelés dans cette session et leur sortie
+  réelle. S'il n'y en a aucun, dis-le clairement. Ne fabrique pas une liste.
+
 Outils MCP disponibles (découverte dynamique) :
 {catalog}
 
@@ -575,6 +589,25 @@ _usage = {"requests": 0, "tool_calls": 0, "tokens_in": 0, "tokens_out": 0}
 
 def _sse(obj):
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+# Un-escape les sequences \uXXXX (et \n litteraux) laissees par un outil MCP
+# qui a serialise sa sortie avec ensure_ascii=True. Sans ca, l'UI affiche
+# litteralement "\u26a0\ufe0f", "lanc\u00e9e", "arri\u00e8re" au lieu des
+# accents/emoji. Robuste : si le decodage echoue, on renvoie le texte brut.
+_UNICODE_ESCAPE_RE = re.compile(r'\\u[0-9a-fA-F]{4}')
+
+
+def deescape_unicode(text: str) -> str:
+    if not isinstance(text, str) or '\\u' not in text:
+        return text
+    try:
+        # Ne touche QUE les sequences \uXXXX pour ne pas casser des backslashes
+        # legitimes (chemins Windows, regex) presents dans une sortie d'outil.
+        return _UNICODE_ESCAPE_RE.sub(
+            lambda m: m.group(0).encode('ascii').decode('unicode_escape'), text)
+    except (UnicodeDecodeError, ValueError):
+        return text
 
 
 class ChatIn(BaseModel):
@@ -892,6 +925,7 @@ def chat_stream(req: ChatIn, request: Request):
                 text, status, err = "", "error", result["error"]
             else:
                 text = result.get("content", "") or "(sortie vide)"
+                text = deescape_unicode(text)  # \u26a0 -> emoji lisible
                 status = "error" if result.get("is_error") else "ok"
                 err = None
             db_tool_finish(tcid, status, text[:20000], err)

@@ -126,7 +126,7 @@
     <button id="newSessBtn">+ Nouvelle session</button>
   </div>
   <div id="chatPane">
-    <div id="history"><div class="empty">Sélectionne ou crée une session.<br>Phi-4 raisonne librement — il choisit lui-même ses outils parmi les 63 disponibles.</div></div>
+    <div id="history"><div class="empty">Sélectionne ou crée une session.<br>Le modèle choisi raisonne librement — il choisit lui-même ses outils parmi les 63 disponibles.</div></div>
     <div id="inputBar">
       <textarea id="msgInput" rows="3" placeholder="Décris ta demande… (Entrée = envoyer, Maj+Entrée = saut de ligne)"></textarea>
       <div class="inputRow">
@@ -159,6 +159,22 @@
 </main>
 <script>
 let sessionId = null, streaming = false, curAbort = null;
+// Modele reellement actif (rempli par le select puis confirme par l'event
+// SSE 'session' renvoye par le serveur). Sert de libelle des bulles agent :
+// avant, "Phi-4" etait code en dur -> peu importe le modele choisi, l'UI
+// affichait toujours "Phi-4". Maintenant le libelle suit le vrai modele.
+let activeModel = null;
+function modelLabel(){
+  if (!activeModel) { const s=$('modelSel'); if (s && s.value) activeModel=s.value; }
+  if (!activeModel) return 'Agent';
+  // libelle court lisible a partir du nom Ollama complet
+  let m = activeModel;
+  if (/phi-?4/i.test(m)) return 'Phi-4';
+  if (/qwen3/i.test(m)) return 'Qwen3';
+  if (/gemma3/i.test(m)) return 'Gemma3';
+  m = m.split('/').pop().split(':')[0];
+  return m.length > 24 ? m.slice(0,22)+'…' : m;
+}
 const $ = id => document.getElementById(id);
 
 // ---------- disclaimer ----------
@@ -192,6 +208,8 @@ fetch('/api/models').then(r=>r.json()).then(d=>{
     if (m.includes('Phi-4')) o.selected = true;
     sel.appendChild(o);
   });
+  activeModel = sel.value || null;
+  const info = $('modelInfo'); if (info && activeModel) info.textContent = 'modèle : ' + activeModel;
 });
 // Changer de modèle DOIT repartir sur une session propre : sinon l'historique
 // (créé avec l'ancien modèle) reste lié à l'ancienne session côté serveur et
@@ -200,6 +218,7 @@ fetch('/api/models').then(r=>r.json()).then(d=>{
 document.addEventListener('change', function(e){
   if (e.target && e.target.id === 'modelSel') {
     sessionId = null;  // la prochaine requête créera une session avec ce modèle
+    activeModel = e.target.value;
     const info = $('modelInfo');
     if (info) info.textContent = 'modèle : ' + e.target.value;
     const hist = $('history');
@@ -256,7 +275,7 @@ async function newSession(){
   const d = await (await fetch('/api/sessions', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({model})})).json();
   sessionId = d.session_id;
-  $('history').innerHTML = '<div class="empty">Nouvelle session <b>'+sessionId+'</b> — Phi-4 est libre de raisonner.</div>';
+  $('history').innerHTML = '<div class="empty">Nouvelle session <b>'+sessionId+'</b> — '+modelLabel()+' est libre de raisonner.</div>';
   loadSessions();
 }
 async function openSession(sid){
@@ -277,7 +296,7 @@ function addMsg(role, text){
   const emp = h.querySelector('.empty'); if (emp) emp.remove();
   const el = document.createElement('div');
   el.className = 'msg ' + role;
-  el.innerHTML = `<div class="who">${role==='user'?'Vous':'Phi-4'}</div><div class="body"></div>`;
+  el.innerHTML = `<div class="who">${role==='user'?'Vous':modelLabel()}</div><div class="body"></div>`;
   el.querySelector('.body').textContent = text;
   h.appendChild(el); h.scrollTop = h.scrollHeight;
   return el;
@@ -333,12 +352,13 @@ async function sendMessage(forced){
         if (ev.type === 'session') {
           // Preuve visible du modèle réellement retenu par le serveur.
           if (ev.session_id) sessionId = ev.session_id;
+          if (ev.model) activeModel = ev.model;  // source de verite serveur
           const info = $('modelInfo');
           if (info && ev.model) info.textContent = 'modèle actif : ' + ev.model;
         } else if (ev.type === 'thinking') {
           if (!thinkEl) { thinkEl = document.createElement('div');
             thinkEl.className = 'step-think'; $('history').appendChild(thinkEl); }
-          thinkEl.innerHTML = `<span class="spin">◌</span> Phi-4 raisonne… (étape ${ev.step})`;
+          thinkEl.innerHTML = `<span class="spin">◌</span> ${modelLabel()} raisonne… (étape ${ev.step})`;
         } else if (ev.type === 'tool_call') {
           if (thinkEl){ thinkEl.remove(); thinkEl = null; }
           curToolEl = renderToolBlock(ev);
