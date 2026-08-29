@@ -17,8 +17,10 @@ explicitement (exécution immédiate sans attendre le LLM).
 """
 import asyncio
 import json
+import os
 import re
 import threading
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -40,6 +42,43 @@ app.add_middleware(
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 MODEL = "hf.co/mradermacher/Phi-4-Mini-Abliterated-GGUF:Q4_K_M"
 INDEX = Path(__file__).parent / "index.html"
+
+# ---------------------------------------------------------------------------
+# Backends LLM : "local" (Ollama, DÉFAUT sûr, non-régression) et "colab"
+# (modèle GPU sur Colab via passerelle OpenAI-compatible). Le backend Colab
+# émet de VRAIS tool_calls OpenAI (vérifié end-to-end sur
+# unsloth/Qwen3.8-27B-GGUF) -> tooling beaucoup plus fiable que le parsing
+# texte TOOL:/ARGS: imposé par phi-4 en local.
+#
+# Config par variables d'environnement (jamais de secret en dur dans le code) :
+#   COLAB_URL   ex http://127.0.0.1:8780/v1  (passerelle Docker) ou l'URL
+#               publique https://xxxx.trycloudflare.com  (le /v1 est ajouté si absent)
+#   COLAB_TOKEN jeton Bearer accepté par la passerelle / llama serve --api-key
+# ---------------------------------------------------------------------------
+def _norm_v1(url: str) -> str:
+    url = (url or "").rstrip("/")
+    if not url:
+        return ""
+    return url if url.endswith("/v1") else url + "/v1"
+
+
+COLAB_BASE = _norm_v1(os.environ.get("COLAB_URL", "http://127.0.0.1:8780/v1"))
+COLAB_TOKEN = os.environ.get("COLAB_TOKEN", "")
+COLAB_MODEL = os.environ.get("COLAB_MODEL", "local")  # llama serve répond sur "local"
+DEFAULT_BACKEND = os.environ.get("MCP_CLEAN_BACKEND", "local")  # local par défaut
+
+VALID_BACKENDS = ("local", "colab")
+
+
+def _resolve_backend(backend: str | None) -> str:
+    b = (backend or DEFAULT_BACKEND or "local").lower()
+    return b if b in VALID_BACKENDS else "local"
+
+
+def _backend_supports_native_tools(backend: str) -> bool:
+    """Le backend Colab (Qwen3.8-27B via llama serve --jinja) émet des
+    tool_calls OpenAI natifs. Le backend local (phi-4 Ollama) NON."""
+    return backend == "colab"
 MCP_SERVER = (
     Path(__file__).parent.parent / "MCP-Kali-Server" / "kali_mcp_server_optimized.py"
 )
@@ -83,9 +122,10 @@ class AgentRequest(BaseModel):
     tool: str | None = None          # forcer un outil précis (clic panneau)
     tool_arg: str | None = None      # argument principal (domain/target/url...)
     reasoning: bool = False
-    summarize: bool = False          # synthèse phi-4 (lent sous contention CPU)
+    summarize: bool = False          # synthèse LLM (lent sous contention CPU en local)
     temperature: float = 0.2
     max_tokens: int = 300
+    backend: str | None = None       # "local" (Ollama, défaut) | "colab" (GPU)
 
 
 class LoopRequest(BaseModel):
@@ -95,6 +135,7 @@ class LoopRequest(BaseModel):
     reasoning: bool = False
     temperature: float = 0.2
     max_tokens: int = 350
+    backend: str | None = None       # "local" (Ollama, défaut) | "colab" (GPU)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +246,82 @@ def _call_ollama_chat(messages, max_tokens=300, temperature=0.2, timeout=600):
         return json.loads(r.read().decode())
 
 
+class BackendError(Exception):
+    """Erreur backend enrichie (statut HTTP + message lisible pour l'UI)."""
+
+    def __init__(self, message, status=None, retry_after=None):
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+
+
+def _call_colab_chat(messages, max_tokens=300, temperature=0.2, timeout=180,
+                     tools=None):
+    """Appel OpenAI-compatible vers la passerelle Colab. Réutilise le message
+    503 amélioré de la passerelle (GPU en réveil) tel quel."""
+    if not COLAB_TOKEN:
+        raise BackendError("Backend Colab non configuré : COLAB_TOKEN absent "
+                           "(voir .env / variables d'environnement).", status=412)
+    body = {"model": COLAB_MODEL, "messages": messages, "stream": False,
+            "max_tokens": max_tokens, "temperature": temperature}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    req = urllib.request.Request(
+        COLAB_BASE + "/chat/completions", data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {COLAB_TOKEN}",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="ignore")
+        try:
+            err = json.loads(raw).get("error", {})
+            msg = err.get("message", raw) if isinstance(err, dict) else str(err)
+            retry = err.get("retry_after") if isinstance(err, dict) else None
+        except Exception:
+            msg, retry = raw, None
+        raise BackendError(msg, status=e.code, retry_after=retry)
+    except Exception as e:
+        raise BackendError(f"passerelle Colab injoignable : {e}", status=503)
+
+
+def _norm_reply(backend: str, d: dict) -> dict:
+    """Normalise la réponse des deux backends vers une forme commune :
+    {content, tool_calls, prompt_tokens, completion_tokens}."""
+    if backend == "colab":
+        msg = (d.get("choices", [{}])[0] or {}).get("message", {}) or {}
+        usage = d.get("usage", {}) or {}
+        return {
+            "content": msg.get("content") or "",
+            "tool_calls": msg.get("tool_calls") or [],
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+        }
+    # ollama
+    return {
+        "content": (d.get("message", {}) or {}).get("content", "") or "",
+        "tool_calls": [],
+        "prompt_tokens": d.get("prompt_eval_count", 0),
+        "completion_tokens": d.get("eval_count", 0),
+    }
+
+
+def _call_llm(messages, backend="local", max_tokens=300, temperature=0.2,
+              timeout=None, tools=None) -> dict:
+    """Dispatcher unifié. Retourne la forme normalisée _norm_reply."""
+    backend = _resolve_backend(backend)
+    if backend == "colab":
+        d = _call_colab_chat(messages, max_tokens=max_tokens,
+                             temperature=temperature,
+                             timeout=timeout or 180, tools=tools)
+    else:
+        d = _call_ollama_chat(messages, max_tokens=max_tokens,
+                             temperature=temperature, timeout=timeout or 600)
+    return _norm_reply(backend, d)
+
+
 def _content(d: dict) -> str:
     return (d.get("message", {}) or {}).get("content", "") or ""
 
@@ -212,6 +329,12 @@ def _content(d: dict) -> str:
 def _acc(usage: dict, d: dict):
     usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + d.get("prompt_eval_count", 0)
     usage["completion_tokens"] = usage.get("completion_tokens", 0) + d.get("eval_count", 0)
+
+
+def _acc_norm(usage: dict, r: dict):
+    """Accumule l'usage depuis une réponse normalisée (_norm_reply)."""
+    usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + r.get("prompt_tokens", 0)
+    usage["completion_tokens"] = usage.get("completion_tokens", 0) + r.get("completion_tokens", 0)
 
 
 def _tool_text(result: dict) -> str:
@@ -338,6 +461,8 @@ def health():
     return {
         "status": "ok",
         "model": MODEL,
+        "default_backend": _resolve_backend(None),
+        "colab_configured": bool(COLAB_TOKEN),
         "mcp_connected": MCP is not None and MCP._session is not None,
         "tools_count": len(MCP.tools),
     }
@@ -349,6 +474,68 @@ def list_tools():
         "count": len(MCP.tools),
         "tools": MCP.tool_names(),
         "categories": TOOL_CATEGORIES,
+    }
+
+
+def _probe_local() -> dict:
+    """Ollama joignable ? (rapide, ne charge pas le modèle)."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read().decode())
+        names = [m.get("name", "") for m in data.get("models", [])]
+        return {"available": True, "state": "ready", "model": MODEL,
+                "loaded_models": names, "native_tools": False,
+                "detail": "Ollama local (parsing texte TOOL:/ARGS:)"}
+    except Exception as e:
+        return {"available": False, "state": "unavailable", "model": MODEL,
+                "native_tools": False, "detail": f"Ollama injoignable : {e}"}
+
+
+def _probe_colab() -> dict:
+    """Passerelle Colab : distingue configuré / GPU en réveil (503) / prêt."""
+    base = {"model": COLAB_MODEL, "native_tools": True,
+            "endpoint": COLAB_BASE, "configured": bool(COLAB_TOKEN)}
+    if not COLAB_TOKEN:
+        return {**base, "available": False, "state": "unconfigured",
+                "detail": "COLAB_TOKEN absent (renseigner .env)."}
+    try:
+        req = urllib.request.Request(
+            COLAB_BASE + "/models",
+            headers={"Authorization": f"Bearer {COLAB_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        models = [m.get("id") or m.get("name") for m in data.get("data", data.get("models", []))]
+        return {**base, "available": True, "state": "ready",
+                "served_models": models,
+                "detail": "GPU Colab actif (tool_calls OpenAI natifs)."}
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="ignore")
+        try:
+            err = json.loads(raw).get("error", {})
+            msg = err.get("message", raw) if isinstance(err, dict) else str(err)
+        except Exception:
+            msg = raw
+        if e.code == 503:  # GPU en réveil -> message passerelle réutilisé tel quel
+            return {**base, "available": False, "state": "gpu-waking",
+                    "http": 503, "detail": msg}
+        if e.code in (401, 403):
+            return {**base, "available": False, "state": "forbidden",
+                    "http": e.code, "detail": msg}
+        return {**base, "available": False, "state": "error",
+                "http": e.code, "detail": msg}
+    except Exception as e:
+        return {**base, "available": False, "state": "unreachable",
+                "detail": f"passerelle injoignable : {e}"}
+
+
+@app.get("/api/backends")
+def backends():
+    """État des deux backends pour le portail (l'utilisateur choisit, pas de
+    bascule automatique silencieuse)."""
+    return {
+        "default": _resolve_backend(None),
+        "backends": {"local": _probe_local(), "colab": _probe_colab()},
     }
 
 
@@ -365,17 +552,22 @@ def agent(req: AgentRequest):
         routed = _pre_route(req.message)
         if routed:
             tool, args = routed
+    backend = _resolve_backend(req.backend)
     if not tool:
         # Pas d'outil identifiable -> réponse LLM simple (sans catalogue)
         try:
-            d = _call_ollama_chat(
-                [{"role": "user", "content": req.message}],
-                max_tokens=req.max_tokens, temperature=req.temperature)
+            r = _call_llm([{"role": "user", "content": req.message}],
+                          backend=backend, max_tokens=req.max_tokens,
+                          temperature=req.temperature)
+        except BackendError as e:
+            return {"error": e.args[0], "status": e.status,
+                    "retry_after": e.retry_after, "backend": backend}
         except Exception as e:
-            return {"error": f"ollama: {e}"}
+            return {"error": f"{backend}: {e}", "backend": backend}
         usage: dict = {}
-        _acc(usage, d)
-        return {"reply": _content(d), "executed": None, "usage": usage}
+        _acc_norm(usage, r)
+        return {"reply": r["content"], "executed": None, "usage": usage,
+                "backend": backend}
 
     if not args:
         args = _arguments_for(tool, req.tool_arg or req.message)
@@ -386,13 +578,14 @@ def agent(req: AgentRequest):
     usage: dict = {}
     if req.summarize and not result.get("error"):
         try:
-            d = _call_ollama_chat(
+            r = _call_llm(
                 [{"role": "user", "content":
                   f"Résultat de l'outil {tool}:\n{text[:3000]}\n\n"
                   "Résume ce résultat en français, de façon concise."}],
-                max_tokens=req.max_tokens, temperature=req.temperature)
-            _acc(usage, d)
-            reply = _content(d) or text
+                backend=backend, max_tokens=req.max_tokens,
+                temperature=req.temperature)
+            _acc_norm(usage, r)
+            reply = r["content"] or text
         except Exception:
             reply = text
 
@@ -406,6 +599,7 @@ def agent(req: AgentRequest):
                        "is_error": bool(result.get("is_error") or result.get("error"))},
         },
         "usage": usage,
+        "backend": backend,
     }
 
 
@@ -417,12 +611,16 @@ def agent_loop(req: LoopRequest):
     session_id = req.session_id or uuid.uuid4().hex[:12]
     stop_flag = _STOP_FLAGS.setdefault(session_id, threading.Event())
     stop_flag.clear()
+    backend = _resolve_backend(req.backend)
+    native = _backend_supports_native_tools(backend)
 
     def gen():
         usage: dict = {}
         step = 0
         results_log: list[str] = []
-        yield _sse({"type": "session", "session_id": session_id})
+        seen_sigs: set[str] = set()   # anti-répétition fiable (outil+args)
+        yield _sse({"type": "session", "session_id": session_id,
+                    "backend": backend, "native_tools": native})
 
         # 1) pre_route : outil explicitement nommé -> exécution immédiate
         routed = _pre_route(req.message)
@@ -437,45 +635,76 @@ def agent_loop(req: LoopRequest):
             yield _sse({"type": "tool_result", "step": step, "tool": name,
                         "result": text})
 
-        # 2) boucle LLM
-        # NB: .replace() et non .format() — le template contient des accolades
-        # littérales (exemple ARGS: {"parametre": "valeur"}) qui casseraient
-        # str.format avec KeyError.
-        messages = [
-            {"role": "system",
-             "content": _LOOP_SYSTEM.replace("{tools}", _tools_prompt())},
-            {"role": "user", "content": req.message},
-        ]
+        # 2) boucle LLM — deux modes :
+        #    - colab (native=True)  : tool_calls OpenAI natifs, fiables.
+        #    - local (native=False) : phi-4 n'émet pas de tool_calls -> on
+        #      injecte le catalogue dans le prompt système et on parse TOOL:/ARGS:.
+        # NB: .replace() et non .format() — le template _LOOP_SYSTEM contient des
+        # accolades littérales qui casseraient str.format.
+        if native:
+            messages = [{"role": "user", "content": req.message}]
+            tools_payload = _ollama_tools_schema()
+        else:
+            messages = [
+                {"role": "system",
+                 "content": _LOOP_SYSTEM.replace("{tools}", _tools_prompt())},
+                {"role": "user", "content": req.message},
+            ]
+            tools_payload = None
+
         while step < req.max_steps:
             if stop_flag.is_set():
                 yield _sse({"type": "stopped", "step": step})
                 return
             yield _sse({"type": "thinking", "step": step + 1})
             try:
-                d = _call_ollama_chat(messages, max_tokens=req.max_tokens,
-                                      temperature=req.temperature)
-            except Exception as e:
-                yield _sse({"type": "error", "message": f"ollama: {e}"})
+                r = _call_llm(messages, backend=backend,
+                              max_tokens=req.max_tokens,
+                              temperature=req.temperature,
+                              tools=tools_payload)
+            except BackendError as e:
+                yield _sse({"type": "error", "message": e.args[0],
+                            "status": e.status, "retry_after": e.retry_after,
+                            "backend": backend})
                 return
-            _acc(usage, d)
-            content = _content(d)
-            parsed = _parse_tool_call(content)
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"{backend}: {e}"})
+                return
+            _acc_norm(usage, r)
+            content = r["content"]
 
-            if not parsed:
-                # Réponse finale en langage naturel
+            # --- déterminer l'appel d'outil selon le mode ---
+            if native and r["tool_calls"]:
+                tc = r["tool_calls"][0]
+                name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"].get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                assistant_msg = {"role": "assistant", "content": content or "",
+                                 "tool_calls": [tc]}
+            else:
+                parsed = _parse_tool_call(content)
+                if not parsed:
+                    yield _sse({"type": "final", "reply": content, "usage": usage})
+                    return
+                name, args = parsed
+                assistant_msg = {"role": "assistant", "content": content}
+
+            if not native and not _parse_tool_call(content):
                 yield _sse({"type": "final", "reply": content, "usage": usage})
                 return
 
-            name, args = parsed
             # Anti-répétition : même outil + mêmes args déjà exécuté -> stop
             sig = f"{name}{json.dumps(args, sort_keys=True)}"
-            if any(sig in r for r in results_log):
+            if sig in seen_sigs:
                 yield _sse({"type": "final",
                             "reply": "Boucle interrompue : l'agent répète le même "
                                      "appel. Résultats déjà obtenus :\n\n"
                                      + "\n\n".join(results_log)[-3000:],
                             "usage": usage})
                 return
+            seen_sigs.add(sig)
 
             step += 1
             yield _sse({"type": "tool_call", "step": step, "tool": name,
@@ -486,10 +715,16 @@ def agent_loop(req: LoopRequest):
             yield _sse({"type": "tool_result", "step": step, "tool": name,
                         "result": text})
 
-            messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content":
-                             f"Résultat de l'outil {name} :\n{text[:2500]}\n\n"
-                             "Continue (TOOL:/ARGS:) ou réponds en français."})
+            messages.append(assistant_msg)
+            if native:
+                messages.append({"role": "tool",
+                                 "tool_call_id": (r["tool_calls"][0].get("id")
+                                                  or f"call_{step}"),
+                                 "content": text[:2500]})
+            else:
+                messages.append({"role": "user", "content":
+                                 f"Résultat de l'outil {name} :\n{text[:2500]}\n\n"
+                                 "Continue (TOOL:/ARGS:) ou réponds en français."})
 
         # max_steps atteint
         yield _sse({"type": "final",

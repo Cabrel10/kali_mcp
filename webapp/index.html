@@ -94,6 +94,14 @@
       <option value="">chargement…</option>
     </select>
   </div>
+  <div class="toggle">
+    <span>Backend</span>
+    <select id="backendSel" title="local = Ollama sur le VPS (défaut, sûr) · colab = GPU Colab (tool_calls natifs, rapide/précis)" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px">
+      <option value="local" selected>local (Ollama)</option>
+      <option value="colab">colab (GPU)</option>
+    </select>
+    <span id="backendBadge" title="état du backend" style="font-size:11px;padding:2px 7px;border-radius:10px;border:1px solid #30363d;color:#8b949e">…</span>
+  </div>
   <div class="stat" style="margin-left:auto" id="modelInfo">agent autonome</div>
 </header>
 
@@ -143,6 +151,38 @@ async function loadModels() {
   } catch (e) { sel.innerHTML = '<option value="">(défaut serveur)</option>'; }
 }
 loadModels();
+
+// --- État des backends (local / colab) : l'utilisateur choisit, jamais de
+//     bascule auto. Le badge reflète disponible / GPU-waking / indisponible. ---
+async function refreshBackends() {
+  const sel = document.getElementById('backendSel');
+  const badge = document.getElementById('backendBadge');
+  try {
+    const res = await fetch('/api/backends');
+    const data = await res.json();
+    const cur = sel.value || data.default || 'local';
+    const b = (data.backends || {})[cur] || {};
+    const COLORS = {
+      ready: ['#2ea043', 'disponible'],
+      'gpu-waking': ['#d29922', 'GPU en réveil…'],
+      unconfigured: ['#6e7681', 'non configuré'],
+      forbidden: ['#f85149', 'jeton refusé'],
+      unavailable: ['#f85149', 'indisponible'],
+      unreachable: ['#f85149', 'injoignable'],
+      error: ['#f85149', 'erreur'],
+    };
+    const [color, label] = COLORS[b.state] || ['#8b949e', b.state || '?'];
+    badge.style.color = color;
+    badge.style.borderColor = color;
+    badge.textContent = label;
+    badge.title = (b.detail || '') + (b.native_tools ? ' · tool_calls natifs' : ' · parsing texte');
+  } catch (e) {
+    badge.textContent = 'n/a'; badge.style.color = '#8b949e';
+  }
+}
+document.getElementById('backendSel').addEventListener('change', refreshBackends);
+refreshBackends();
+setInterval(refreshBackends, 15000);  // le GPU Colab peut se réveiller pendant l'usage
 
 async function loadTools() {
   try {
@@ -237,7 +277,7 @@ async function send() {
     try {
       const res = await fetch('/api/agent', { method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ message: message, tool: pendingTool, tool_arg: message, summarize: false }) });
+        body: JSON.stringify({ message: message, tool: pendingTool, tool_arg: message, summarize: false, backend: document.getElementById('backendSel').value }) });
       const data = await res.json();
       const resText = (data.executed && data.executed.result && data.executed.result.content)
         ? data.executed.result.content.map(c => c.text || '').join('\n')
@@ -275,6 +315,7 @@ async function send() {
         reasoning: document.getElementById('reasoning').checked,
         temperature: parseFloat(document.getElementById('temp').value),
         model: document.getElementById('modelSel').value || undefined,
+        backend: document.getElementById('backendSel').value,
         max_tokens: 350
       }) });
 
