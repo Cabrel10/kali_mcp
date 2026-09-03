@@ -72,35 +72,18 @@ class TacticalConfig:
         'usernames': "/usr/share/wordlists/metasploit/unix_users.txt"
     }
     
-    # =================== NUCLEI SAFETY BOUNDARY ===================
-    NUCLEI_ALLOWED_TARGETS = {
-        target.strip().rstrip(".").lower()
-        for target in os.getenv("NUCLEI_ALLOWED_TARGETS", "").split(",")
-        if target.strip()
-    }
-    NUCLEI_TIMEOUT_MAX: int = min(
-        300,
-        max(1, int(os.getenv("NUCLEI_TIMEOUT_MAX", "180"))),
-    )
-    NUCLEI_OUTPUT_DIR: Path = Path(
-        os.getenv("NUCLEI_OUTPUT_DIR", str(RESULTS_DIR / "nuclei"))
-    )
-    NUCLEI_ALLOWED_INTENSITIES = frozenset({"fast", "deep", "full"})
-    NUCLEI_ALLOWED_SEVERITIES = frozenset(
-        {"info", "low", "medium", "high", "critical"}
-    )
+    # =================== NUCLEI TEMPLATES ===================
     NUCLEI_TEMPLATES: List[str] = [
-        "cves",
-        "cves/2024",
-        "cves/2023",
-        "exposed-panels",
-        "misconfiguration",
-        "misconfigurations",
-        "technologies",
-        "exposures",
-        "vulnerabilities",
-        "takeovers",
-        "all",
+        'cves/2024',
+        'cves/2023',
+        'exposed-panels',
+        'default-logins',
+        'misconfiguration',
+        'misconfigurations',
+        'technologies',
+        'exposures',
+        'vulnerabilities',
+        'takeovers'
     ]
     
     # =================== USER AGENTS ===================
@@ -142,13 +125,7 @@ class TacticalConfig:
     def validate(cls) -> bool:
         """Validate configuration and create necessary directories"""
         # Create directories if they don't exist
-        for dir_path in [
-            cls.DATA_DIR,
-            cls.CACHE_DIR,
-            cls.LOGS_DIR,
-            cls.RESULTS_DIR,
-            cls.NUCLEI_OUTPUT_DIR,
-        ]:
+        for dir_path in [cls.DATA_DIR, cls.CACHE_DIR, cls.LOGS_DIR, cls.RESULTS_DIR]:
             dir_path.mkdir(parents=True, exist_ok=True)
         
         # Check critical tools
@@ -189,9 +166,6 @@ class TacticalConfig:
             "enable_proxy_rotation": cls.ENABLE_PROXY_ROTATION,
             "enable_rate_limiting": cls.ENABLE_RATE_LIMITING,
             "default_scan_intensity": cls.DEFAULT_SCAN_INTENSITY,
-            "nuclei_allowed_targets": sorted(cls.NUCLEI_ALLOWED_TARGETS),
-            "nuclei_timeout_max": cls.NUCLEI_TIMEOUT_MAX,
-            "nuclei_output_dir": str(cls.NUCLEI_OUTPUT_DIR),
             "enable_ghost_mode": cls.ENABLE_GHOST_MODE,
             "mikrotik_stealth_mode": cls.MIKROTIK_STEALTH_MODE,
             "ip_pool_size": len(cls.IP_POOL)

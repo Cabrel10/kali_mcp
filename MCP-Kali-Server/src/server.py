@@ -125,24 +125,9 @@ class KaliTacticalServer:
                         "type": "object",
                         "properties": {
                             "target": {"type": "string"},
-                            "intensity": {
-                                "type": "string",
-                                "enum": ["fast", "deep", "full"],
-                                "default": "fast",
-                            },
-                            "templates": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "minItems": 1,
-                                "uniqueItems": True,
-                            },
-                            "authorization_reference": {
-                                "type": "string",
-                                "description": "Required for every external allowlisted target",
-                            },
+                            "intensity": {"type": "string", "description": "fast/deep/full", "default": "fast"}
                         },
-                        "required": ["target"],
-                        "additionalProperties": False,
+                        "required": ["target"]
                     }
                 ),
                 
@@ -412,17 +397,10 @@ class KaliTacticalServer:
     
     async def _handle_nuclei_scan(self, args: Dict) -> Dict:
         """Handle Nuclei vulnerability scan"""
-        target = args["target"]
-        intensity = args.get("intensity", "fast")
-        templates = args.get("templates")
-        authorization_reference = args.get("authorization_reference", "")
-
-        return await self.vuln_scanner.smart_nuclei_scan(
-            target,
-            intensity,
-            templates=templates,
-            authorization_reference=authorization_reference,
-        )
+        target = args['target']
+        intensity = args.get('intensity', 'fast')
+        
+        return await self.vuln_scanner.smart_nuclei_scan(target, intensity)
     
     async def _handle_sql_injection(self, args: Dict) -> Dict:
         """Handle SQL injection testing"""
