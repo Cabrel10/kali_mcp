@@ -1,6 +1,12 @@
 sessions/
 cve_cache/
 chain_data/
+tool_logs/
+.hypothesis/
 __pycache__/
 *.pyc
 *.backup
+*.json
+*.ipynb
+download-ripgrep*/
+MCP-Kali-Server/data/
