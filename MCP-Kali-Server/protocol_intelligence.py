@@ -48,12 +48,12 @@ except ImportError:
     HAS_BS4 = False
 
 try:
+    # Import dns pour éviter l'incompatibilité avec aioquic
     import dns.resolver
     import dns.rdatatype
-    import dns.zone
-    import dns.query
     import dns.reversename
     import dns.exception
+    import dns.query
     HAS_DNSPYTHON = True
 except ImportError:
     HAS_DNSPYTHON = False
@@ -446,8 +446,22 @@ class ProtocolAnalyzer:
             result.vulnerabilities.append("Self-signed certificate")
         if result.expired:
             result.vulnerabilities.append("Certificate expired")
+        
+        # TLS/Certificate key strength assessment (distinguish asymmetric vs symmetric)
         if result.key_size and result.key_size < 2048:
-            result.vulnerabilities.append(f"Weak key size: {result.key_size} bits (< 2048)")
+            # Determine key type from certificate
+            key_type = "RSA"  # Default assumption
+            if "EC" in result.cipher_suite or "ECDSA" in result.signature_algorithm:
+                key_type = "EC"
+            
+            # Only flag if it's actually asymmetric and weak
+            if key_type == "RSA":
+                result.vulnerabilities.append(f"Weak RSA key size: {result.key_size} bits (< 2048)")
+            elif key_type == "EC" and result.key_size < 224:
+                # EC keys < 224 bits are weak
+                result.vulnerabilities.append(f"Weak EC key size: {result.key_size} bits (< 224)")
+            # Symmetric keys < 128 bits are weak, but 256-bit symmetric is standard
+            # So we skip flagging symmetric key strength
 
         # Weak cipher detection
         weak_patterns = ["RC4", "DES", "MD5", "NULL", "EXPORT", "anon"]
@@ -987,6 +1001,26 @@ class SmartFuzzer:
         self.results: List[FuzzResult] = []
         self.baseline_responses: Dict[str, Dict] = {}
 
+    async def _is_waf_block(self, status_code: int, headers: Dict) -> bool:
+        """
+        Detect if response is from WAF/security device, not an actual server error.
+        Common WAF response codes: 403, 429, 502, 503, 520 (Cloudflare), 530 (Cloudflare)
+        """
+        waf_indicators = [403, 429, 502, 503, 520, 530]
+        if status_code in waf_indicators:
+            # Additional headers indicating WAF
+            headers_lower = {k.lower(): v.lower() for k, v in headers.items()}
+            waf_headers = ["cf-ray", "x-protected-by", "x-akamai", "x-sucuri", "x-waf"]
+            if any(h in headers_lower for h in waf_headers):
+                return True
+            # Cloudflare specific (520, 530 or CF_RAY header)
+            if status_code in [520, 530] or "cf-ray" in headers_lower:
+                return True
+            # ModSecurity or generic WAF on 403/429
+            if status_code in [403, 429]:
+                return True
+        return False
+
     async def establish_baseline(self, url: str, params: List[Dict],
                                   method: str = "GET") -> Dict[str, Any]:
         """
@@ -1022,6 +1056,8 @@ class SmartFuzzer:
         """
         Fuzz a single parameter with payloads for a specific vulnerability type.
         Analyzes response differences to detect anomalies.
+        
+        WAF filtering: Detects and filters out WAF blocks that would cause false positives.
         """
         results = []
         payloads = self.PAYLOADS.get(vuln_type, {}).get("detection", [])
@@ -1054,9 +1090,15 @@ class SmartFuzzer:
                     response_time_ms=analysis.response_time_ms,
                 )
 
+                # === WAF DETECTION & FILTERING ===
+                is_waf_block = await self._is_waf_block(
+                    analysis.status_code, 
+                    analysis.headers if hasattr(analysis, 'headers') else {}
+                )
+
                 # === ANOMALY DETECTION ===
-                if baseline:
-                    # 1. Status code change
+                if baseline and not is_waf_block:
+                    # 1. Status code change (but NOT from WAF)
                     if analysis.status_code != baseline["status_code"]:
                         if analysis.status_code == 500:
                             fuzz_result.anomaly = True
@@ -1084,11 +1126,12 @@ class SmartFuzzer:
 
                 # 4. Error pattern matching in response
                 # We'd need the body here — for now check based on known patterns
-                if analysis.status_code == 500 and vuln_type == "sqli":
+                if analysis.status_code == 500 and not is_waf_block and vuln_type == "sqli":
                     fuzz_result.anomaly = True
                     fuzz_result.anomaly_type = "error_based_sqli"
                     fuzz_result.evidence = "500 error on SQL payload"
 
+                # VALIDATOR: Only return anomalies that are NOT WAF blocks
                 if fuzz_result.anomaly:
                     results.append(fuzz_result)
 

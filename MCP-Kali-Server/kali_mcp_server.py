@@ -68,6 +68,13 @@ from collections import defaultdict
 
 from fastmcp import FastMCP
 
+# Import phishing detector
+try:
+    from phishing_detector import analyze_site_for_phishing, PhishingDetector
+except ImportError:
+    PhishingDetector = None
+    analyze_site_for_phishing = None
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -820,6 +827,15 @@ class VulnCorrelator:
         "kerberos": {"checks": ["as_rep_roast", "kerberoast", "delegation"], "common_cves": []},
     }
 
+    # CDN/Proxy IP ranges (simplified)
+    CDN_RANGES = {
+        "cloudflare": ["104.16.", "104.17.", "104.18.", "104.19.", "104.20.", "104.21.",
+                       "172.64.", "172.65.", "172.66.", "172.67.", "173.245.", "103.21."],
+        "aws_cloudfront": ["143.204.", "144.220.", "52.84.", "52.85.", "52.86."],
+        "akamai": ["95.100.", "96.16.", "96.17.", "96.18.", "96.19.", "96.20."],
+        "cloudflare_ranges": ["162.158.", "162.159.", "162.255.", "163.114."],
+    }
+
     def __init__(self, memory: PentestMemory):
         self.memory = memory
         self._vuln_db: Dict[str, List[VulnFinding]] = defaultdict(list)
@@ -839,6 +855,15 @@ class VulnCorrelator:
         findings = self.memory.get_context(target)
         finding_types = set(findings.get("finding_types", []))
         vulns = self._vuln_db.get(target, [])
+        
+        # Extract IP addresses for CDN filtering
+        target_ips = {}
+        for finding in findings.get("findings", []):
+            if "ip" in finding:
+                target_ips[target] = finding["ip"]
+        
+        # Filter out false positives from CDN IPs
+        vulns = self._filter_cdn_findings(vulns, target_ips)
 
         result = {
             "target": target,
@@ -911,6 +936,46 @@ class VulnCorrelator:
             if known_svc in svc:
                 return {"service": known_svc, **checks}
         return {"service": svc, "checks": ["generic_scan"], "common_cves": []}
+
+    def _is_cdn_ip(self, ip: str) -> tuple[bool, str]:
+        """
+        Check if IP belongs to a known CDN/proxy provider.
+        Returns (is_cdn, provider_name)
+        """
+        for provider, ranges in self.CDN_RANGES.items():
+            for prefix in ranges:
+                if ip.startswith(prefix):
+                    return True, provider
+        return False, "none"
+
+    def _filter_cdn_findings(self, findings: List[VulnFinding], target_ips: Dict[str, str]) -> List[VulnFinding]:
+        """
+        Filter out false vulnerabilities from CDN IPs.
+        CDN IPs should NOT generate attack surface scores unless there's a real application vulnerability.
+        """
+        filtered = []
+        for finding in findings:
+            # Get the IP for this finding
+            target_ip = target_ips.get(finding.target, "")
+            is_cdn, provider = self._is_cdn_ip(target_ip)
+            
+            if is_cdn:
+                # If it's a CDN IP, only accept findings that are application-level (not infrastructure)
+                # Infrastructure findings on CDN = false positives
+                infrastructure_findings = [
+                    "port_open", "service_detected", "weak_tls", "weak_cipher",
+                    "expired_cert", "self_signed_cert"
+                ]
+                
+                # Check if this is an infrastructure finding
+                if any(inf in finding.vuln_id or inf in finding.title.lower() 
+                       for inf in infrastructure_findings):
+                    # Skip CDN infrastructure findings
+                    logger.info(f"[FILTER] Skipping CDN infrastructure finding: {finding.title} on {provider} IP {target_ip}")
+                    continue
+            
+            filtered.append(finding)
+        return filtered
 
     def get_vulns(self, target: str) -> List[VulnFinding]:
         return self._vuln_db.get(target, [])
@@ -2560,6 +2625,127 @@ async def web_assault(
 
 
 # ============================================================================
+# MODULE 2B: PHISHING DETECTOR
+# Semantic analysis: redirects, forms, OAuth, legal mentions, brand squatting
+# ============================================================================
+
+@mcp.tool()
+async def phishing_detector(
+    target: str,
+    depth: str = "deep",
+    timeout: int = 300,
+) -> str:
+    """
+    Analyze website for phishing characteristics using semantic analysis.
+    
+    Detects:
+    - Form exfiltration (external submission URLs)
+    - OAuth redirect_uri hijacking
+    - Brand typo-squatting
+    - Missing legal mentions (privacy policy, terms)
+    - Suspicious domain patterns
+    - Sensitive input field combinations
+    - Redirect chains
+    
+    Returns phishing_risk: critical|high|medium|low|none
+    """
+    target = InputValidator.sanitize_target(target)
+    timeout = InputValidator.validate_timeout(timeout)
+    execution = session_manager.start_execution(
+        "phishing_detector", target, {"depth": depth}
+    )
+    
+    try:
+        if PhishingDetector is None:
+            return json.dumps({
+                "error": "PhishingDetector module not available",
+                "target": target,
+                "phishing_risk": "unknown"
+            })
+
+        # Fetch the target HTML
+        curl_result = await run_command(
+            ["curl", "-sk", "-L", "--max-time", str(timeout), target],
+            timeout=timeout + 10
+        )
+        
+        if not curl_result.get("success") or not curl_result.get("stdout"):
+            session_manager.complete_execution(
+                execution, 
+                {"error": "Failed to fetch target", "target": target},
+                "failed"
+            )
+            return json.dumps({
+                "error": "Failed to fetch target HTML",
+                "target": target,
+                "phishing_risk": "unknown"
+            })
+        
+        html_content = curl_result.get("stdout", "")
+        
+        # Run phishing analysis
+        detector = PhishingDetector()
+        analysis_result = await detector.analyze(target, html_content)
+        
+        # Store findings in memory
+        if analysis_result.get("phishing_risk") in ["critical", "high"]:
+            pentest_memory.store_finding(
+                target, "phishing_detector", "phishing_detected",
+                {
+                    "risk": analysis_result["phishing_risk"],
+                    "score": analysis_result["phishing_score"],
+                    "findings": len(analysis_result.get("findings", []))
+                }
+            )
+            
+            # Register as security finding
+            if analysis_result["phishing_risk"] == "critical":
+                severity = "critical"
+            else:
+                severity = "high"
+            
+            vuln_correlator.add_vulnerability(VulnFinding(
+                vuln_id=f"phishing_{target.replace('://', '_').replace('/', '_')}",
+                title=f"Phishing site detected: {analysis_result['phishing_risk'].upper()}",
+                severity=severity,
+                cvss_score=8.5 if severity == "critical" else 7.2,
+                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N",
+                target=target,
+                service="web",
+                evidence=json.dumps(analysis_result["findings"][:5]),
+                exploitable=False,  # Phishing is detection, not exploitation
+                kill_chain_phase="delivery",
+                mitre_techniques=["T1598", "T1566"],  # Phishing
+                remediation="Report to appropriate authorities (FBI IC3, Google Safe Browsing, PhishTank)",
+            ))
+        
+        results = {
+            "target": target,
+            "phishing_risk": analysis_result.get("phishing_risk"),
+            "phishing_score": analysis_result.get("phishing_score"),
+            "confidence": analysis_result.get("confidence", 0),
+            "indicators": analysis_result.get("indicators", {}),
+            "findings": analysis_result.get("findings", []),
+            "recommendations": analysis_result.get("recommendations", []),
+        }
+        
+        session_manager.complete_execution(execution, results)
+        return json.dumps(results, indent=2, default=str)
+    
+    except Exception as e:
+        session_manager.complete_execution(
+            execution, 
+            {"error": str(e)},
+            "failed"
+        )
+        return json.dumps({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "target": target
+        })
+
+
+# ============================================================================
 # MODULE 3: INJECTION MATRIX
 # Replaces: sqlmap_scan, sql_injection_test, xss_scan, lfi_scan, command_injection_test,
 #           ssti_scanner, json_parameter_fuzzer
@@ -2609,11 +2795,39 @@ async def injection_matrix(
                 sqlmap_args.extend(["--level", "5", "--risk", "3", "--threads", "8",
                                     "--tamper", "between,randomcase,space2comment"])
             sqlmap_result = await run_command(sqlmap_args, timeout=timeout)
+            sqlmap_output = sqlmap_result.get("stdout", "").lower()
             sqli_results["sqlmap"]["output"] = sqlmap_result.get("stdout", "")[:3000]
-            sqli_results["sqlmap"]["vulnerable"] = any(
-                marker in sqlmap_result.get("stdout", "").lower()
-                for marker in ["injectable", "payload:", "parameter:", "type:"]
-            )
+            
+            # VALIDATOR: Parse sqlmap intelligently, not just keyword search
+            # Negation patterns take precedence
+            if any(phrase in sqlmap_output for phrase in [
+                "do not appear to be injectable",
+                "all tested parameters appear to be not injectable",
+                "heuristic test shows that parameter might not be injectable",
+                "skipping to the next target",
+                "no injectable parameters found"
+            ]):
+                sqli_results["sqlmap"]["vulnerable"] = False
+                sqli_results["sqlmap"]["confidence"] = 0.0
+                sqli_results["sqlmap"]["reason"] = "sqlmap_explicit_negative"
+            # Only mark vulnerable if sqlmap explicitly confirms injection
+            elif any(phrase in sqlmap_output for phrase in [
+                "parameter is vulnerable to",
+                "is vulnerable to sql injection",
+                "type:", "technique:"
+            ]) and "injectable" in sqlmap_output:
+                sqli_results["sqlmap"]["vulnerable"] = True
+                sqli_results["sqlmap"]["confidence"] = 0.95
+                sqli_results["sqlmap"]["reason"] = "sqlmap_explicit_positive"
+                # Extract technique if present
+                import re
+                tech_match = re.search(r"Type:\s+([^\n]+)", sqlmap_result.get("stdout", ""))
+                if tech_match:
+                    sqli_results["sqlmap"]["technique"] = tech_match.group(1).strip()
+            else:
+                sqli_results["sqlmap"]["vulnerable"] = False
+                sqli_results["sqlmap"]["confidence"] = 0.0
+                sqli_results["sqlmap"]["reason"] = "sqlmap_inconclusive"
             if sqli_results["sqlmap"]["vulnerable"]:
                 pentest_memory.store_finding(target, "injection_matrix", "sqli_found",
                                              {"source": "sqlmap", "param": param})

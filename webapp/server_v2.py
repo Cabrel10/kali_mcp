@@ -38,8 +38,8 @@ DB_PATH = BASE / "portal_history.db"
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
-MCP_SERVER = (BASE.parent / "MCP-Kali-Server" / "kali_mcp_server_optimized.py")
-PYTHON = "/home/ubuntu/webapp/MORNINGSTAR/miniconda3/envs/trading_env/bin/python"
+MCP_SERVER = (BASE.parent / "MCP-Kali-Server" / "kali_mcp_server.py")
+PYTHON = "/home/morningstar/miniconda3/envs/trading_env/bin/python"
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 OLLAMA_TAGS = "http://127.0.0.1:11434/api/tags"
 DEFAULT_MODEL = "hf.co/mradermacher/Phi-4-Mini-Abliterated-GGUF:Q4_K_M"
