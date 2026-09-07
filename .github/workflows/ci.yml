@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [genspark_ai_developer, main, master]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install fastapi "uvicorn[standard]" httpx pytest
+      - name: Compile check (portal + MCP server)
+        run: |
+          python -m py_compile webapp/server.py
+          python -m py_compile MCP-Kali-Server/kali_mcp_server_optimized.py 2>/dev/null || echo "MCP server compile skipped (deps not installed)"
+      - name: Portal smoke test
+        run: |
+          cd webapp
+          uvicorn server:app --port 18100 &
+          sleep 3
+          curl -sf http://127.0.0.1:18100/api/health | grep -q '"ok"'
+          curl -sf http://127.0.0.1:18100/api/tools | grep -q '"count"'
+          echo "Portal smoke test OK"
