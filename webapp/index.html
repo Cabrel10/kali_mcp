@@ -3,397 +3,408 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP-Clean Console</title>
+<title>MCP Control Room</title>
 <style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --border2:#21262d;
+          --txt:#c9d1d9; --dim:#8b949e; --dim2:#484f58; --blue:#58a6ff;
+          --green:#3fb950; --purple:#d2a8ff; --red:#f85149; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0;
-         background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
-  header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 18px;
-           display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
-  header h1 { font-size: 16px; color: #58a6ff; margin: 0; }
-  .stat { font-size: 12px; color: #8b949e; }
-  .stat b { color: #79c0ff; font-size: 14px; }
-  .toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8b949e; }
-  .switch { position: relative; width: 36px; height: 20px; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .slider { position: absolute; cursor: pointer; inset: 0; background: #30363d; border-radius: 20px; transition: .2s; }
-  .slider:before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px;
-                   background: #8b949e; border-radius: 50%; transition: .2s; }
-  input:checked + .slider { background: #238636; }
-  input:checked + .slider:before { transform: translateX(16px); background: #fff; }
+         background: var(--bg); color: var(--txt); height: 100vh; display: flex; flex-direction: column; }
+  header { background: var(--panel); border-bottom: 1px solid var(--border);
+           padding: 8px 16px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  header h1 { font-size: 15px; color: var(--blue); margin: 0; }
+  .stat { font-size: 11.5px; color: var(--dim); }
+  .stat b { color: #79c0ff; }
+  #connDot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim2); display: inline-block; margin-right: 5px; }
+  #connDot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #disclaimer { font-size: 10.5px; color: #d29922; background: #2d2313; border: 1px solid #6e5300;
+                padding: 3px 10px; border-radius: 6px; margin-left: auto; cursor: help; }
   main { display: flex; flex: 1; overflow: hidden; }
-  #toolsPane { width: 280px; min-width: 280px; background: #161b22; border-right: 1px solid #30363d;
-               overflow-y: auto; padding: 14px; }
-  #toolsPane h2 { font-size: 13px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px;
-                  margin: 0 0 12px; }
-  .cat { margin-bottom: 14px; }
-  .cat-name { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-bottom: 6px;
-              padding-bottom: 3px; border-bottom: 1px solid #21262d; }
-  .tool-btn { display: block; width: 100%; text-align: left; background: none; border: none;
-              color: #79c0ff; padding: 4px 8px; font-size: 12.5px; cursor: pointer;
-              border-radius: 4px; font-family: inherit; }
-  .tool-btn:hover { background: #21262d; color: #fff; }
-  .tool-btn:before { content: "▸ "; color: #30363d; }
-  #chatPane { flex: 1; display: flex; flex-direction: column; }
-  #history { flex: 1; overflow-y: auto; padding: 18px; }
-  .exchange { margin-bottom: 18px; border: 1px solid #21262d; border-radius: 10px; overflow: hidden; }
-  .ex-q { background: #1f2937; padding: 10px 14px; font-size: 13.5px; color: #e6edf3;
-          border-left: 3px solid #58a6ff; }
-  .ex-q .who { font-size: 10px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
-  .ex-a { background: #161b22; padding: 10px 14px; font-size: 13.5px; line-height: 1.6;
-          white-space: pre-wrap; border-left: 3px solid #238636; }
-  .ex-a .who { font-size: 10px; color: #3fb950; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
-  .step { padding: 6px 14px; font-size: 12px; border-top: 1px solid #21262d; font-family: monospace; }
-  .step.think { color: #8b949e; background: #0d1117; }
-  .step.call { color: #d2a8ff; background: #0d1117; }
-  .step.result { color: #7ee787; background: #0d1117; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
-  .step.stop { color: #f85149; background: #0d1117; font-weight: bold; }
-  .ex-meta { background: #0d1117; padding: 4px 14px; font-size: 10.5px; color: #484f58;
-             border-top: 1px solid #21262d; }
-  .empty { color: #484f58; text-align: center; margin-top: 60px; font-size: 14px; }
-  #inputBar { border-top: 1px solid #30363d; padding: 14px 18px; background: #161b22; }
-  #inputBar textarea { width: 100%; padding: 11px; background: #0d1117; color: #c9d1d9;
-             border: 1px solid #30363d; border-radius: 8px; font-size: 13.5px; font-family: inherit;
-             resize: none; }
-  #inputBar textarea:focus { outline: none; border-color: #58a6ff; }
-  .inputRow { display: flex; gap: 10px; align-items: center; margin-top: 9px; }
-  #sendBtn { padding: 9px 26px; background: #238636; color: #fff; border: none; border-radius: 7px;
+  /* Sessions pane */
+  #sessPane { width: 230px; min-width: 230px; background: var(--panel); border-right: 1px solid var(--border);
+              display: flex; flex-direction: column; }
+  #sessPane h2, #toolsPane h2 { font-size: 11px; color: var(--blue); text-transform: uppercase;
+              letter-spacing: 1px; margin: 0; padding: 12px 12px 8px; }
+  #sessSearch { margin: 0 10px 8px; padding: 6px 8px; background: var(--bg); color: var(--txt);
+                border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+  #sessList { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
+  .sess-item { padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
+               border: 1px solid transparent; margin-bottom: 3px; }
+  .sess-item:hover { background: var(--border2); }
+  .sess-item.active { background: #1f2937; border-color: var(--blue); }
+  .sess-item .t { color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-item .m { font-size: 10px; color: var(--dim2); }
+  .sess-item .st { font-size: 9px; padding: 1px 5px; border-radius: 8px; background: var(--border2); color: var(--dim); }
+  .sess-item .st.done { color: var(--green); }
+  .sess-item .st.active { color: var(--blue); }
+  #newSessBtn { margin: 0 10px 10px; padding: 7px; background: #238636; color: #fff; border: none;
+                border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  /* Chat pane */
+  #chatPane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #history { flex: 1; overflow-y: auto; padding: 16px; }
+  .msg { margin-bottom: 12px; max-width: 90%; }
+  .msg .who { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+  .msg .body { padding: 9px 13px; border-radius: 10px; font-size: 13.5px; line-height: 1.6;
+               white-space: pre-wrap; word-break: break-word; }
+  .msg.user { margin-left: auto; }
+  .msg.user .who { color: var(--blue); text-align: right; }
+  .msg.user .body { background: #1f2937; border: 1px solid var(--border); }
+  .msg.assistant .who { color: var(--green); }
+  .msg.assistant .body { background: var(--panel); border: 1px solid var(--border2); }
+  /* Tool call blocks (expandables) */
+  .tool-block { margin: 8px 0; border: 1px solid var(--border2); border-radius: 8px; overflow: hidden; font-size: 12px; }
+  .tool-head { padding: 6px 12px; background: #0d1117; cursor: pointer; display: flex; gap: 8px;
+               align-items: center; font-family: monospace; color: var(--purple); }
+  .tool-head:hover { background: var(--border2); }
+  .tool-head .badge { font-size: 9px; padding: 1px 6px; border-radius: 8px; }
+  .tool-head .badge.ok { background: #12331a; color: var(--green); }
+  .tool-head .badge.error { background: #3a1215; color: var(--red); }
+  .tool-head .badge.running { background: #2d2313; color: #d29922; }
+  .tool-head .lat { margin-left: auto; color: var(--dim2); font-size: 10px; }
+  .tool-body { display: none; padding: 8px 12px; background: var(--bg); }
+  .tool-body.open { display: block; }
+  .tool-body pre { margin: 4px 0; padding: 8px; background: #0d1117; border-radius: 6px;
+                   overflow-x: auto; font-size: 11px; max-height: 260px; overflow-y: auto; }
+  .tool-body .lbl { font-size: 9.5px; color: var(--dim2); text-transform: uppercase; }
+  .step-think { padding: 5px 12px; font-size: 11.5px; color: var(--dim); font-family: monospace; }
+  .empty { color: var(--dim2); text-align: center; margin-top: 50px; font-size: 13.5px; }
+  /* Input bar */
+  #inputBar { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--panel); }
+  #inputBar textarea { width: 100%; padding: 10px; background: var(--bg); color: var(--txt);
+             border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px;
+             font-family: inherit; resize: none; }
+  #inputBar textarea:focus { outline: none; border-color: var(--blue); }
+  .inputRow { display: flex; gap: 9px; align-items: center; margin-top: 8px; }
+  #modelSel { background: var(--bg); color: var(--txt); border: 1px solid var(--border);
+              border-radius: 6px; padding: 6px; font-size: 11.5px; max-width: 300px; }
+  #sendBtn { padding: 8px 24px; background: #238636; color: #fff; border: none; border-radius: 7px;
              cursor: pointer; font-size: 13px; font-weight: 600; }
   #sendBtn:hover { background: #2ea043; }
-  #sendBtn:disabled { background: #21262d; color: #8b949e; cursor: wait; }
-  #stopBtn { padding: 9px 22px; background: #da3633; color: #fff; border: none; border-radius: 7px;
+  #sendBtn:disabled { background: var(--border2); color: var(--dim); cursor: wait; }
+  #stopBtn { padding: 8px 20px; background: #da3633; color: #fff; border: none; border-radius: 7px;
              cursor: pointer; font-size: 13px; font-weight: 600; display: none; }
-  #stopBtn:hover { background: #f85149; }
-  .hint { font-size: 11px; color: #484f58; margin-left: auto; }
-  #pendingTool { background: #6e40c9; color: #fff; font-size: 11px; padding: 4px 12px;
-                 border-radius: 12px; display: none; align-items: center; gap: 8px; }
-  #pendingTool .x { cursor: pointer; font-weight: bold; }
+  #exportSel { background: var(--bg); color: var(--dim); border: 1px solid var(--border);
+               border-radius: 6px; padding: 6px; font-size: 11px; cursor: pointer; margin-left: auto; }
+  .hint { font-size: 10.5px; color: var(--dim2); }
+  /* Tools pane */
+  #toolsPane { width: 250px; min-width: 250px; background: var(--panel); border-left: 1px solid var(--border);
+               display: flex; flex-direction: column; }
+  #toolsList { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
+  .tool-item { padding: 4px 8px; font-size: 12px; color: #79c0ff; cursor: pointer; border-radius: 4px;
+               font-family: monospace; }
+  .tool-item:hover { background: var(--border2); color: #fff; }
+  #toolInspector { border-top: 1px solid var(--border); padding: 10px; max-height: 45%;
+                   overflow-y: auto; font-size: 11px; display: none; }
+  #toolInspector h3 { font-size: 12px; color: var(--purple); margin: 0 0 6px; font-family: monospace; }
+  #toolInspector .desc { color: var(--dim); margin-bottom: 8px; line-height: 1.5; }
+  #toolInspector pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto;
+                       font-size: 10.5px; }
+  #toolRunBtn { width: 100%; padding: 7px; background: #6e40c9; color: #fff; border: none;
+                border-radius: 6px; cursor: pointer; font-size: 12px; margin-top: 6px; }
+  #argInput { width: 100%; padding: 6px; background: var(--bg); color: var(--txt);
+              border: 1px solid var(--border); border-radius: 6px; font-size: 11px;
+              font-family: monospace; margin-top: 4px; }
   .spin { display: inline-block; animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-
 <header>
-  <h1>&#128737;&#65039; MCP-Clean Console</h1>
-  <div class="stat">Tokens session&nbsp;: <b id="tokIn">0</b> in / <b id="tokOut">0</b> out (total <b id="tokTot">0</b>)</div>
-  <div class="toggle">
-    <span>Reasoning</span>
-    <label class="switch"><input type="checkbox" id="reasoning"><span class="slider"></span></label>
-  </div>
-  <div class="toggle">
-    <span>Temp</span>
-    <select id="temp" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px">
-      <option value="0.1">0.1</option><option value="0.2" selected>0.2</option>
-      <option value="0.7">0.7</option><option value="1.0">1.0</option>
-    </select>
-  </div>
-  <div class="toggle">
-    <span>Modèle</span>
-    <select id="modelSel" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px;max-width:260px">
-      <option value="">chargement…</option>
-    </select>
-  </div>
-  <div class="toggle">
-    <span>Backend</span>
-    <select id="backendSel" title="local = Ollama sur le VPS (défaut, sûr) · colab = GPU Colab (tool_calls natifs, rapide/précis)" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:3px 6px;font-size:12px">
-      <option value="local" selected>local (Ollama)</option>
-      <option value="colab">colab (GPU)</option>
-    </select>
-    <span id="backendBadge" title="état du backend" style="font-size:11px;padding:2px 7px;border-radius:10px;border:1px solid #30363d;color:#8b949e">…</span>
-  </div>
-  <div class="stat" style="margin-left:auto" id="modelInfo">agent autonome</div>
+  <h1>&#128737;&#65039; MCP Control Room</h1>
+  <div class="stat"><span id="connDot"></span><span id="connTxt">connexion…</span></div>
+  <div class="stat">Outils&nbsp;: <b id="toolCount">–</b></div>
+  <div class="stat">Tokens&nbsp;: <b id="tokIn">0</b> in / <b id="tokOut">0</b> out</div>
+  <div class="stat">Appels outils&nbsp;: <b id="tcCount">0</b></div>
+  <a href="/logs" target="_blank" class="stat" style="text-decoration:none;color:inherit" title="Voir les commandes réellement exécutées + logs bruts">🔍 Journal d'exécution</a>
+  <div id="disclaimer" title="">⚠ Authorized use only</div>
 </header>
-
 <main>
-  <aside id="toolsPane">
-    <h2>Outils MCP (<span id="toolCount">…</span>)</h2>
-    <div id="toolCats"></div>
-  </aside>
-
-  <section id="chatPane">
-    <div id="history"><div class="empty">Pose une question — phi-4 interprète, choisit ses outils MCP,<br>les exécute et enchaîne jusqu'à la réponse finale.<br>Tu peux interrompre à tout moment avec Stop.</div></div>
+  <div id="sessPane">
+    <h2>Sessions</h2>
+    <input id="sessSearch" placeholder="Rechercher…">
+    <div id="sessList"></div>
+    <button id="newSessBtn">+ Nouvelle session</button>
+  </div>
+  <div id="chatPane">
+    <div id="history"><div class="empty">Sélectionne ou crée une session.<br>Le modèle choisi raisonne librement — il choisit lui-même ses outils parmi les 63 disponibles.</div></div>
     <div id="inputBar">
-      <div style="display:flex;gap:8px;margin-bottom:8px"><span id="pendingTool"><span id="pendingToolName"></span><span class="x" onclick="clearPending()">✕</span></span></div>
-      <textarea id="prompt" rows="3" placeholder="Ex : vérifie la santé du serveur puis fais un dns_recon sur example.com ... (Ctrl+Entrée pour envoyer)"></textarea>
+      <textarea id="msgInput" rows="3" placeholder="Décris ta demande… (Entrée = envoyer, Maj+Entrée = saut de ligne)"></textarea>
       <div class="inputRow">
-        <button id="sendBtn" onclick="send()">Envoyer</button>
-        <button id="stopBtn" onclick="stopAgent()">■ Stop</button>
-        <span class="hint">Ctrl+Entrée pour envoyer · Stop = interrompt la réflexion</span>
+        <select id="modelSel"></select>
+        <span id="modelInfo" class="hint" style="opacity:.85"></span>
+        <button id="sendBtn">Envoyer</button>
+        <button id="stopBtn">■ Stop</button>
+        <span class="hint">max 10 étapes · Phi libre, aucun préprompt-routeur</span>
+        <select id="exportSel">
+          <option value="">Exporter…</option>
+          <option value="json">JSON</option>
+          <option value="jsonl">JSONL</option>
+          <option value="md">Markdown</option>
+        </select>
       </div>
     </div>
-  </section>
+  </div>
+  <div id="toolsPane">
+    <h2>Outils MCP (<span id="toolCount2">–</span>)</h2>
+    <div id="toolsList"></div>
+    <div id="toolInspector">
+      <h3 id="tiName"></h3>
+      <div class="desc" id="tiDesc"></div>
+      <div class="lbl">Schema (arguments requis)</div>
+      <pre id="tiSchema"></pre>
+      <input id="argInput" placeholder='{"arg": "valeur"} — JSON des arguments'>
+      <button id="toolRunBtn">▶ Exécuter dans la session</button>
+    </div>
+  </div>
 </main>
-
 <script>
-let tokIn = 0, tokOut = 0;
-let pendingTool = null;
-let currentSession = null;   // session_id de la boucle en cours
-let currentReader = null;    // reader SSE pour abort local
-const history = document.getElementById('history');
-async function loadModels() {
-  const sel = document.getElementById('modelSel');
-  const info = document.getElementById('modelInfo');
-  try {
-    const res = await fetch('/api/models');
-    const data = await res.json();
-    const models = data.models || [];
-    sel.innerHTML = '';
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m; opt.textContent = m.split('/').pop().split(':')[0];
-      sel.appendChild(opt);
-    }
-    const def = data.model_default || models[0] || '';
-    sel.value = def;
-    info.textContent = (def.split('/').pop().split(':')[0] || '?') + ' · agent autonome';
-    sel.onchange = () => { info.textContent = sel.value.split('/').pop().split(':')[0] + ' · agent autonome'; };
-  } catch (e) { sel.innerHTML = '<option value="">(défaut serveur)</option>'; }
+let sessionId = null, streaming = false, curAbort = null;
+// Modele reellement actif (rempli par le select puis confirme par l'event
+// SSE 'session' renvoye par le serveur). Sert de libelle des bulles agent :
+// avant, "Phi-4" etait code en dur -> peu importe le modele choisi, l'UI
+// affichait toujours "Phi-4". Maintenant le libelle suit le vrai modele.
+let activeModel = null;
+function modelLabel(){
+  if (!activeModel) { const s=$('modelSel'); if (s && s.value) activeModel=s.value; }
+  if (!activeModel) return 'Agent';
+  // libelle court lisible a partir du nom Ollama complet
+  let m = activeModel;
+  if (/phi-?4/i.test(m)) return 'Phi-4';
+  if (/qwen3/i.test(m)) return 'Qwen3';
+  if (/gemma3/i.test(m)) return 'Gemma3';
+  m = m.split('/').pop().split(':')[0];
+  return m.length > 24 ? m.slice(0,22)+'…' : m;
 }
-loadModels();
+const $ = id => document.getElementById(id);
 
-// --- État des backends (local / colab) : l'utilisateur choisit, jamais de
-//     bascule auto. Le badge reflète disponible / GPU-waking / indisponible. ---
-async function refreshBackends() {
-  const sel = document.getElementById('backendSel');
-  const badge = document.getElementById('backendBadge');
+// ---------- disclaimer ----------
+fetch('/api/disclaimer').then(r=>r.json()).then(d=>{
+  $('disclaimer').title = d.disclaimer;
+  $('disclaimer').textContent = '⚠ ' + d.disclaimer.slice(0, 80) + '…';
+});
+
+// ---------- health / metrics ----------
+async function refreshStats(){
   try {
-    const res = await fetch('/api/backends');
-    const data = await res.json();
-    const cur = sel.value || data.default || 'local';
-    const b = (data.backends || {})[cur] || {};
-    const COLORS = {
-      ready: ['#2ea043', 'disponible'],
-      'gpu-waking': ['#d29922', 'GPU en réveil…'],
-      unconfigured: ['#6e7681', 'non configuré'],
-      forbidden: ['#f85149', 'jeton refusé'],
-      unavailable: ['#f85149', 'indisponible'],
-      unreachable: ['#f85149', 'injoignable'],
-      error: ['#f85149', 'erreur'],
-    };
-    const [color, label] = COLORS[b.state] || ['#8b949e', b.state || '?'];
-    badge.style.color = color;
-    badge.style.borderColor = color;
-    badge.textContent = label;
-    badge.title = (b.detail || '') + (b.native_tools ? ' · tool_calls natifs' : ' · parsing texte');
-  } catch (e) {
-    badge.textContent = 'n/a'; badge.style.color = '#8b949e';
+    const h = await (await fetch('/api/health')).json();
+    $('connDot').className = h.mcp_connected ? 'on' : '';
+    $('connDot').id = 'connDot';
+    $('connTxt').textContent = h.mcp_connected ? 'MCP connecté' : 'MCP déconnecté';
+    $('toolCount').textContent = h.tools_count;
+    const m = await (await fetch('/api/metrics')).json();
+    $('tokIn').textContent = m.usage.tokens_in;
+    $('tokOut').textContent = m.usage.tokens_out;
+    $('tcCount').textContent = m.usage.tool_calls;
+  } catch(e) { $('connTxt').textContent = 'portail hors ligne'; }
+}
+setInterval(refreshStats, 15000); refreshStats();
+
+// ---------- models ----------
+fetch('/api/models').then(r=>r.json()).then(d=>{
+  const sel = $('modelSel');
+  (d.models||[]).forEach(m=>{
+    const o = document.createElement('option'); o.value = m;
+    o.textContent = m.length > 45 ? m.slice(0,42)+'…' : m;
+    if (m.includes('Phi-4')) o.selected = true;
+    sel.appendChild(o);
+  });
+  activeModel = sel.value || null;
+  const info = $('modelInfo'); if (info && activeModel) info.textContent = 'modèle : ' + activeModel;
+});
+// Changer de modèle DOIT repartir sur une session propre : sinon l'historique
+// (créé avec l'ancien modèle) reste lié à l'ancienne session côté serveur et
+// l'utilisateur croit que le changement est ignoré. On force une nouvelle
+// session à chaque changement de modèle, et on l'affiche.
+document.addEventListener('change', function(e){
+  if (e.target && e.target.id === 'modelSel') {
+    sessionId = null;  // la prochaine requête créera une session avec ce modèle
+    activeModel = e.target.value;
+    const info = $('modelInfo');
+    if (info) info.textContent = 'modèle : ' + e.target.value;
+    const hist = $('history');
+    if (hist) hist.innerHTML = '<div class="empty">Modèle sélectionné : <b>'
+      + e.target.value + '</b>. Nouvelle session au prochain message.</div>';
   }
-}
-document.getElementById('backendSel').addEventListener('change', refreshBackends);
-refreshBackends();
-setInterval(refreshBackends, 15000);  // le GPU Colab peut se réveiller pendant l'usage
+});
 
-async function loadTools() {
+// ---------- tools (découverte dynamique) ----------
+let toolsCache = [];
+fetch('/api/tools').then(r=>r.json()).then(d=>{
+  toolsCache = d.tools; $('toolCount2').textContent = d.count;
+  const list = $('toolsList');
+  d.tools.forEach(t=>{
+    const el = document.createElement('div');
+    el.className = 'tool-item'; el.textContent = t.name;
+    el.onclick = ()=>inspectTool(t.name);
+    list.appendChild(el);
+  });
+});
+function inspectTool(name){
+  const t = toolsCache.find(x=>x.name===name); if(!t) return;
+  $('toolInspector').style.display = 'block';
+  $('tiName').textContent = t.name;
+  $('tiDesc').textContent = t.description || '(pas de description)';
+  $('tiSchema').textContent = JSON.stringify({required: t.schema.required, properties: t.schema.properties}, null, 1);
+  $('toolRunBtn').onclick = ()=>runToolDirect(t.name);
+}
+async function runToolDirect(name){
+  if (streaming) return;
+  if (!sessionId) await newSession();
+  let args = {};
+  try { args = JSON.parse($('argInput').value || '{}'); } catch(e){ alert('JSON invalide'); return; }
+  sendMessage(`Exécute l'outil ${name} avec exactement ces arguments :\nTOOL: ${name}\nARGS: ${JSON.stringify(args)}`);
+}
+
+// ---------- sessions ----------
+async function loadSessions(q=''){
+  const d = await (await fetch('/api/sessions?q='+encodeURIComponent(q))).json();
+  const list = $('sessList'); list.innerHTML = '';
+  (d.sessions||[]).forEach(s=>{
+    const el = document.createElement('div');
+    el.className = 'sess-item' + (s.id===sessionId ? ' active' : '');
+    el.innerHTML = `<div class="t">${esc(s.title||'(sans titre)')} <span class="st ${s.status}">${s.status}</span></div>
+                    <div class="m">${s.id} · ${(s.updated_at||'').slice(0,16).replace('T',' ')}</div>`;
+    el.onclick = ()=>openSession(s.id);
+    list.appendChild(el);
+  });
+}
+$('sessSearch').oninput = e => loadSessions(e.target.value);
+$('newSessBtn').onclick = ()=>newSession();
+async function newSession(){
+  const model = $('modelSel').value;
+  const d = await (await fetch('/api/sessions', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({model})})).json();
+  sessionId = d.session_id;
+  $('history').innerHTML = '<div class="empty">Nouvelle session <b>'+sessionId+'</b> — '+modelLabel()+' est libre de raisonner.</div>';
+  loadSessions();
+}
+async function openSession(sid){
+  sessionId = sid;
+  const d = await (await fetch('/api/sessions/'+sid)).json();
+  const h = $('history'); h.innerHTML = '';
+  (d.messages||[]).forEach(m=>{
+    if (m.role === 'tool_call') renderToolBlock({tool: m.content.split(' ')[0], status:'', result:null, historical:true});
+    else addMsg(m.role, m.content);
+  });
+  loadSessions();
+}
+function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+// ---------- chat ----------
+function addMsg(role, text){
+  const h = $('history');
+  const emp = h.querySelector('.empty'); if (emp) emp.remove();
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.innerHTML = `<div class="who">${role==='user'?'Vous':modelLabel()}</div><div class="body"></div>`;
+  el.querySelector('.body').textContent = text;
+  h.appendChild(el); h.scrollTop = h.scrollHeight;
+  return el;
+}
+function renderToolBlock(ev){
+  const h = $('history');
+  const emp = h.querySelector('.empty'); if (emp) emp.remove();
+  const el = document.createElement('div');
+  el.className = 'tool-block';
+  const status = ev.status || (ev.result!=null ? 'ok' : 'running');
+  el.innerHTML = `<div class="tool-head">▸ TOOL ${esc(ev.tool)}
+      <span class="badge ${status}">${status}</span>
+      <span class="lat">${ev.duration_ms!=null?ev.duration_ms+'ms':''}</span></div>
+    <div class="tool-body">
+      <div class="lbl">Arguments</div><pre class="args"></pre>
+      <div class="lbl">Résultat</div><pre class="res">(en cours…)</pre>
+    </div>`;
+  el.querySelector('.args').textContent = JSON.stringify(ev.arguments||{}, null, 1);
+  el.querySelector('.tool-head').onclick = ()=>el.querySelector('.tool-body').classList.toggle('open');
+  if (ev.result != null) el.querySelector('.res').textContent = ev.result;
+  h.appendChild(el); h.scrollTop = h.scrollHeight;
+  return el;
+}
+
+async function sendMessage(forced){
+  if (streaming) return;
+  const input = $('msgInput');
+  const msg = forced || input.value.trim();
+  if (!msg) return;
+  if (!sessionId) await newSession();
+  input.value = '';
+  addMsg('user', msg);
+  streaming = true;
+  $('sendBtn').disabled = true; $('stopBtn').style.display = 'inline-block';
+  let thinkEl = null, curToolEl = null;
+  curAbort = new AbortController();
   try {
-    const res = await fetch('/api/tools');
-    const data = await res.json();
-    document.getElementById('toolCount').innerText = data.count;
-    const cats = data.categories || {};
-    const container = document.getElementById('toolCats');
-    container.innerHTML = '';
-    for (const [cat, tools] of Object.entries(cats)) {
-      const div = document.createElement('div');
-      div.className = 'cat';
-      div.innerHTML = '<div class="cat-name">' + cat + '</div>' +
-        tools.map(t => '<button class="tool-btn" onclick="pickTool(\'' + t + '\')">' + t + '</button>').join('');
-      container.appendChild(div);
-    }
-  } catch (e) {
-    document.getElementById('toolCats').innerHTML = '<div class="empty">Erreur chargement outils</div>';
-  }
-}
-
-function pickTool(name) {
-  pendingTool = name;
-  document.getElementById('pendingTool').style.display = 'inline-flex';
-  document.getElementById('pendingToolName').innerText = 'Outil: ' + name;
-  document.getElementById('prompt').placeholder = 'Cible pour ' + name + ' (ex: example.com) ...';
-  document.getElementById('prompt').focus();
-}
-function clearPending() {
-  pendingTool = null;
-  document.getElementById('pendingTool').style.display = 'none';
-  document.getElementById('prompt').placeholder = 'Ex : vérifie la santé du serveur puis fais un dns_recon sur example.com ...';
-}
-
-function newSessionId() {
-  return 's-' + Math.random().toString(16).slice(2, 10) + Date.now().toString(16);
-}
-
-function addStep(ex, cls, html) {
-  const div = document.createElement('div');
-  div.className = 'step ' + cls;
-  div.innerHTML = html;
-  ex.appendChild(div);
-  history.scrollTop = history.scrollHeight;
-  return div;
-}
-
-function bumpTokens(usage) {
-  if (!usage) return;
-  tokIn += usage.prompt_tokens || 0;
-  tokOut += usage.completion_tokens || 0;
-  document.getElementById('tokIn').innerText = tokIn;
-  document.getElementById('tokOut').innerText = tokOut;
-  document.getElementById('tokTot').innerText = tokIn + tokOut;
-}
-
-function setRunning(on) {
-  document.getElementById('sendBtn').disabled = on;
-  document.getElementById('stopBtn').style.display = on ? 'inline-block' : 'none';
-}
-
-async function stopAgent() {
-  if (!currentSession) return;
-  try { await fetch('/api/agent/stop', { method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ session_id: currentSession }) }); } catch (e) {}
-  try { if (currentReader) currentReader.cancel(); } catch (e) {}
-}
-
-/* --- Envoi : outil épinglé = exécution directe rapide (/api/agent),
-       sinon boucle autonome streamée (/api/agent/loop) --- */
-async function send() {
-  const promptEl = document.getElementById('prompt');
-  let message = promptEl.value.trim();
-  if (!message) return;
-  const btn = document.getElementById('sendBtn');
-  promptEl.value = '';
-  const empty = history.querySelector('.empty');
-  if (empty) empty.remove();
-
-  const ex = document.createElement('div');
-  ex.className = 'exchange';
-  ex.innerHTML = '<div class="ex-q"><div class="who">Vous</div>' + escapeHtml(message) + '</div>';
-  history.appendChild(ex);
-  history.scrollTop = history.scrollHeight;
-  const t0 = Date.now();
-
-  if (pendingTool) {
-    // Outil épinglé : exécution directe, résultat immédiat (pas d'attente LLM)
-    setRunning(true);
-    const stepDiv = addStep(ex, 'call', '🛠 <b>' + escapeHtml(pendingTool) + '</b> — exécution directe…');
-    try {
-      const res = await fetch('/api/agent', { method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ message: message, tool: pendingTool, tool_arg: message, summarize: false, backend: document.getElementById('backendSel').value }) });
-      const data = await res.json();
-      const resText = (data.executed && data.executed.result && data.executed.result.content)
-        ? data.executed.result.content.map(c => c.text || '').join('\n')
-        : JSON.stringify(data);
-      addStep(ex, 'result', '📄 ' + escapeHtml(resText.slice(0, 2000)));
-      const ans = document.createElement('div');
-      ans.className = 'ex-a';
-      ans.innerHTML = '<div class="who">Résultat</div>' + escapeHtml(resText.slice(0, 1200));
-      ex.appendChild(ans);
-      stepDiv.innerHTML = '🛠 <b>' + escapeHtml(pendingTool) + '</b> ' + escapeHtml(JSON.stringify(data.executed ? data.executed.arguments : {}));
-    } catch (e) {
-      addStep(ex, 'stop', 'Erreur réseau: ' + escapeHtml(e.message));
-    }
-    finish(ex, t0, pendingTool);
-    clearPending();
-    setRunning(false);
-    return;
-  }
-
-  // Boucle autonome : phi-4 pilote, SSE temps réel
-  currentSession = newSessionId();
-  setRunning(true);
-  const thinkDiv = addStep(ex, 'think', '<span class="spin">⏳</span> phi-4 réfléchit…');
-  let lastThink = thinkDiv;
-  let finalAnswer = null;
-  let lastTool = null;
-
-  try {
-    const res = await fetch('/api/agent/loop', { method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: message,
-        session_id: currentSession,
-        max_steps: 8,
-        reasoning: document.getElementById('reasoning').checked,
-        temperature: parseFloat(document.getElementById('temp').value),
-        model: document.getElementById('modelSel').value || undefined,
-        backend: document.getElementById('backendSel').value,
-        max_tokens: 350
-      }) });
-
-    const reader = res.body.getReader();
-    currentReader = reader;
-    const decoder = new TextDecoder();
+    const resp = await fetch('/api/chat/stream', {method:'POST',
+      headers:{'Content-Type':'application/json'}, signal: curAbort.signal,
+      body: JSON.stringify({message: msg, session_id: sessionId,
+                            model: $('modelSel').value})});
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
     let buf = '';
-
     while (true) {
-      const { done, value } = await reader.read();
+      const {done, value} = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const parts = buf.split('\n\n');
-      buf = parts.pop();
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith('data:')) continue;
-        let ev;
-        try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
-
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for (const p of parts) {
+        if (!p.startsWith('data: ')) continue;
+        let ev; try { ev = JSON.parse(p.slice(6)); } catch(e){ continue; }
         if (ev.type === 'session') {
-          lastThink.innerHTML = '<span class="spin">⏳</span> session ' + escapeHtml(ev.session_id) + ' — phi-4 réfléchit…';
+          // Preuve visible du modèle réellement retenu par le serveur.
+          if (ev.session_id) sessionId = ev.session_id;
+          if (ev.model) activeModel = ev.model;  // source de verite serveur
+          const info = $('modelInfo');
+          if (info && ev.model) info.textContent = 'modèle actif : ' + ev.model;
         } else if (ev.type === 'thinking') {
-          lastThink.innerHTML = '🧠 étape ' + ev.step + ' — réflexion terminée';
-          lastThink = addStep(ex, 'think', '<span class="spin">⏳</span> phi-4 réfléchit (étape ' + (ev.step + 1) + ')…');
+          if (!thinkEl) { thinkEl = document.createElement('div');
+            thinkEl.className = 'step-think'; $('history').appendChild(thinkEl); }
+          thinkEl.innerHTML = `<span class="spin">◌</span> ${modelLabel()} raisonne… (étape ${ev.step})`;
         } else if (ev.type === 'tool_call') {
-          lastTool = ev.tool;
-          if (lastThink) { lastThink.remove(); lastThink = null; }
-          addStep(ex, 'call', '🛠 étape ' + ev.step + ' → <b>' + escapeHtml(ev.tool) + '</b> ' + escapeHtml(JSON.stringify(ev.arguments || {})));
+          if (thinkEl){ thinkEl.remove(); thinkEl = null; }
+          curToolEl = renderToolBlock(ev);
         } else if (ev.type === 'tool_result') {
-          addStep(ex, 'result', '📄 ' + escapeHtml((ev.result || '').slice(0, 1500)));
-          lastThink = addStep(ex, 'think', '<span class="spin">⏳</span> phi-4 interprète le résultat…');
+          if (curToolEl) {
+            curToolEl.querySelector('.res').textContent = ev.result;
+            const b = curToolEl.querySelector('.badge');
+            b.className = 'badge ' + ev.status; b.textContent = ev.status;
+            curToolEl.querySelector('.lat').textContent = ev.duration_ms + 'ms';
+          }
         } else if (ev.type === 'final') {
-          if (lastThink) { lastThink.remove(); lastThink = null; }
-          finalAnswer = ev.reply || '(réponse vide)';
-          bumpTokens(ev.usage);
+          if (thinkEl){ thinkEl.remove(); thinkEl = null; }
+          addMsg('assistant', ev.reply || '(réponse vide)');
         } else if (ev.type === 'stopped') {
-          if (lastThink) { lastThink.remove(); lastThink = null; }
-          addStep(ex, 'stop', '■ Interrompu par l\'utilisateur (étape ' + ev.step + ')');
+          if (thinkEl){ thinkEl.remove(); thinkEl = null; }
+          addMsg('assistant', '⏹ Session interrompue par l\'utilisateur.');
         } else if (ev.type === 'error') {
-          if (lastThink) { lastThink.remove(); lastThink = null; }
-          addStep(ex, 'stop', '⚠ ' + escapeHtml(ev.message || 'erreur'));
+          if (thinkEl){ thinkEl.remove(); thinkEl = null; }
+          addMsg('assistant', '⚠ ' + ev.message);
         }
       }
     }
-  } catch (e) {
-    if (lastThink) { lastThink.remove(); lastThink = null; }
-    if (e.name !== 'AbortError') addStep(ex, 'stop', 'Erreur réseau: ' + escapeHtml(e.message));
+  } catch(e) {
+    if (e.name !== 'AbortError') addMsg('assistant', '⚠ erreur réseau: ' + e.message);
   }
-
-  if (finalAnswer !== null) {
-    const ans = document.createElement('div');
-    ans.className = 'ex-a';
-    ans.innerHTML = '<div class="who">Phi-4</div>' + escapeHtml(finalAnswer);
-    ex.appendChild(ans);
-  }
-  finish(ex, t0, lastTool);
-  setRunning(false);
-  currentSession = null;
-  currentReader = null;
+  streaming = false;
+  $('sendBtn').disabled = false; $('stopBtn').style.display = 'none';
+  refreshStats(); loadSessions();
 }
-
-function finish(ex, t0, tool) {
-  const meta = document.createElement('div');
-  meta.className = 'ex-meta';
-  meta.innerText = ((Date.now() - t0) / 1000).toFixed(1) + 's' + (tool ? ' • dernier outil: ' + tool : '');
-  ex.appendChild(meta);
-  history.scrollTop = history.scrollHeight;
-}
-
-function escapeHtml(s) {
-  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-document.getElementById('prompt').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
-});
-loadTools();
+$('sendBtn').onclick = ()=>sendMessage();
+$('msgInput').onkeydown = e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+};
+$('stopBtn').onclick = ()=>{
+  if (sessionId) fetch('/api/chat/stop', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: sessionId})});
+  if (curAbort) curAbort.abort();
+};
+$('exportSel').onchange = e=>{
+  if (!sessionId || !e.target.value) return;
+  window.open(`/api/sessions/${sessionId}/export?format=${e.target.value}`, '_blank');
+  e.target.value = '';
+};
+loadSessions();
 </script>
 </body>
 </html>
