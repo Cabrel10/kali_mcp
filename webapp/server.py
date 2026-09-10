@@ -20,6 +20,7 @@ import json
 import os
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -66,6 +67,45 @@ COLAB_BASE = _norm_v1(os.environ.get("COLAB_URL", "http://127.0.0.1:8780/v1"))
 COLAB_TOKEN = os.environ.get("COLAB_TOKEN", "")
 COLAB_MODEL = os.environ.get("COLAB_MODEL", "local")  # llama serve répond sur "local"
 DEFAULT_BACKEND = os.environ.get("MCP_CLEAN_BACKEND", "local")  # local par défaut
+# Découverte dynamique du runtime Colab via heartbeat. Le notebook reste
+# indépendant et fournit lui-même son URL Cloudflare à chaque heartbeat.
+COLAB_REGISTRY_URL = os.environ.get("COLAB_REGISTRY_URL", "")
+COLAB_REGISTRY_TOKEN = os.environ.get("COLAB_REGISTRY_TOKEN", "")
+COLAB_DISCOVERY_TTL = float(os.environ.get("COLAB_DISCOVERY_TTL", "5"))
+_colab_discovery = {"checked": 0.0, "available": False, "account": None}
+
+def _refresh_colab(force: bool = False) -> bool:
+    global COLAB_BASE, COLAB_TOKEN, COLAB_MODEL
+    if not COLAB_REGISTRY_URL or not COLAB_REGISTRY_TOKEN:
+        return bool(COLAB_TOKEN)
+    now = time.time()
+    if not force and now - _colab_discovery["checked"] < COLAB_DISCOVERY_TTL:
+        return _colab_discovery["available"]
+    available = False
+    account = None
+    try:
+        req = urllib.request.Request(
+            COLAB_REGISTRY_URL.rstrip("/") + "/api/backends/internal",
+            headers={"X-Internal-Token": COLAB_REGISTRY_TOKEN})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            payload = json.loads(r.read().decode())
+        account = payload.get("active")
+        entry = (payload.get("backends") or {}).get(account) if account else None
+        if entry and entry.get("validated") and not entry.get("stale"):
+            base = _norm_v1(str(entry.get("api_base") or ""))
+            key = entry.get("api_key") or ""
+            model = entry.get("model") or "local"
+            if base and key:
+                COLAB_BASE, COLAB_TOKEN, COLAB_MODEL = base, key, model
+                available = True
+        if not available:
+            COLAB_TOKEN = ""
+    except Exception:
+        COLAB_TOKEN = ""
+    _colab_discovery.update({"checked": now, "available": available,
+                             "account": account})
+    return available
+
 
 VALID_BACKENDS = ("local", "colab")
 
@@ -312,6 +352,8 @@ def _call_llm(messages, backend="local", max_tokens=300, temperature=0.2,
               timeout=None, tools=None) -> dict:
     """Dispatcher unifié. Retourne la forme normalisée _norm_reply."""
     backend = _resolve_backend(backend)
+    if backend == "colab" and not _refresh_colab():
+        raise BackendError("Colab indisponible : aucun runtime frais enregistré par heartbeat", status=503)
     if backend == "colab":
         d = _call_colab_chat(messages, max_tokens=max_tokens,
                              temperature=temperature,
@@ -493,7 +535,8 @@ def _probe_local() -> dict:
 
 
 def _probe_colab() -> dict:
-    """Passerelle Colab : distingue configuré / GPU en réveil (503) / prêt."""
+    """Passerelle Colab découverte par heartbeat, sans modifier Colab."""
+    _refresh_colab()
     base = {"model": COLAB_MODEL, "native_tools": True,
             "endpoint": COLAB_BASE, "configured": bool(COLAB_TOKEN)}
     if not COLAB_TOKEN:
