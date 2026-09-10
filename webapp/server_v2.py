@@ -44,6 +44,40 @@ OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 OLLAMA_TAGS = "http://127.0.0.1:11434/api/tags"
 DEFAULT_MODEL = "hf.co/mradermacher/Phi-4-Mini-Abliterated-GGUF:Q4_K_M"
 
+# ---------------------------------------------------------------------------
+# Backends LLM du PORTAIL (indépendants du serveur MCP — le MCP tourne seul).
+# "local"  : Ollama (défaut, non-régression).
+# "colab"  : GPU Colab via passerelle OpenAI-compatible (:8780), token Bearer.
+# "openrouter" / "nvidia" : providers cloud (clés via variables d'env).
+# Sélection côté UI via préfixe de modèle : "colab:X", "openrouter:Y", ...
+# ---------------------------------------------------------------------------
+import os
+COLAB_URL = os.environ.get("COLAB_URL", "http://127.0.0.1:8780/v1")
+COLAB_TOKEN = os.environ.get("COLAB_TOKEN", "")
+COLAB_MODEL = os.environ.get("COLAB_MODEL", "local")
+OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
+NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
+
+CLOUD_BACKENDS = {
+    "colab":      {"url": COLAB_URL, "key": COLAB_TOKEN, "model": COLAB_MODEL},
+    "openrouter": {"url": "https://openrouter.ai/api/v1", "key": OPENROUTER_KEY,
+                   "model": OPENROUTER_MODEL},
+    "nvidia":     {"url": "https://integrate.api.nvidia.com/v1", "key": NVIDIA_KEY,
+                   "model": NVIDIA_MODEL},
+}
+
+
+def resolve_backend(model):
+    """Préfixe de modèle -> backend. 'openrouter:gpt-4o' -> ('openrouter','gpt-4o').
+    Sans préfixe connu -> ('local', model) : Ollama, comportement inchangé."""
+    if model and ":" in model:
+        prefix, rest = model.split(":", 1)
+        if prefix in CLOUD_BACKENDS:
+            return prefix, (rest or None)
+    return "local", model
+
 DISCLAIMER = (
     "⚠️ Usage éducatif et tests de sécurité autorisés uniquement. "
     "N'utilisez jamais ces outils contre des systèmes sans permission explicite. "
@@ -324,6 +358,56 @@ def ollama_chat(messages, model, max_tokens=400, temperature=0.0,
                  num_predict=max_tokens * 3)
         d = _post_ollama(payload, timeout)
     return d
+
+
+def cloud_chat(messages, model, max_tokens=400, temperature=0.0,
+               timeout=180, use_tools=True, backend="openrouter"):
+    """Appel OpenAI-compatible pour les backends cloud du portail
+    (openrouter / nvidia / colab). Zéro impact sur le serveur MCP :
+    c'est juste le cerveau du portail qui change d'endpoint.
+    Retourne le même dict interne que ollama_chat (normalisé)."""
+    cfg = CLOUD_BACKENDS.get(backend)
+    if not cfg:
+        raise ValueError(f"backend inconnu: {backend}")
+    if not cfg["key"]:
+        raise RuntimeError(f"clé API manquante pour {backend} "
+                           f"(variable d'env requise)")
+    model_id = model or cfg["model"]
+    payload = {"model": model_id, "messages": messages,
+               "temperature": temperature, "max_tokens": max_tokens,
+               "stream": False}
+    if use_tools:
+        tools = [{"type": "function",
+                  "function": {"name": n, "description": d,
+                               "parameters": s}}
+                 for n, d, s in ((t.name, t.description or "",
+                                  t.inputSchema or {}) for t in MCP.tools)]
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+    import httpx
+    headers = {"Authorization": f"Bearer {cfg['key']}",
+               "Content-Type": "application/json"}
+    if backend == "openrouter":
+        headers["HTTP-Referer"] = "http://localhost:8100"
+        headers["X-OpenRouter-Title"] = "MCP-Kali Portal"
+    r = httpx.post(f"{cfg['url']}/chat/completions", json=payload,
+                   headers=headers, timeout=timeout)
+    r.raise_for_status()
+    d = r.json()
+    choice = (d.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    usage = d.get("usage") or {}
+    # Normalisation vers le format interne (style Ollama) attendu par la
+    # boucle agent : message.content + message.tool_calls + compteurs.
+    return {
+        "message": {"content": msg.get("content") or "",
+                    "tool_calls": msg.get("tool_calls") or []},
+        "prompt_eval_count": usage.get("prompt_tokens", 0),
+        "eval_count": usage.get("completion_tokens", 0),
+        "done_reason": choice.get("finish_reason", "stop"),
+        "_backend": backend, "_model": model_id,
+    }
 
 
 def _content(d):
@@ -615,6 +699,7 @@ class ChatIn(BaseModel):
     message: str
     session_id: str | None = None
     model: str | None = None
+    backend: str | None = None
     max_steps: int = 10
     temperature: float = 0.0
     max_tokens: int = 500
@@ -632,21 +717,48 @@ def disclaimer():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "2.0",
+    return {"status": "ok", "version": "2.1",
             "model_default": DEFAULT_MODEL,
+            "backends": {name: bool(cfg["key"])
+                         for name, cfg in CLOUD_BACKENDS.items()},
             "mcp_connected": MCP._session is not None,
             "tools_count": len(MCP.tools),
             "disclaimer": DISCLAIMER}
 
 
+@app.get("/api/backends")
+def backends():
+    """Liste les backends LLM du portail (local Ollama + cloud).
+    Le serveur MCP reste indépendant : il tourne seul de son côté."""
+    out = {"local": {"available": True, "type": "ollama",
+                     "url": OLLAMA_TAGS.rsplit("/api/", 1)[0]}}
+    for name, cfg in CLOUD_BACKENDS.items():
+        out[name] = {"available": bool(cfg["key"]),
+                     "type": "openai-compatible",
+                     "url": cfg["url"], "model_default": cfg["model"]}
+    return {"backends": out}
+
+
 @app.get("/api/models")
 def models():
+    warning = None
     try:
         with urllib.request.urlopen(OLLAMA_TAGS, timeout=10) as r:
             data = json.loads(r.read().decode())
-        return {"models": [m["name"] for m in data.get("models", [])]}
+        local_models = [m["name"] for m in data.get("models", [])]
     except Exception as e:
-        return {"models": [DEFAULT_MODEL], "warning": str(e)}
+        local_models = [DEFAULT_MODEL]
+        warning = str(e)
+    # Entrées cloud (préfixe backend:modele). Listées seulement si la clé
+    # d'env est configurée — sinon le provider reste invisible dans l'UI.
+    cloud = [f"{name}:{cfg['model']}" for name, cfg in CLOUD_BACKENDS.items()
+             if cfg["key"]]
+    resp = {"models": local_models + cloud,
+            "cloud_configured": sorted(n for n, c in CLOUD_BACKENDS.items()
+                                       if c["key"])}
+    if warning:
+        resp["warning"] = warning
+    return resp
 
 
 @app.get("/api/tools")
@@ -798,6 +910,10 @@ def chat_stream(req: ChatIn, request: Request):
         return JSONResponse({"error": "rate_limit", "detail":
                              "10 req/min max"}, status_code=429)
     model = req.model or DEFAULT_MODEL
+    if req.backend in CLOUD_BACKENDS and req.backend != "local":
+        if not model.startswith(req.backend + ":"):
+            model = f"{req.backend}:{model}" if req.model else f"{req.backend}:"
+    backend, model_id = resolve_backend(model)
     sid = req.session_id or db_create_session(model,
                                               title=req.message[:60])
     db_touch(sid)
@@ -844,12 +960,18 @@ def chat_stream(req: ChatIn, request: Request):
             yield _sse({"type": "thinking", "step": step + 1})
             t0 = time.time()
             try:
-                d = ollama_chat(messages, model, req.max_tokens,
-                                req.temperature, use_tools=True)
+                if backend == "local":
+                    d = ollama_chat(messages, model, req.max_tokens,
+                                    req.temperature, use_tools=True)
+                else:
+                    d = cloud_chat(messages, model_id, req.max_tokens,
+                                   req.temperature, use_tools=True,
+                                   backend=backend)
             except Exception as e:
-                log.bind(session=sid).error("ollama_error", error=str(e))
-                db_event(sid, "error", {"stage": "ollama", "error": str(e)})
-                yield _sse({"type": "error", "message": f"ollama: {e}"})
+                log.bind(session=sid).error("llm_error", backend=backend,
+                                            error=str(e))
+                db_event(sid, "error", {"stage": backend, "error": str(e)})
+                yield _sse({"type": "error", "message": f"{backend}: {e}"})
                 return
             latency_ms = int((time.time() - t0) * 1000)
             usage["prompt_tokens"] += d.get("prompt_eval_count", 0)
@@ -1069,6 +1191,7 @@ class AgentRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 300
     model: str | None = None
+    backend: str | None = None
 
 
 class LoopRequest(BaseModel):
@@ -1079,6 +1202,7 @@ class LoopRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 350
     model: str | None = None
+    backend: str | None = None
 
 
 @app.post("/api/agent")
@@ -1099,11 +1223,14 @@ def agent_direct(req: AgentRequest, request: Request):
             tool, args = routed
     if not tool:
         try:
-            d = ollama_chat([{"role": "user", "content": req.message}],
-                            req.model or DEFAULT_MODEL, req.max_tokens,
-                            req.temperature, use_tools=False)
+            requested_model = req.model or DEFAULT_MODEL
+            if req.backend in CLOUD_BACKENDS and req.backend != "local":
+                requested_model = f"{req.backend}:{req.model}" if req.model else f"{req.backend}:"
+            d = llm_chat([{"role": "user", "content": req.message}],
+                         requested_model, req.max_tokens, req.temperature,
+                         use_tools=False)
         except Exception as e:
-            return {"error": f"ollama: {e}"}
+            return {"error": f"llm: {e}"}
         usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
                  "completion_tokens": d.get("eval_count", 0)}
         _usage["tokens_in"] += d.get("prompt_eval_count", 0)
@@ -1123,11 +1250,14 @@ def agent_direct(req: AgentRequest, request: Request):
     usage: dict = {"prompt_tokens": 0, "completion_tokens": 0}
     if req.summarize and not result.get("error"):
         try:
-            d = ollama_chat(
+            requested_model = req.model or DEFAULT_MODEL
+            if req.backend in CLOUD_BACKENDS and req.backend != "local":
+                requested_model = f"{req.backend}:{req.model}" if req.model else f"{req.backend}:"
+            d = llm_chat(
                 [{"role": "user", "content":
                   f"Resultat de l'outil {tool}:\n{text[:3000]}\n\n"
                   "Resume ce resultat en francais, de facon concise."}],
-                req.model or DEFAULT_MODEL, req.max_tokens, req.temperature,
+                requested_model, req.max_tokens, req.temperature,
                 use_tools=False)
             usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
                      "completion_tokens": d.get("eval_count", 0)}
@@ -1153,7 +1283,7 @@ def agent_loop_alias(req: LoopRequest, request: Request):
     return chat_stream(
         ChatIn(message=req.message, session_id=req.session_id,
                max_steps=req.max_steps, temperature=req.temperature,
-               max_tokens=req.max_tokens, model=req.model),
+               max_tokens=req.max_tokens, model=req.model, backend=req.backend),
         request)
 
 

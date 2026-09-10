@@ -27,3 +27,5 @@ playwright>=1.40.0
 
 # Optional: scapy for low-level packet crafting
 # scapy>=2.5.0
+# Portal structured logging
+loguru>=0.7.0
