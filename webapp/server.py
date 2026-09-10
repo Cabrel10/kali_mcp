@@ -410,6 +410,18 @@ def cloud_chat(messages, model, max_tokens=400, temperature=0.0,
     }
 
 
+def llm_chat(messages, model=None, max_tokens=400, temperature=0.0,
+             timeout=180, use_tools=True):
+    """Route un appel vers Ollama ou un provider OpenAI-compatible."""
+    requested = model or DEFAULT_MODEL
+    backend, model_id = resolve_backend(requested)
+    if backend == "local":
+        return ollama_chat(messages, model_id, max_tokens, temperature,
+                           timeout=timeout, use_tools=use_tools)
+    return cloud_chat(messages, model_id, max_tokens, temperature,
+                      timeout=timeout, use_tools=use_tools, backend=backend)
+
+
 def _content(d):
     return (d.get("message", {}) or {}).get("content", "") or ""
 
@@ -699,6 +711,7 @@ class ChatIn(BaseModel):
     message: str
     session_id: str | None = None
     model: str | None = None
+    backend: str | None = None
     max_steps: int = 10
     temperature: float = 0.0
     max_tokens: int = 500
@@ -909,6 +922,10 @@ def chat_stream(req: ChatIn, request: Request):
         return JSONResponse({"error": "rate_limit", "detail":
                              "10 req/min max"}, status_code=429)
     model = req.model or DEFAULT_MODEL
+    # The selected backend is authoritative; Colab uses its gateway model when
+    # the client did not explicitly provide a model prefixed with colab:.
+    if req.backend in CLOUD_BACKENDS and req.backend != "local":
+        model = req.model if req.model and req.model.startswith(req.backend + ":") else f"{req.backend}:"
     backend, model_id = resolve_backend(model)
     sid = req.session_id or db_create_session(model,
                                               title=req.message[:60])
@@ -1187,8 +1204,7 @@ class AgentRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 300
     model: str | None = None
-
-
+    backend: str | None = None
 class LoopRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -1197,6 +1213,7 @@ class LoopRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 350
     model: str | None = None
+    backend: str | None = None
 
 
 @app.post("/api/agent")
@@ -1217,11 +1234,14 @@ def agent_direct(req: AgentRequest, request: Request):
             tool, args = routed
     if not tool:
         try:
-            d = ollama_chat([{"role": "user", "content": req.message}],
-                            req.model or DEFAULT_MODEL, req.max_tokens,
-                            req.temperature, use_tools=False)
+            requested_model = req.model or DEFAULT_MODEL
+            if req.backend in CLOUD_BACKENDS and req.backend != "local":
+                requested_model = req.model if req.model and req.model.startswith(req.backend + ":") else f"{req.backend}:"
+            d = llm_chat([{"role": "user", "content": req.message}],
+                         requested_model, req.max_tokens, req.temperature,
+                         use_tools=False)
         except Exception as e:
-            return {"error": f"ollama: {e}"}
+            return {"error": f"llm: {e}"}
         usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
                  "completion_tokens": d.get("eval_count", 0)}
         _usage["tokens_in"] += d.get("prompt_eval_count", 0)
@@ -1241,11 +1261,14 @@ def agent_direct(req: AgentRequest, request: Request):
     usage: dict = {"prompt_tokens": 0, "completion_tokens": 0}
     if req.summarize and not result.get("error"):
         try:
-            d = ollama_chat(
+            requested_model = req.model or DEFAULT_MODEL
+            if req.backend in CLOUD_BACKENDS and req.backend != "local":
+                requested_model = req.model if req.model and req.model.startswith(req.backend + ":") else f"{req.backend}:"
+            d = llm_chat(
                 [{"role": "user", "content":
                   f"Resultat de l'outil {tool}:\n{text[:3000]}\n\n"
                   "Resume ce resultat en francais, de facon concise."}],
-                req.model or DEFAULT_MODEL, req.max_tokens, req.temperature,
+                requested_model, req.max_tokens, req.temperature,
                 use_tools=False)
             usage = {"prompt_tokens": d.get("prompt_eval_count", 0),
                      "completion_tokens": d.get("eval_count", 0)}
@@ -1271,7 +1294,7 @@ def agent_loop_alias(req: LoopRequest, request: Request):
     return chat_stream(
         ChatIn(message=req.message, session_id=req.session_id,
                max_steps=req.max_steps, temperature=req.temperature,
-               max_tokens=req.max_tokens, model=req.model),
+               max_tokens=req.max_tokens, model=req.model, backend=req.backend),
         request)
 
 

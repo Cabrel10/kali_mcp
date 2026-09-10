@@ -132,6 +132,13 @@
       <textarea id="msgInput" rows="3" placeholder="Décris ta demande… (Entrée = envoyer, Maj+Entrée = saut de ligne)"></textarea>
       <div class="inputRow">
         <select id="modelSel"></select>
+        <select id="backendSel" title="local = Ollama par défaut · colab = modèle choisi dans Colab" style="background:var(--bg);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:11px">
+          <option value="local" selected>local (Ollama)</option>
+          <option value="colab">colab (modèle gateway)</option>
+          <option value="openrouter">openrouter (cloud)</option>
+          <option value="nvidia">nvidia NIM (cloud)</option>
+        </select>
+        <span id="backendBadge" class="hint">local</span>
         <span id="modelInfo" class="hint" style="opacity:.85"></span>
         <button id="sendBtn">Envoyer</button>
         <button id="stopBtn">■ Stop</button>
@@ -200,6 +207,13 @@ async function refreshStats(){
 }
 setInterval(refreshStats, 15000); refreshStats();
 
+// ---------- backends ----------
+async function refreshBackends(){
+  const sel=$('backendSel'), badge=$('backendBadge');
+  try { const d=await (await fetch('/api/backends')).json(); const b=d.backends?.[sel.value]||{}; badge.textContent=b.available?'disponible':'non configuré'; badge.style.color=b.available?'#2ea043':'#d29922'; }
+  catch(e){ badge.textContent='indisponible'; badge.style.color='#f85149'; }
+}
+$('backendSel').onchange=refreshBackends; refreshBackends();
 // ---------- models ----------
 fetch('/api/models').then(r=>r.json()).then(d=>{
   const sel = $('modelSel');
@@ -338,7 +352,8 @@ async function sendMessage(forced){
     const resp = await fetch('/api/chat/stream', {method:'POST',
       headers:{'Content-Type':'application/json'}, signal: curAbort.signal,
       body: JSON.stringify({message: msg, session_id: sessionId,
-                            model: $('modelSel').value})});
+                            model: $('modelSel').value,
+                            backend: $('backendSel').value})});
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
