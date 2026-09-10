@@ -68,6 +68,45 @@ CLOUD_BACKENDS = {
                    "model": NVIDIA_MODEL},
 }
 
+# Découverte dynamique du runtime Colab via le registre heartbeat.
+# Colab reste indépendant : le portail ne modifie jamais son notebook.
+COLAB_REGISTRY_URL = os.environ.get("COLAB_REGISTRY_URL", "")
+COLAB_REGISTRY_TOKEN = os.environ.get("COLAB_REGISTRY_TOKEN", "")
+COLAB_DISCOVERY_TTL = float(os.environ.get("COLAB_DISCOVERY_TTL", "5"))
+_colab_discovery = {"checked": 0.0, "available": False, "account": None}
+
+def refresh_colab_backend(force=False):
+    """Resolve the active fresh Colab tunnel from heartbeat registry."""
+    if not COLAB_REGISTRY_URL or not COLAB_REGISTRY_TOKEN:
+        return bool(CLOUD_BACKENDS["colab"].get("key"))
+    now = time.time()
+    if not force and now - _colab_discovery["checked"] < COLAB_DISCOVERY_TTL:
+        return _colab_discovery["available"]
+    available = False
+    account = None
+    try:
+        req = urllib.request.Request(
+            COLAB_REGISTRY_URL.rstrip("/") + "/api/backends/internal",
+            headers={"X-Internal-Token": COLAB_REGISTRY_TOKEN})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        account = payload.get("active")
+        entry = (payload.get("backends") or {}).get(account) if account else None
+        if entry and entry.get("validated") and not entry.get("stale"):
+            api_base = str(entry.get("api_base") or "").rstrip("/")
+            api_key = entry.get("api_key") or ""
+            model = entry.get("model") or "local"
+            if api_base and api_key:
+                CLOUD_BACKENDS["colab"].update({"url": api_base, "key": api_key, "model": model})
+                available = True
+        if not available:
+            CLOUD_BACKENDS["colab"].update({"key": ""})
+    except Exception as exc:
+        log.warning("colab_discovery_failed", error=str(exc))
+        CLOUD_BACKENDS["colab"].update({"key": ""})
+    _colab_discovery.update({"checked": now, "available": available, "account": account})
+    return available
+
 
 def resolve_backend(model):
     """Préfixe de modèle -> backend. 'openrouter:gpt-4o' -> ('openrouter','gpt-4o').
@@ -362,6 +401,8 @@ def ollama_chat(messages, model, max_tokens=400, temperature=0.0,
 
 def cloud_chat(messages, model, max_tokens=400, temperature=0.0,
                timeout=180, use_tools=True, backend="openrouter"):
+    if backend == "colab" and not refresh_colab_backend():
+        raise RuntimeError("Colab indisponible: aucun runtime frais enregistré par heartbeat")
     """Appel OpenAI-compatible pour les backends cloud du portail
     (openrouter / nvidia / colab). Zéro impact sur le serveur MCP :
     c'est juste le cerveau du portail qui change d'endpoint.
@@ -740,6 +781,7 @@ def health():
 
 @app.get("/api/backends")
 def backends():
+    refresh_colab_backend()
     """Liste les backends LLM du portail (local Ollama + cloud).
     Le serveur MCP reste indépendant : il tourne seul de son côté."""
     out = {"local": {"available": True, "type": "ollama",
@@ -753,6 +795,7 @@ def backends():
 
 @app.get("/api/models")
 def models():
+    refresh_colab_backend()
     warning = None
     try:
         with urllib.request.urlopen(OLLAMA_TAGS, timeout=10) as r:
