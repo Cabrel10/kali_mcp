@@ -65,6 +65,7 @@ from dataclasses import dataclass, asdict, field
 from enum import Enum
 from pathlib import Path
 from collections import defaultdict
+from uuid import UUID
 
 from fastmcp import FastMCP
 
@@ -157,6 +158,192 @@ class ToolStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+
+# ============================================================================
+# TOOL REGISTRY DATA STRUCTURES (WAVE 0 / TASK-TR-01)
+# ============================================================================
+
+class HealthStatus(Enum):
+    """Health status of a registered tool."""
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+
+
+class ParameterType(Enum):
+    """Supported parameter types for tool configuration."""
+    STRING = "string"
+    INTEGER = "integer"
+    BOOLEAN = "boolean"
+    ENUM = "enum"
+    FILE_PATH = "file_path"
+
+
+@dataclass
+class Parameter:
+    """Configuration parameter for a security tool.
+    
+    Attributes:
+        name: Parameter identifier (e.g., "depth", "wordlist")
+        param_type: Type of parameter (STRING, INTEGER, BOOLEAN, ENUM, FILE_PATH)
+        description: User-facing help text
+        required: Whether this parameter must be provided
+        validation_regex: Optional regex pattern for STRING type validation
+        allowed_values: Optional list of allowed values for ENUM type
+    """
+    name: str
+    param_type: ParameterType
+    description: str
+    required: bool = False
+    validation_regex: Optional[str] = None
+    allowed_values: Optional[List[str]] = None
+
+    def validate(self, value: Any) -> Tuple[bool, Optional[str]]:
+        """Validate a value against this parameter's constraints.
+        
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if value is None:
+            if self.required:
+                return False, f"Parameter '{self.name}' is required"
+            return True, None
+
+        # Type validation
+        if self.param_type == ParameterType.STRING:
+            if not isinstance(value, str):
+                return False, f"Parameter '{self.name}' must be STRING, got {type(value).__name__}"
+            if self.validation_regex:
+                if not re.match(self.validation_regex, value):
+                    return False, f"Parameter '{self.name}' does not match pattern: {self.validation_regex}"
+            return True, None
+
+        elif self.param_type == ParameterType.INTEGER:
+            if not isinstance(value, int) or isinstance(value, bool):
+                return False, f"Parameter '{self.name}' must be INTEGER, got {type(value).__name__}"
+            return True, None
+
+        elif self.param_type == ParameterType.BOOLEAN:
+            if not isinstance(value, bool):
+                return False, f"Parameter '{self.name}' must be BOOLEAN, got {type(value).__name__}"
+            return True, None
+
+        elif self.param_type == ParameterType.ENUM:
+            if self.allowed_values and value not in self.allowed_values:
+                return False, f"Parameter '{self.name}' must be one of {self.allowed_values}, got {value}"
+            return True, None
+
+        elif self.param_type == ParameterType.FILE_PATH:
+            if not isinstance(value, str):
+                return False, f"Parameter '{self.name}' must be FILE_PATH (string), got {type(value).__name__}"
+            # Check if path exists
+            if not os.path.exists(value):
+                return False, f"Parameter '{self.name}' references non-existent path: {value}"
+            return True, None
+
+        return True, None
+
+
+@dataclass
+class Capability:
+    """A security capability that a tool provides.
+    
+    Attributes:
+        id: Unique identifier for this capability (UUID)
+        name: Human-readable capability name
+        description: Detailed description of what this capability does
+        category: Category of capability (e.g., "RECON", "SCAN", "EXPLOIT")
+        evidence_potential: Float 0.0-1.0 indicating max evidence maturity this tool can achieve
+        preconditions: List of prerequisite capabilities that must be satisfied first
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    description: str = ""
+    category: str = "GENERAL"
+    evidence_potential: float = 0.5
+    preconditions: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Validate evidence_potential is in valid range."""
+        if not 0.0 <= self.evidence_potential <= 1.0:
+            raise ValueError(f"evidence_potential must be between 0.0 and 1.0, got {self.evidence_potential}")
+
+
+@dataclass
+class Tool:
+    """Registered security tool in the Tool Registry.
+    
+    Attributes:
+        id: Unique identifier for the tool (UUID)
+        name: Human-readable tool name (e.g., "Nuclei")
+        category: Tool category (SCANNER, CRACKER, EXPLOIT, RECON, etc.)
+        capabilities: List of Capability objects this tool provides
+        required_params: List of required Parameter objects
+        optional_params: List of optional Parameter objects
+        timeout_seconds: Maximum execution time in seconds
+        rate_limit_delay_ms: Delay in milliseconds between requests
+        max_concurrent_instances: Maximum number of concurrent executions
+        health_status: Current health status of the tool
+        version: Version string (e.g., "2.9.5")
+        requires_root: Whether tool requires elevated privileges
+        supported_platforms: List of supported OS platforms (linux, macos, windows)
+        failure_count: Number of consecutive failures
+        last_health_check: Timestamp of last health check
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    category: str = "GENERAL"
+    capabilities: List[Capability] = field(default_factory=list)
+    required_params: List[Parameter] = field(default_factory=list)
+    optional_params: List[Parameter] = field(default_factory=list)
+    timeout_seconds: int = 300
+    rate_limit_delay_ms: int = 0
+    max_concurrent_instances: int = 1
+    health_status: HealthStatus = HealthStatus.HEALTHY
+    version: str = "1.0.0"
+    requires_root: bool = False
+    supported_platforms: List[str] = field(default_factory=lambda: ["linux"])
+    failure_count: int = 0
+    last_health_check: Optional[str] = None
+
+    def __post_init__(self):
+        """Validate tool structure."""
+        if not self.name:
+            raise ValueError("Tool name must not be empty")
+        if len(self.capabilities) == 0:
+            raise ValueError(f"Tool '{self.name}' must have at least 1 capability")
+
+    def get_all_parameters(self) -> List[Parameter]:
+        """Get all parameters (required + optional)."""
+        return self.required_params + self.optional_params
+
+    def validate_parameters(self, provided_params: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Validate provided parameters against tool requirements.
+        
+        Returns:
+            Tuple of (all_valid, list_of_error_messages)
+        """
+        errors = []
+        all_params = self.get_all_parameters()
+        param_map = {p.name: p for p in all_params}
+
+        # Check all required parameters are provided
+        for param in self.required_params:
+            if param.name not in provided_params:
+                errors.append(f"Required parameter '{param.name}' not provided")
+
+        # Validate provided parameters
+        for param_name, param_value in provided_params.items():
+            if param_name not in param_map:
+                errors.append(f"Unknown parameter '{param_name}'")
+            else:
+                is_valid, error_msg = param_map[param_name].validate(param_value)
+                if not is_valid:
+                    errors.append(error_msg)
+
+        return len(errors) == 0, errors
+
+
 @dataclass
 class TraceEntry:
     timestamp: str
@@ -181,6 +368,197 @@ class ToolExecution:
     errors: List[str] = field(default_factory=list)
     chained_from: Optional[str] = None
     chained_to: List[str] = field(default_factory=list)
+
+
+# ============================================================================
+# CAPABILITY ENGINE DATA STRUCTURES (WAVE 0 / TASK-CE-01)
+# ============================================================================
+
+class TargetType(str, Enum):
+    """Target types that the orchestrator can scan.
+    
+    These represent different categories of targets with distinct
+    discovery, baseline, and testing requirements.
+    """
+    WEB_APP = "web_app"
+    API = "api"
+    NETWORK = "network"
+    CLOUD_INFRASTRUCTURE = "cloud_infrastructure"
+    CONTAINER = "container"
+    SAAS_PLATFORM = "saas_platform"
+    HARDWARE = "hardware"
+    INTERNAL_NETWORK = "internal_network"
+    BINARY = "binary"
+    DATABASE = "database"
+    MESSAGE_QUEUE = "message_queue"
+    CACHE = "cache"
+    LOAD_BALANCER = "load_balancer"
+    WAF = "waf"
+    MOBILE_APP = "mobile_app"
+
+
+class ObjectiveType(str, Enum):
+    """Security testing objectives that guide tool selection and prioritization.
+    
+    These represent different goals for the security assessment,
+    each requiring different tools and strategies.
+    """
+    RECON = "recon"
+    VULNERABILITY_ASSESSMENT = "vulnerability_assessment"
+    CONFIGURATION_AUDIT = "configuration_audit"
+    EXPLOIT_VERIFICATION = "exploit_verification"
+    COMPLIANCE_AUDIT = "compliance_audit"
+    PROOF_OF_CONCEPT = "proof_of_concept"
+    PRIVILEGE_ESCALATION = "privilege_escalation"
+    LATERAL_MOVEMENT = "lateral_movement"
+    PERSISTENCE = "persistence"
+    DATA_EXFILTRATION = "data_exfiltration"
+    THREAT_MODELING = "threat_modeling"
+
+
+@dataclass
+class QueryConstraints:
+    """Constraints and preferences for capability queries.
+    
+    Attributes:
+        max_execution_time_seconds: Maximum time for entire scan (0 = unlimited)
+        budget_spent_usd: Amount already spent on this engagement
+        budget_available_usd: Remaining budget for testing
+        critical_path_only: If True, only run critical/high-priority tests
+        parallel_capable: If True, tools can run in parallel
+        preconditions_satisfied: List of prerequisite capabilities already completed
+    """
+    max_execution_time_seconds: int = 3600
+    budget_spent_usd: float = 0.0
+    budget_available_usd: float = 10000.0
+    critical_path_only: bool = False
+    parallel_capable: bool = True
+    preconditions_satisfied: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Validate constraint values."""
+        if self.max_execution_time_seconds < 0:
+            raise ValueError("max_execution_time_seconds cannot be negative")
+        if self.budget_spent_usd < 0:
+            raise ValueError("budget_spent_usd cannot be negative")
+        if self.budget_available_usd < 0:
+            raise ValueError("budget_available_usd cannot be negative")
+
+
+@dataclass
+class ExecutionCost:
+    """Estimated cost of executing a capability/tool.
+    
+    Attributes:
+        cpu_percent: Estimated CPU utilization (0-100)
+        memory_mb: Estimated memory usage in MB
+        network_requests: Estimated number of network requests
+        api_calls_remaining: API quota remaining after execution
+        rate_limit_reset_seconds: Seconds until rate limit resets
+    """
+    cpu_percent: float = 10.0
+    memory_mb: int = 100
+    network_requests: int = 10
+    api_calls_remaining: int = 1000
+    rate_limit_reset_seconds: int = 0
+
+    def __post_init__(self):
+        """Validate cost parameters."""
+        if not 0.0 <= self.cpu_percent <= 100.0:
+            raise ValueError(f"cpu_percent must be between 0 and 100, got {self.cpu_percent}")
+        if self.memory_mb < 0:
+            raise ValueError(f"memory_mb cannot be negative, got {self.memory_mb}")
+        if self.network_requests < 0:
+            raise ValueError(f"network_requests cannot be negative, got {self.network_requests}")
+        if self.api_calls_remaining < 0:
+            raise ValueError(f"api_calls_remaining cannot be negative, got {self.api_calls_remaining}")
+        if self.rate_limit_reset_seconds < 0:
+            raise ValueError(f"rate_limit_reset_seconds cannot be negative, got {self.rate_limit_reset_seconds}")
+
+
+@dataclass
+class CapabilityQuery:
+    """Query to find applicable tools for a target.
+    
+    The Capability Engine uses this query to match and rank tools
+    based on target characteristics and testing objectives.
+    
+    Attributes:
+        target_type: Category of target (WEB_APP, API, NETWORK, etc.)
+        detected_tech_stack: List of detected technologies (Java, Node.js, etc.)
+        objective: Primary testing objective
+        constraints: Execution constraints and preferences
+        evidence_requirements: Dict mapping evidence type to minimum confidence (0.0-1.0)
+        session_id: Unique session identifier (UUID)
+    """
+    target_type: TargetType
+    detected_tech_stack: List[str] = field(default_factory=list)
+    objective: ObjectiveType = ObjectiveType.VULNERABILITY_ASSESSMENT
+    constraints: QueryConstraints = field(default_factory=QueryConstraints)
+    evidence_requirements: Dict[str, float] = field(default_factory=dict)
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    def __post_init__(self):
+        """Validate query parameters."""
+        if not isinstance(self.target_type, TargetType):
+            raise ValueError(f"target_type must be TargetType, got {type(self.target_type)}")
+        if not isinstance(self.objective, ObjectiveType):
+            raise ValueError(f"objective must be ObjectiveType, got {type(self.objective)}")
+        
+        # Validate evidence_requirements values are in [0.0, 1.0]
+        for evidence_type, confidence in self.evidence_requirements.items():
+            if not isinstance(confidence, (int, float)) or not 0.0 <= confidence <= 1.0:
+                raise ValueError(
+                    f"evidence_requirements[{evidence_type}] must be between 0.0 and 1.0, "
+                    f"got {confidence}"
+                )
+
+
+@dataclass
+class CapabilityMatch:
+    """A matched tool with relevance scoring and metadata.
+    
+    Returned by Capability Engine when querying for applicable tools.
+    Contains all information needed to decide whether to execute the tool
+    and what parameters to use.
+    
+    Attributes:
+        tool_id: UUID of the matched tool
+        tool_name: Human-readable tool name
+        matching_capabilities: List of capability names that match the query
+        relevance_score: Float (0.0-1.0) indicating match quality
+        evidence_potential: Float (0.0-1.0) indicating maximum evidence level achievable
+        compatibility: List of tech stack components this tool is compatible with
+        last_run_seconds_ago: How many seconds since this tool last ran (None if never)
+        success_rate: Float (0.0-1.0) historical success rate on similar targets
+        estimated_cost: ExecutionCost for running this tool
+    """
+    tool_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    tool_name: str = ""
+    matching_capabilities: List[str] = field(default_factory=list)
+    relevance_score: float = 0.0
+    evidence_potential: float = 0.0
+    compatibility: List[str] = field(default_factory=list)
+    last_run_seconds_ago: Optional[int] = None
+    success_rate: float = 0.5
+    estimated_cost: ExecutionCost = field(default_factory=ExecutionCost)
+
+    def __post_init__(self):
+        """Validate score parameters are in valid range."""
+        if not 0.0 <= self.relevance_score <= 1.0:
+            raise ValueError(
+                f"relevance_score must be between 0.0 and 1.0, got {self.relevance_score}"
+            )
+        if not 0.0 <= self.evidence_potential <= 1.0:
+            raise ValueError(
+                f"evidence_potential must be between 0.0 and 1.0, got {self.evidence_potential}"
+            )
+        if not 0.0 <= self.success_rate <= 1.0:
+            raise ValueError(
+                f"success_rate must be between 0.0 and 1.0, got {self.success_rate}"
+            )
+        if not self.tool_name:
+            raise ValueError("tool_name must not be empty")
     command_log: List[Dict] = field(default_factory=list)
     duration_seconds: float = 0.0
 
