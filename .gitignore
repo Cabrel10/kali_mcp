@@ -44,8 +44,27 @@ config.yaml
 # System Files
 .DS_Store
 Thumbs.db
+*.db
+*.tmp
 
 # Portal v2 runtime artifacts
 webapp/logs/
 webapp/portal_history.db
 *.pyc
+
+# Kiro session/cache pollution
+.kiro/sessions/
+.kiro/cache/
+.kiro/*.tmp
+
+# Notebook and backup pollution
+*.ipynb
+*(Copie).*
+*_backup_*.py
+*_corrupted_*.py
+*_fixed_*.py
+TEST_*.py
+
+# Malformed files
+-
+~/

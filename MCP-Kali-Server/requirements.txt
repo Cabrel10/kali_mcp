@@ -1,0 +1,29 @@
+# Kali MCP Server v6.3 — Requirements
+# Python 3.10+ required
+
+# Core MCP framework
+fastmcp>=2.0.0
+
+# HTTP client (async)
+httpx>=0.25.0
+
+# DNS resolution
+dnspython>=2.4.0
+
+# HTML parsing
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Cryptography
+cryptography>=41.0.0
+pyjwt>=2.8.0
+
+# Network topology
+networkx>=3.1
+
+# Browser automation (for web_interactor module)
+# Install chromium: playwright install chromium
+playwright>=1.40.0
+
+# Optional: scapy for low-level packet crafting
+# scapy>=2.5.0
