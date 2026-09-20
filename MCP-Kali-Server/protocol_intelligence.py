@@ -449,19 +449,34 @@ class ProtocolAnalyzer:
         
         # TLS/Certificate key strength assessment (distinguish asymmetric vs symmetric)
         if result.key_size and result.key_size < 2048:
-            # Determine key type from certificate
-            key_type = "RSA"  # Default assumption
-            if "EC" in result.cipher_suite or "ECDSA" in result.signature_algorithm:
-                key_type = "EC"
+            # CRITICAL FIX: Detect key type correctly
+            # signature_algorithm contains hints like "ecdsa-with-SHA384" or "sha256WithRSAEncryption"
+            key_type = "RSA"  # Default
+            sig_algo_lower = result.signature_algorithm.lower() if result.signature_algorithm else ""
+            cipher_lower = result.cipher_suite.lower() if result.cipher_suite else ""
             
-            # Only flag if it's actually asymmetric and weak
-            if key_type == "RSA":
-                result.vulnerabilities.append(f"Weak RSA key size: {result.key_size} bits (< 2048)")
-            elif key_type == "EC" and result.key_size < 224:
-                # EC keys < 224 bits are weak
-                result.vulnerabilities.append(f"Weak EC key size: {result.key_size} bits (< 224)")
-            # Symmetric keys < 128 bits are weak, but 256-bit symmetric is standard
-            # So we skip flagging symmetric key strength
+            if "ecdsa" in sig_algo_lower or "ecdsa" in cipher_lower or "ec " in cipher_lower:
+                key_type = "ECDSA"
+            elif "ed25519" in sig_algo_lower or "ed448" in sig_algo_lower:
+                key_type = "EdDSA"
+            elif "rsa" in sig_algo_lower or "rsa" in cipher_lower:
+                key_type = "RSA"
+            
+            # Apply correct thresholds per key type
+            if key_type == "ECDSA":
+                # ECDSA P-256 (256-bit) = equivalent to RSA 3072 = SECURE
+                # Only flag if < 224 bits (P-192, which is deprecated)
+                if result.key_size < 224:
+                    result.vulnerabilities.append(f"Weak ECDSA curve: {result.key_size} bits (< P-224)")
+                # No warning for P-256 or larger
+            elif key_type == "EdDSA":
+                # Ed25519/Ed448 always 256/448 bits - always secure
+                pass
+            elif key_type == "RSA":
+                # RSA needs >= 2048 bits
+                if result.key_size < 2048:
+                    result.vulnerabilities.append(f"Weak RSA key size: {result.key_size} bits (< 2048)")
+            # Don't flag symmetric key sizes here (they're not in certificate)
 
         # Weak cipher detection
         weak_patterns = ["RC4", "DES", "MD5", "NULL", "EXPORT", "anon"]
