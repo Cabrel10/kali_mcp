@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP — Journal d'exécution des outils</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --ok:#3fb950; --err:#f85149; --accent:#58a6ff;
+    --code:#0b0e14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.5 -apple-system,Segoe UI,Roboto,Ubuntu,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--border);
+    background:var(--panel);display:flex;align-items:center;gap:16px;
+    position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .sub{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+  .ctrl{display:flex;gap:8px;align-items:center}
+  input,button,select{background:var(--code);color:var(--txt);
+    border:1px solid var(--border);border-radius:6px;padding:6px 10px;
+    font:inherit}
+  button{cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  .wrap{padding:16px 20px;max-width:1100px;margin:0 auto}
+  .stats{display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .stat{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:8px 14px}
+  .stat b{font-size:18px}
+  .stat span{color:var(--muted);font-size:12px;display:block}
+  .call{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;margin-bottom:10px;overflow:hidden}
+  .call .head{display:flex;align-items:center;gap:12px;padding:10px 14px;
+    cursor:pointer;user-select:none}
+  .call .head:hover{background:#1c2230}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600}
+  .badge.ok{background:rgba(63,185,80,.15);color:var(--ok)}
+  .badge.error{background:rgba(248,81,73,.15);color:var(--err)}
+  .badge.pending{background:rgba(139,148,158,.15);color:var(--muted)}
+  .tname{font-weight:600;color:var(--accent);font-family:ui-monospace,monospace}
+  .meta{color:var(--muted);font-size:12px;margin-left:auto;text-align:right}
+  .body{display:none;border-top:1px solid var(--border);padding:12px 14px}
+  .call.open .body{display:block}
+  .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;margin:10px 0 4px}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:6px;
+    padding:10px 12px;overflow:auto;margin:0;white-space:pre-wrap;
+    word-break:break-word;max-height:340px;font-family:ui-monospace,
+    SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  .empty{color:var(--muted);text-align:center;padding:40px}
+  .cmd{color:#d2a8ff}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔍 Journal d'exécution MCP</h1>
+  <span class="sub">Commande réelle exécutée par l'appel + logs bruts — le modèle n'est qu'orchestrateur</span>
+  <div class="spacer"></div>
+  <div class="ctrl">
+    <input id="sess" placeholder="filtrer par session_id (optionnel)" size="26">
+    <label class="sub"><input type="checkbox" id="auto" checked> auto 4s</label>
+    <button id="refresh">Rafraîchir</button>
+    <a href="/" class="sub">← chat</a>
+  </div>
+</header>
+<div class="wrap">
+  <div class="stats" id="stats"></div>
+  <div id="list"><div class="empty">Chargement…</div></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let timer = null;
+
+function fmtDur(ms){ if(ms==null) return '—'; return ms<1000?ms+' ms':(ms/1000).toFixed(2)+' s'; }
+function fmtTs(t){ if(!t) return ''; return (''+t).replace('T',' ').slice(0,19); }
+
+async function load(){
+  const sess = $('#sess').value.trim();
+  const url = '/api/tools/log?limit=200' + (sess?('&session='+encodeURIComponent(sess)):'');
+  let data;
+  try{ data = await (await fetch(url)).json(); }
+  catch(e){ $('#list').innerHTML='<div class="empty">Erreur réseau : '+esc(''+e)+'</div>'; return; }
+  render(data.calls||[]);
+}
+
+function render(calls){
+  const n = calls.length;
+  const ok = calls.filter(c=>c.status==='ok').length;
+  const err = calls.filter(c=>c.status==='error').length;
+  const durs = calls.map(c=>c.duration_ms).filter(x=>x!=null);
+  const avg = durs.length? Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  $('#stats').innerHTML =
+    `<div class="stat"><b>${n}</b><span>appels</span></div>`+
+    `<div class="stat"><b style="color:var(--ok)">${ok}</b><span>OK</span></div>`+
+    `<div class="stat"><b style="color:var(--err)">${err}</b><span>erreurs</span></div>`+
+    `<div class="stat"><b>${fmtDur(avg)}</b><span>durée moy.</span></div>`;
+  if(!n){ $('#list').innerHTML='<div class="empty">Aucun appel d\'outil enregistré pour l\'instant.<br>Lance une commande depuis le chat, puis reviens ici.</div>'; return; }
+  $('#list').innerHTML = calls.map(c=>{
+    const st = c.status||'pending';
+    const args = JSON.stringify(c.arguments||{}, null, 2);
+    const cmd = c.tool_name + '(' + Object.entries(c.arguments||{})
+        .map(([k,v])=>k+'='+JSON.stringify(v)).join(', ') + ')';
+    const out = c.error ? ('ERROR: '+c.error) : (c.result_text||'(sortie vide)');
+    return `<div class="call" data-id="${c.id}">
+      <div class="head" onclick="this.parentNode.classList.toggle('open')">
+        <span class="badge ${st}">${st}</span>
+        <span class="tname">${esc(c.tool_name)}</span>
+        <span class="meta">#${c.id} · ${fmtDur(c.duration_ms)} · ${fmtTs(c.started_at)}<br>
+          <span style="opacity:.7">session ${esc((c.session_id||'').slice(0,8))}</span></span>
+      </div>
+      <div class="body">
+        <div class="lbl">Commande exécutée (appel réel)</div>
+        <pre class="cmd">${esc(cmd)}</pre>
+        <div class="lbl">Arguments</div>
+        <pre>${esc(args)}</pre>
+        <div class="lbl">Logs / sortie brute (${(c.size_bytes||out.length)} o)</div>
+        <pre>${esc(out)}</pre>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function schedule(){
+  if(timer){ clearInterval(timer); timer=null; }
+  if($('#auto').checked){ timer=setInterval(load, 4000); }
+}
+$('#refresh').onclick = load;
+$('#sess').addEventListener('keydown', e=>{ if(e.key==='Enter') load(); });
+$('#auto').onchange = schedule;
+load(); schedule();
+</script>
+</body>
+</html>
