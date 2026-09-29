@@ -74,6 +74,11 @@ try:
 except ImportError:
     requests = None
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
 # Import phishing detector
 try:
     from phishing_detector import analyze_site_for_phishing, PhishingDetector
@@ -138,6 +143,638 @@ class StandardFinding:
             "limitations": self.limitations,
             "next_step": self.next_step,
         }
+
+
+# ============================================================================
+# BASELINE & SEMANTIC COMPARISON DATA STRUCTURES (WAVE 4 / TASK-BE-01)
+# ============================================================================
+
+class BaselineType(str, Enum):
+    """Types of baselines for semantic comparison in fuzzing."""
+    HOMEPAGE = "homepage"
+    NOT_FOUND_404 = "not_found_404"
+    INVALID_PARAM = "invalid_param"
+    NULL_BODY = "null_body"
+    EMPTY_QUERY = "empty_query"
+    AUTHENTICATED_HOME = "authenticated_home"
+    AUTHENTICATED_404 = "authenticated_404"
+
+
+@dataclass
+class Baseline:
+    """A baseline response for comparison during fuzzing.
+    
+    Stores all characteristics of a baseline response including
+    request details, response metadata, and semantic hashes.
+    
+    Attributes:
+        baseline_type: BaselineType - Category of this baseline
+        request_method: str - HTTP method (GET, POST, etc.)
+        request_url: str - Full URL of the request
+        request_headers: Dict[str, str] - Request headers sent
+        request_body: Optional[str] - Request body if applicable
+        response_status_code: int - HTTP status code of response
+        response_headers: Dict[str, str] - Response headers received
+        response_body: str - Full response body
+        response_size_bytes: int - Size of response body in bytes
+        dom_hash: str - Hash of DOM structure (for HTML responses)
+        text_hash: str - Hash of text content (excluding markup)
+        semantic_tokens: List[str] - Extracted semantic tokens
+        jaccard_signature: str - Jaccard similarity signature
+        response_time_ms: float - Time to receive response in milliseconds
+        request_timestamp: str - ISO format timestamp when request was made
+    """
+    baseline_type: BaselineType
+    request_method: str
+    request_url: str
+    request_headers: Dict[str, str]
+    request_body: Optional[str]
+    response_status_code: int
+    response_headers: Dict[str, str]
+    response_body: str
+    response_size_bytes: int
+    dom_hash: str
+    text_hash: str
+    semantic_tokens: List[str]
+    jaccard_signature: str
+    response_time_ms: float
+    request_timestamp: str
+
+
+@dataclass
+class BaselineSet:
+    """Collection of baselines for a target with aggregated statistics.
+    
+    Manages multiple baseline responses for a single target,
+    tracking response time distributions and HTTP version.
+    
+    Attributes:
+        baselines: Dict[str, Baseline] - Map of baseline_type to Baseline
+        target: str - Target URL/host for these baselines
+        established_timestamp: str - ISO format timestamp when set was created
+        http_version: str - HTTP version detected (1.1, 2, 3)
+        response_times_ms: List[float] - Individual response times in milliseconds
+        average_response_time_ms: float - Mean response time
+    """
+    baselines: Dict[str, Baseline]
+    target: str
+    established_timestamp: str
+    http_version: str
+    response_times_ms: List[float]
+    average_response_time_ms: float
+
+
+@dataclass
+class SemanticComparisonResult:
+    """Result of comparing a test response against baseline responses.
+    
+    Captures all metrics comparing a fuzzing test response to baselines,
+    indicating whether the response is semantically equivalent to baseline.
+    
+    Attributes:
+        test_response: Baseline - The test response being compared
+        baseline_response: Baseline - The baseline being compared against
+        similarity_score: float - Overall similarity (0.0-1.0)
+        jaccard_similarity: float - Jaccard index similarity
+        dom_similarity: float - DOM structure similarity
+        semantic_difference: str - Description of semantic differences found
+        is_semantic_match: bool - True if response is semantically equivalent
+    """
+    test_response: Baseline
+    baseline_response: Baseline
+    similarity_score: float
+    jaccard_similarity: float
+    dom_similarity: float
+    semantic_difference: str
+    is_semantic_match: bool
+
+
+class BaselineEngine:
+    """Engine for establishing and managing baseline HTTP responses.
+    
+    Creates three reference baseline responses (homepage, 404, invalid param)
+    and provides methods for semantic comparison against test responses.
+    
+    Attributes:
+        _standard_headers (Dict[str, str]): Standard HTTP headers for requests
+    """
+    
+    STANDARD_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    HOMEPAGE_PATH = "/"
+    TIMEOUT_SECONDS = 10
+    
+    def __init__(self):
+        """Initialize BaselineEngine with standard headers."""
+        self._standard_headers = {
+            "User-Agent": self.STANDARD_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "close",
+        }
+    
+    def establish_baseline(self, target: str) -> BaselineSet:
+        """Establish baseline responses for a target.
+        
+        Creates three baseline responses:
+        - Baseline 1: GET / (homepage)
+        - Baseline 2: GET /{random_uuid} (404 not found)
+        - Baseline 3: GET {target}?{random_param}={random_value} (invalid param)
+        
+        Args:
+            target: The target URL (with or without http/https scheme)
+            
+        Returns:
+            BaselineSet containing the three baselines with response metadata
+            
+        Raises:
+            Stores errors gracefully but returns BaselineSet with available baselines
+        """
+        # Normalize target URL
+        target_url = self._normalize_url(target)
+        
+        baseline_set = BaselineSet(
+            baselines={},
+            target=target_url,
+            established_timestamp=datetime.datetime.utcnow().isoformat(),
+            http_version="1.1",
+            response_times_ms=[],
+            average_response_time_ms=0.0,
+        )
+        
+        # Baseline 1: Homepage (/)
+        self._establish_homepage_baseline(baseline_set, target_url)
+        
+        # Baseline 2: 404 Not Found
+        self._establish_404_baseline(baseline_set, target_url)
+        
+        # Baseline 3: Invalid Parameter
+        self._establish_invalid_param_baseline(baseline_set, target_url)
+        
+        # Calculate average response time if we have responses
+        if baseline_set.response_times_ms:
+            baseline_set.average_response_time_ms = sum(baseline_set.response_times_ms) / len(
+                baseline_set.response_times_ms
+            )
+        
+        return baseline_set
+    
+    def _normalize_url(self, url: str) -> str:
+        """Normalize URL by adding http:// if scheme is missing.
+        
+        Args:
+            url: URL that may or may not have a scheme
+            
+        Returns:
+            URL with http:// prefix if no scheme present
+        """
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = "http://" + url
+        return url
+    
+    def _extract_base_url(self, url: str) -> str:
+        """Extract base URL (scheme + host) from full URL.
+        
+        Args:
+            url: Full URL
+            
+        Returns:
+            Base URL (scheme://host)
+        """
+        parsed = urllib.parse.urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    
+    def _establish_homepage_baseline(self, baseline_set: BaselineSet, target_url: str) -> None:
+        """Establish HOMEPAGE baseline (GET /).
+        
+        Args:
+            baseline_set: BaselineSet to populate
+            target_url: Target URL to request
+        """
+        try:
+            base_url = self._extract_base_url(target_url)
+            homepage_url = base_url + self.HOMEPAGE_PATH
+            
+            start_time = time.time()
+            response = requests.get(
+                homepage_url,
+                headers=self._standard_headers,
+                timeout=self.TIMEOUT_SECONDS,
+                allow_redirects=True,
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            baseline = Baseline(
+                baseline_type=BaselineType.HOMEPAGE,
+                request_method="GET",
+                request_url=homepage_url,
+                request_headers=self._standard_headers,
+                request_body=None,
+                response_status_code=response.status_code,
+                response_headers=dict(response.headers),
+                response_body=response.text,
+                response_size_bytes=len(response.content),
+                dom_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                text_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                semantic_tokens=[],
+                jaccard_signature="",
+                response_time_ms=elapsed_ms,
+                request_timestamp=datetime.datetime.utcnow().isoformat(),
+            )
+            
+            baseline_set.baselines[BaselineType.HOMEPAGE.value] = baseline
+            baseline_set.response_times_ms.append(elapsed_ms)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logger.warning(f"Failed to establish HOMEPAGE baseline: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Unexpected error establishing HOMEPAGE baseline: {str(e)}")
+    
+    def _establish_404_baseline(self, baseline_set: BaselineSet, target_url: str) -> None:
+        """Establish NOT_FOUND_404 baseline (GET /{random_uuid}).
+        
+        Args:
+            baseline_set: BaselineSet to populate
+            target_url: Target URL to request
+        """
+        try:
+            base_url = self._extract_base_url(target_url)
+            random_path = "/" + str(uuid.uuid4())
+            not_found_url = base_url + random_path
+            
+            start_time = time.time()
+            response = requests.get(
+                not_found_url,
+                headers=self._standard_headers,
+                timeout=self.TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            baseline = Baseline(
+                baseline_type=BaselineType.NOT_FOUND_404,
+                request_method="GET",
+                request_url=not_found_url,
+                request_headers=self._standard_headers,
+                request_body=None,
+                response_status_code=response.status_code,
+                response_headers=dict(response.headers),
+                response_body=response.text,
+                response_size_bytes=len(response.content),
+                dom_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                text_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                semantic_tokens=[],
+                jaccard_signature="",
+                response_time_ms=elapsed_ms,
+                request_timestamp=datetime.datetime.utcnow().isoformat(),
+            )
+            
+            baseline_set.baselines[BaselineType.NOT_FOUND_404.value] = baseline
+            baseline_set.response_times_ms.append(elapsed_ms)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logger.warning(f"Failed to establish NOT_FOUND_404 baseline: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Unexpected error establishing NOT_FOUND_404 baseline: {str(e)}")
+    
+    def _establish_invalid_param_baseline(self, baseline_set: BaselineSet, target_url: str) -> None:
+        """Establish INVALID_PARAM baseline (GET {target}?{random_param}={random_value}).
+        
+        Args:
+            baseline_set: BaselineSet to populate
+            target_url: Target URL to request
+        """
+        try:
+            random_param = f"param_{uuid.uuid4().hex[:8]}"
+            random_value = f"value_{uuid.uuid4().hex[:8]}"
+            
+            # Append param to target URL, handling existing query strings
+            if "?" in target_url:
+                invalid_param_url = f"{target_url}&{random_param}={random_value}"
+            else:
+                invalid_param_url = f"{target_url}?{random_param}={random_value}"
+            
+            start_time = time.time()
+            response = requests.get(
+                invalid_param_url,
+                headers=self._standard_headers,
+                timeout=self.TIMEOUT_SECONDS,
+                allow_redirects=True,
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            baseline = Baseline(
+                baseline_type=BaselineType.INVALID_PARAM,
+                request_method="GET",
+                request_url=invalid_param_url,
+                request_headers=self._standard_headers,
+                request_body=None,
+                response_status_code=response.status_code,
+                response_headers=dict(response.headers),
+                response_body=response.text,
+                response_size_bytes=len(response.content),
+                dom_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                text_hash=hashlib.sha256(response.text.encode()).hexdigest()[:12],
+                semantic_tokens=[],
+                jaccard_signature="",
+                response_time_ms=elapsed_ms,
+                request_timestamp=datetime.datetime.utcnow().isoformat(),
+            )
+            
+            baseline_set.baselines[BaselineType.INVALID_PARAM.value] = baseline
+            baseline_set.response_times_ms.append(elapsed_ms)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logger.warning(f"Failed to establish INVALID_PARAM baseline: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Unexpected error establishing INVALID_PARAM baseline: {str(e)}")
+    
+    def extract_semantic_tokens(self, response_body: str) -> set:
+        """Extract semantic tokens from response body.
+        
+        Tokenizes the response by splitting on whitespace and punctuation,
+        removes common stopwords, normalizes to lowercase, and returns unique tokens.
+        
+        Args:
+            response_body: The HTTP response body as string
+            
+        Returns:
+            Set of normalized semantic tokens (lowercased, stopwords removed)
+        """
+        # Common stopwords to ignore
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+            "has", "he", "in", "is", "it", "its", "of", "on", "or", "that",
+            "the", "to", "was", "will", "with", "this", "these", "those",
+            "i", "me", "my", "we", "you", "your", "them", "their", "what",
+            "when", "where", "why", "how", "all", "each", "every", "both",
+        }
+        
+        if not response_body:
+            return set()
+        
+        # Split on whitespace and punctuation using regex
+        # Keep alphanumeric and underscores, split on everything else
+        tokens = re.findall(r'\b\w+\b', response_body.lower())
+        
+        # Filter out stopwords and return as set
+        semantic_tokens = {token for token in tokens if token not in stopwords}
+        
+        return semantic_tokens
+    
+    def compute_dom_hash(self, html: str) -> str:
+        """Compute SHA256 hash of parsed DOM tree structure.
+        
+        Parses HTML using BeautifulSoup, traverses the tree, serializes
+        tag names and structure (ignoring content, whitespace, comments),
+        and returns SHA256 hash of the serialization.
+        
+        Args:
+            html: HTML string to hash
+            
+        Returns:
+            64-character hexadecimal SHA256 hash
+        """
+        if not html or not BeautifulSoup:
+            return hashlib.sha256(b"").hexdigest()
+        
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Serialize DOM structure: traverse and build string of tag names
+            def serialize_dom(element):
+                """Recursively serialize DOM structure."""
+                parts = []
+                
+                # Add opening tag
+                if hasattr(element, 'name') and element.name:
+                    parts.append(f"<{element.name}>")
+                
+                # Recursively process children, ignoring strings and comments
+                if hasattr(element, 'children'):
+                    for child in element.children:
+                        # Skip text nodes, comments, and whitespace-only content
+                        if isinstance(child, str):
+                            continue
+                        if hasattr(child, 'name') and child.name is None:
+                            # NavigableString or Comment
+                            continue
+                        parts.append(serialize_dom(child))
+                
+                # Add closing tag
+                if hasattr(element, 'name') and element.name:
+                    parts.append(f"</{element.name}>")
+                
+                return "".join(parts)
+            
+            dom_string = serialize_dom(soup)
+            dom_hash = hashlib.sha256(dom_string.encode()).hexdigest()
+            return dom_hash
+        except Exception as e:
+            logger.warning(f"Error computing DOM hash: {str(e)}")
+            return hashlib.sha256(b"").hexdigest()
+    
+    def compute_text_hash(self, html: str) -> str:
+        """Compute SHA256 hash of extracted text content from HTML.
+        
+        Parses HTML using BeautifulSoup, extracts all text nodes,
+        concatenates them, and returns SHA256 hash.
+        
+        Args:
+            html: HTML string to extract text from and hash
+            
+        Returns:
+            64-character hexadecimal SHA256 hash
+        """
+        if not html or not BeautifulSoup:
+            return hashlib.sha256(b"").hexdigest()
+        
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Extract all text from the soup
+            text_content = soup.get_text()
+            
+            # Hash the extracted text
+            text_hash = hashlib.sha256(text_content.encode()).hexdigest()
+            return text_hash
+        except Exception as e:
+            logger.warning(f"Error computing text hash: {str(e)}")
+            return hashlib.sha256(b"").hexdigest()
+    
+    def jaccard_similarity(self, tokens1: set, tokens2: set) -> float:
+        """Calculate Jaccard similarity between two sets of tokens.
+        
+        The Jaccard similarity coefficient is the size of the intersection divided
+        by the size of the union of two sets. It measures the similarity between
+        finite sample sets.
+        
+        Formula: |intersection| / |union|
+        
+        Edge cases:
+        - Both sets empty: returns 0.0 (no similarity when nothing to compare)
+        - One empty, one non-empty: returns 0.0 (no overlap)
+        - Identical sets: returns 1.0 (perfect similarity)
+        
+        Args:
+            tokens1: First set of tokens
+            tokens2: Second set of tokens
+            
+        Returns:
+            float in range [0.0, 1.0] representing similarity coefficient
+        """
+        # Handle edge case: both empty sets return 0.0 (no similarity)
+        if len(tokens1) == 0 and len(tokens2) == 0:
+            return 0.0
+        
+        # Handle edge case: one empty, one non-empty returns 0.0 (no overlap)
+        if len(tokens1) == 0 or len(tokens2) == 0:
+            return 0.0
+        
+        # Calculate intersection and union
+        intersection = tokens1 & tokens2
+        union = tokens1 | tokens2
+        
+        # Calculate Jaccard similarity
+        if len(union) == 0:
+            return 0.0
+        
+        return len(intersection) / len(union)
+    
+    def size_ratio(self, size1: int, size2: int) -> float:
+        """Calculate the ratio of similarity between two sizes.
+        
+        Returns the minimum size divided by the maximum size, producing a value
+        in [0.0, 1.0] where 1.0 means sizes are equal and 0.0 means one size is 0.
+        
+        Formula: min(size1, size2) / max(size1, size2)
+        
+        Edge cases:
+        - Both sizes zero: returns 1.0 (both are equal at zero)
+        - Identical sizes: returns 1.0 (perfect ratio)
+        - One size zero: returns 0.0 (maximum difference)
+        
+        Args:
+            size1: First size value
+            size2: Second size value
+            
+        Returns:
+            float in range [0.0, 1.0] representing size similarity
+        """
+        # Handle edge case: both sizes are 0, they are equal
+        if size1 == 0 and size2 == 0:
+            return 1.0
+        
+        # Handle edge case: one or both sizes are 0
+        if size1 == 0 or size2 == 0:
+            return 0.0
+        
+        # Calculate ratio
+        min_size = min(size1, size2)
+        max_size = max(size1, size2)
+        
+        return min_size / max_size
+    
+    def combined_score(self, jaccard_score: float, size_score: float) -> float:
+        """Calculate combined similarity score from Jaccard and size scores.
+        
+        Combines two similarity metrics using weighted average: 60% Jaccard similarity
+        and 40% size ratio. Both input scores should be in [0.0, 1.0].
+        
+        Formula: (jaccard_score * 0.6) + (size_score * 0.4)
+        
+        Args:
+            jaccard_score: Jaccard similarity score in [0.0, 1.0]
+            size_score: Size ratio score in [0.0, 1.0]
+            
+        Returns:
+            float in range [0.0, 1.0] representing combined similarity
+        """
+        combined = (jaccard_score * 0.6) + (size_score * 0.4)
+        
+        # Ensure result is within valid range due to floating point precision
+        return max(0.0, min(1.0, combined))
+    
+    def compare_semantic(self, test_response: str, baseline: Baseline) -> SemanticComparisonResult:
+        """Compare a test response against a baseline response semantically.
+        
+        Computes semantic similarity using token-based (Jaccard) and size-based metrics.
+        Applies a 0.75 threshold to determine if responses are semantically equivalent.
+        
+        The comparison follows these steps:
+        1. Extract tokens from test_response using extract_semantic_tokens()
+        2. Get baseline tokens from baseline.semantic_tokens
+        3. Compute Jaccard similarity between test and baseline tokens
+        4. Compute size ratio between test and baseline response sizes
+        5. Compute combined_score = (jaccard * 0.6) + (size_ratio * 0.4)
+        6. Apply threshold: combined_score >= 0.75 → is_semantic_match = true
+        7. Generate semantic_difference description
+        
+        Args:
+            test_response: The response body to test (string)
+            baseline: The baseline to compare against (Baseline dataclass)
+            
+        Returns:
+            SemanticComparisonResult with:
+                - similarity_score: Combined weighted score (0.0-1.0)
+                - jaccard_similarity: Token-based similarity (0.0-1.0)
+                - is_semantic_match: True if combined_score >= 0.75
+                - semantic_difference: Description of differences
+                - dom_similarity: Placeholder 0.0 (future implementation)
+        """
+        # Extract tokens from test response
+        test_tokens = self.extract_semantic_tokens(test_response)
+        
+        # Get baseline tokens (convert list to set)
+        baseline_tokens = set(baseline.semantic_tokens) if baseline.semantic_tokens else set()
+        
+        # Compute Jaccard similarity between token sets
+        jaccard_sim = self.jaccard_similarity(test_tokens, baseline_tokens)
+        
+        # Compute size ratio
+        test_size = len(test_response)
+        baseline_size = baseline.response_size_bytes
+        size_rat = self.size_ratio(test_size, baseline_size)
+        
+        # Compute combined score: (jaccard * 0.6) + (size_ratio * 0.4)
+        combined_score_val = self.combined_score(jaccard_sim, size_rat)
+        
+        # Determine semantic match: threshold is 0.75
+        is_semantic_match = combined_score_val >= 0.75
+        
+        # Generate semantic difference description
+        if is_semantic_match:
+            semantic_diff = "No semantic difference"
+        else:
+            # Calculate new and missing tokens
+            new_tokens = test_tokens - baseline_tokens
+            missing_tokens = baseline_tokens - test_tokens
+            new_count = len(new_tokens)
+            missing_count = len(missing_tokens)
+            
+            # Build description with example tokens
+            parts = [f"{new_count} new tokens, {missing_count} missing tokens"]
+            
+            # Add example new tokens (up to 3)
+            if new_tokens:
+                example_new = ", ".join(sorted(list(new_tokens))[:3])
+                parts.append(f"new: {example_new}")
+            
+            # Add example missing tokens (up to 3)
+            if missing_tokens:
+                example_missing = ", ".join(sorted(list(missing_tokens))[:3])
+                parts.append(f"missing: {example_missing}")
+            
+            semantic_diff = "; ".join(parts)
+        
+        # Return SemanticComparisonResult with all fields populated
+        return SemanticComparisonResult(
+            test_response=test_response,
+            baseline_response=baseline.response_body,
+            similarity_score=combined_score_val,
+            jaccard_similarity=jaccard_sim,
+            dom_similarity=0.0,  # Placeholder for future implementation
+            semantic_difference=semantic_diff,
+            is_semantic_match=is_semantic_match,
+        )
 
 
 # ============================================================================
@@ -1683,6 +2320,406 @@ class CapabilityEngine:
         with self._cache_lock:
             self._cache.clear()
             logger.debug("CapabilityEngine query cache cleared")
+
+
+# ============================================================================
+# EVIDENCE GRAPH DATA STRUCTURES (WAVE 5 / TASK-EG-01)
+# ============================================================================
+
+# ============================================================================
+# SIGNAL DATA STRUCTURE
+# ============================================================================
+
+@dataclass
+class Signal:
+    """Represents a detected signal/observation that may indicate a vulnerability.
+    
+    A signal is an observable indicator that is not conclusive on its own but
+    may suggest a hypothesis. Signals are used to build evidence chains.
+    
+    Attributes:
+        signal_id: UUID string uniquely identifying this signal
+        type: Type of signal (e.g., "response_time_spike", "error_message", "behavioral_change")
+        description: Human-readable description of what was observed
+        confidence: Float [0.0, 1.0] indicating confidence in this signal
+        source_tool: Name of tool that detected this signal
+        timestamp: When signal was detected
+        value: The actual observed value (can be any type)
+        metadata: Additional contextual information
+    """
+    signal_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    type: str = "unknown"
+    description: str = ""
+    confidence: float = 0.0
+    source_tool: str = ""
+    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    value: Any = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Validate confidence bounds."""
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence}")
+
+
+# ============================================================================
+# EVIDENCE TYPE ENUM
+# ============================================================================
+
+class EvidenceType(str, Enum):
+    """Classification of evidence maturity levels in the graph."""
+    DIRECT_OUTPUT = "direct_output"  # Raw tool output, unprocessed
+    SIGNAL = "signal"                # Pattern detected, needs validation
+    PROOF = "proof"                  # Verified evidence of vulnerability
+    CLASSIFICATION = "classification"  # Status conclusion derived from evidence
+
+
+@dataclass
+class EvidenceNode:
+    """Represents a single piece of evidence in the evidence graph.
+    
+    Each node captures a discrete evidence item with provenance,
+    confidence, and semantic content. Nodes are immutable once added
+    to a frozen graph.
+    
+    Attributes:
+        node_id: UUID string uniquely identifying this node
+        evidence_type: EvidenceType classifying the maturity level
+        source_tool: Name of tool that generated this evidence
+        finding_id: UUID string linking to the finding this evidence supports
+        data: Dictionary containing the evidence content
+        timestamp: When this evidence was generated
+        confidence: Float [0.0, 1.0] indicating confidence in evidence
+        metadata: Dictionary for additional contextual information
+    """
+    node_id: str
+    evidence_type: EvidenceType
+    source_tool: str
+    finding_id: str
+    data: Dict[str, Any]
+    timestamp: datetime.datetime
+    confidence: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Validate confidence bounds."""
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence}")
+
+
+@dataclass
+class EvidenceEdge:
+    """Represents a relationship between two evidence nodes.
+    
+    Edges model how evidence pieces relate to each other:
+    - 'confirms': increases confidence in target
+    - 'contradicts': decreases confidence in target
+    - 'amplifies': strengthens the target finding
+    - 'weakens': reduces the target finding
+    
+    Attributes:
+        edge_id: UUID string uniquely identifying this edge
+        source_node_id: UUID of source node
+        target_node_id: UUID of target node
+        relationship: Type of relationship ('confirms', 'contradicts', 'amplifies', 'weakens')
+        strength: Float [0.0, 1.0] indicating connection confidence
+        metadata: Dictionary for additional relationship metadata
+    """
+    edge_id: str
+    source_node_id: str
+    target_node_id: str
+    relationship: str
+    strength: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Validate strength bounds."""
+        if not (0.0 <= self.strength <= 1.0):
+            raise ValueError(f"strength must be in [0.0, 1.0], got {self.strength}")
+
+
+class EvidenceGraph:
+    """Directed graph of evidence nodes and their relationships.
+    
+    Manages a collection of evidence nodes and edges, supporting:
+    - Node and edge insertion
+    - Graph freezing (immutability)
+    - Edge queries (incoming/outgoing)
+    - Node lookup
+    
+    Once frozen, the graph prevents further modifications to enforce
+    consistency of analysis snapshots.
+    
+    Attributes:
+        graph_id: UUID string uniquely identifying this graph
+        nodes: Dictionary mapping node_id to EvidenceNode
+        edges: Dictionary mapping edge_id to EvidenceEdge
+        created_timestamp: When graph was created
+        frozen_after: Timestamp when graph was frozen, or None if not frozen
+    """
+    
+    def __init__(self):
+        """Initialize a new evidence graph."""
+        self.graph_id: str = str(uuid.uuid4())
+        self.nodes: Dict[str, EvidenceNode] = {}
+        self.edges: Dict[str, EvidenceEdge] = {}
+        self.created_timestamp: datetime.datetime = datetime.datetime.utcnow()
+        self.frozen_after: Optional[datetime.datetime] = None
+    
+    def add_node(self, node: EvidenceNode) -> None:
+        """Add an evidence node to the graph.
+        
+        Args:
+            node: EvidenceNode to add
+            
+        Raises:
+            ValueError: If graph is frozen
+            ValueError: If node_id already exists
+        """
+        if self.is_frozen():
+            raise ValueError("Cannot add node to frozen graph")
+        if node.node_id in self.nodes:
+            raise ValueError(f"Node {node.node_id} already exists")
+        self.nodes[node.node_id] = node
+    
+    def add_edge(self, edge: EvidenceEdge) -> None:
+        """Add an evidence edge to the graph.
+        
+        Note: Does NOT validate that source_node_id and target_node_id exist.
+        This allows for edges to be added before nodes, or referencing
+        external nodes.
+        
+        Args:
+            edge: EvidenceEdge to add
+            
+        Raises:
+            ValueError: If graph is frozen
+            ValueError: If edge_id already exists
+        """
+        if self.is_frozen():
+            raise ValueError("Cannot add edge to frozen graph")
+        if edge.edge_id in self.edges:
+            raise ValueError(f"Edge {edge.edge_id} already exists")
+        self.edges[edge.edge_id] = edge
+    
+    def get_node(self, node_id: str) -> Optional[EvidenceNode]:
+        """Retrieve a node by ID.
+        
+        Args:
+            node_id: UUID of the node
+            
+        Returns:
+            EvidenceNode if found, None otherwise
+        """
+        return self.nodes.get(node_id)
+    
+    def get_edge(self, edge_id: str) -> Optional[EvidenceEdge]:
+        """Retrieve an edge by ID.
+        
+        Args:
+            edge_id: UUID of the edge
+            
+        Returns:
+            EvidenceEdge if found, None otherwise
+        """
+        return self.edges.get(edge_id)
+    
+    def incoming_edges(self, node_id: str) -> List[EvidenceEdge]:
+        """Get all edges targeting a node.
+        
+        Args:
+            node_id: UUID of the target node
+            
+        Returns:
+            List of EvidenceEdge objects where target_node_id == node_id
+        """
+        return [e for e in self.edges.values() if e.target_node_id == node_id]
+    
+    def outgoing_edges(self, node_id: str) -> List[EvidenceEdge]:
+        """Get all edges sourcing from a node.
+        
+        Args:
+            node_id: UUID of the source node
+            
+        Returns:
+            List of EvidenceEdge objects where source_node_id == node_id
+        """
+        return [e for e in self.edges.values() if e.source_node_id == node_id]
+    
+    def is_frozen(self) -> bool:
+        """Check if graph is frozen.
+        
+        Returns:
+            True if freeze() has been called, False otherwise
+        """
+        return self.frozen_after is not None
+    
+    def freeze(self) -> None:
+        """Mark graph as immutable.
+        
+        Subsequent calls to add_node() or add_edge() will raise ValueError.
+        """
+        self.frozen_after = datetime.datetime.utcnow()
+    
+    @staticmethod
+    def build(findings: List['StandardFinding'], 
+              tool_outputs: Optional[Dict[str, Any]] = None,
+              scoring_results: Optional[Dict[str, Any]] = None) -> 'EvidenceGraph':
+        """Construct an EvidenceGraph from findings and proof chains.
+        
+        This static method builds a complete evidence graph by:
+        1. Creating a SIGNAL node for each signal in findings
+        2. Creating a PROOF node for each proof in findings
+        3. Creating edges from SIGNAL nodes to CLASSIFICATION node with relationship='confirms'
+        4. Creating edges from PROOF nodes to CLASSIFICATION node with relationship='supports'
+        5. Computing edge strength based on proof confidence
+        6. Creating a terminal CLASSIFICATION node if finding.status != UNKNOWN
+        
+        The returned graph is NOT frozen, allowing for later additions. Multiple calls
+        with identical inputs produce equivalent graphs (idempotent).
+        
+        Args:
+            findings: List of StandardFinding objects to build graphs for
+            tool_outputs: Optional dict mapping finding_id to raw tool output
+            scoring_results: Optional dict mapping finding_id to {'proof_confidence': float, ...}
+            
+        Returns:
+            EvidenceGraph with nodes and edges fully constructed
+            
+        Raises:
+            ValueError: If findings list is empty
+            TypeError: If findings elements are not StandardFinding instances
+        """
+        if not findings:
+            raise ValueError("findings list cannot be empty")
+        
+        graph = EvidenceGraph()
+        
+        # Process each finding and add nodes/edges
+        for finding in findings:
+            if not isinstance(finding, StandardFinding):
+                raise TypeError(f"Expected StandardFinding, got {type(finding)}")
+            
+            finding_id = getattr(finding, 'finding_id', str(uuid.uuid4()))
+            
+            # Get scoring results for this finding if available
+            proof_confidence = 1.0
+            if scoring_results and finding_id in scoring_results:
+                proof_confidence = scoring_results[finding_id].get('proof_confidence', 1.0)
+            
+            # --- Create SIGNAL nodes ---
+            signals = getattr(finding, 'signals', [])
+            signal_nodes = []
+            
+            for i, signal in enumerate(signals):
+                signal_node_id = f"{finding_id}_signal_{i}"
+                signal_node = EvidenceNode(
+                    node_id=signal_node_id,
+                    evidence_type=EvidenceType.SIGNAL,
+                    source_tool=getattr(signal, 'source_tool', 'unknown'),
+                    finding_id=finding_id,
+                    data={
+                        'type': getattr(signal, 'type', 'unknown'),
+                        'description': getattr(signal, 'description', ''),
+                        'value': getattr(signal, 'value', None)
+                    },
+                    timestamp=getattr(signal, 'timestamp', datetime.datetime.utcnow()),
+                    confidence=getattr(signal, 'confidence', 0.5),
+                    metadata={
+                        'signal_index': i,
+                        'finding_id': finding_id
+                    }
+                )
+                graph.add_node(signal_node)
+                signal_nodes.append(signal_node)
+            
+            # --- Create PROOF nodes ---
+            proofs = getattr(finding, 'proofs', [])
+            proof_nodes = []
+            
+            for j, proof in enumerate(proofs):
+                proof_node_id = f"{finding_id}_proof_{j}"
+                proof_node = EvidenceNode(
+                    node_id=proof_node_id,
+                    evidence_type=EvidenceType.PROOF,
+                    source_tool=getattr(proof, 'tool_name', 'unknown'),
+                    finding_id=finding_id,
+                    data={
+                        'type': getattr(proof, 'type', 'unknown'),
+                        'description': getattr(proof, 'description', ''),
+                        'confidence': getattr(proof, 'confidence', 1.0)
+                    },
+                    timestamp=datetime.datetime.utcnow(),
+                    confidence=getattr(proof, 'confidence', 1.0),
+                    metadata={
+                        'proof_index': j,
+                        'finding_id': finding_id
+                    }
+                )
+                graph.add_node(proof_node)
+                proof_nodes.append(proof_node)
+            
+            # --- Create CLASSIFICATION node if finding.status is not UNKNOWN ---
+            classification_node_id = f"{finding_id}_classification"
+            finding_status = getattr(finding, 'status', FindingStatus.OBSERVED)
+            
+            if finding_status != FindingStatus.NOT_TESTED:
+                classification_node = EvidenceNode(
+                    node_id=classification_node_id,
+                    evidence_type=EvidenceType.CLASSIFICATION,
+                    source_tool='orchestrator',
+                    finding_id=finding_id,
+                    data={
+                        'status': finding_status.value if isinstance(finding_status, FindingStatus) else str(finding_status),
+                        'finding_type': getattr(finding, 'finding_type', 'unknown')
+                    },
+                    timestamp=datetime.datetime.utcnow(),
+                    confidence=getattr(finding, 'confidence', 0.5),
+                    metadata={
+                        'finding_id': finding_id,
+                        'terminal_node': True
+                    }
+                )
+                graph.add_node(classification_node)
+                
+                # --- Create edges from SIGNAL nodes to CLASSIFICATION ---
+                for signal_node in signal_nodes:
+                    # Edge strength based on signal confidence
+                    strength = getattr(signal_node, 'confidence', 0.5)
+                    edge = EvidenceEdge(
+                        edge_id=str(uuid.uuid4()),
+                        source_node_id=signal_node.node_id,
+                        target_node_id=classification_node_id,
+                        relationship='confirms',
+                        strength=strength,
+                        metadata={
+                            'signal_index': signal_node.metadata.get('signal_index', 0),
+                            'basis': 'signal_detection'
+                        }
+                    )
+                    graph.add_edge(edge)
+                
+                # --- Create edges from PROOF nodes to CLASSIFICATION ---
+                for proof_node in proof_nodes:
+                    # Edge strength: 0.8 if proof_confidence > 0.7, else 0.5
+                    proof_conf = proof_confidence if scoring_results else getattr(proof_node, 'confidence', 1.0)
+                    strength = 0.8 if proof_conf > 0.7 else 0.5
+                    
+                    edge = EvidenceEdge(
+                        edge_id=str(uuid.uuid4()),
+                        source_node_id=proof_node.node_id,
+                        target_node_id=classification_node_id,
+                        relationship='supports',
+                        strength=strength,
+                        metadata={
+                            'proof_index': proof_node.metadata.get('proof_index', 0),
+                            'proof_confidence': proof_conf,
+                            'basis': 'direct_evidence'
+                        }
+                    )
+                    graph.add_edge(edge)
+        
+        return graph
 
 
 # ============================================================================
