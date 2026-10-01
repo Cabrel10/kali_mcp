@@ -2939,6 +2939,46 @@ def signals_confirmed_by_proofs(graph: 'EvidenceGraph') -> List['EvidenceNode']:
 
 
 # ============================================================================
+# KILL CHAIN ↔ EVIDENCE GRAPH BRIDGE
+# ============================================================================
+
+def sync_kill_chain_from_graph(
+    tracker: 'KillChainTracker',
+    target: str,
+    finding_type: str,
+    tool: str,
+    graph: 'EvidenceGraph',
+) -> str:
+    """Advance the kill chain using only what the Evidence Graph has confirmed.
+
+    This is the critical coupling point between the precision layer (5.3/7.x)
+    and the strategic layer (kill chain). It ensures:
+    - Signals alone NEVER advance the kill chain to "completed"
+    - Only CONFIRMED/EXPLOITED status (backed by proofs) can complete a phase
+    - The evidence_graph_id is stored for full traceability
+
+    Args:
+        tracker:      KillChainTracker instance (global kill_chain object).
+        target:       Target hostname/IP.
+        finding_type: e.g. "SSRF", "SQLi", "XSS".
+        tool:         Name of the MCP tool that generated the finding.
+        graph:        EvidenceGraph built by EvidenceGraph.build().
+
+    Returns:
+        The accepted evidence status string ("CONFIRMED", "OBSERVED", etc.)
+    """
+    status_str = graph.evidence_status.value  # e.g. "CONFIRMED"
+    tracker.advance_from_finding(
+        target=target,
+        finding_type=finding_type,
+        tool=tool,
+        evidence_status=status_str,
+        evidence_graph_id=graph.graph_id,
+    )
+    return status_str
+
+
+# ============================================================================
 # SESSION MANAGER
 # ============================================================================
 
@@ -3757,48 +3797,193 @@ class KillChainTracker:
         },
     }
 
+    # Mapping finding_type → KillChainPhase (auto-advance on confirmed findings)
+    FINDING_PHASE_MAP: Dict[str, 'KillChainPhase'] = {
+        # Recon signals
+        "port_scan": KillChainPhase.RECONNAISSANCE,
+        "service_detection": KillChainPhase.RECONNAISSANCE,
+        "subdomain": KillChainPhase.RECONNAISSANCE,
+        "osint": KillChainPhase.RECONNAISSANCE,
+        "tech_stack": KillChainPhase.RECONNAISSANCE,
+        # Delivery / web attack surface
+        "XSS": KillChainPhase.DELIVERY,
+        "open_redirect": KillChainPhase.DELIVERY,
+        "phishing": KillChainPhase.DELIVERY,
+        "clickjacking": KillChainPhase.DELIVERY,
+        # Exploitation
+        "SSRF": KillChainPhase.EXPLOITATION,
+        "SQLi": KillChainPhase.EXPLOITATION,
+        "SSTI": KillChainPhase.EXPLOITATION,
+        "LFI": KillChainPhase.EXPLOITATION,
+        "RFI": KillChainPhase.EXPLOITATION,
+        "CMDI": KillChainPhase.EXPLOITATION,
+        "XXE": KillChainPhase.EXPLOITATION,
+        "IDOR": KillChainPhase.EXPLOITATION,
+        "deserialization": KillChainPhase.EXPLOITATION,
+        "log4shell": KillChainPhase.EXPLOITATION,
+        "default_credentials": KillChainPhase.EXPLOITATION,
+        "auth_bypass": KillChainPhase.EXPLOITATION,
+        "jwt_none_alg": KillChainPhase.EXPLOITATION,
+        "kerberoast": KillChainPhase.EXPLOITATION,
+        "as_rep_roast": KillChainPhase.EXPLOITATION,
+        # Post-exploitation
+        "rce": KillChainPhase.INSTALLATION,
+        "reverse_shell": KillChainPhase.INSTALLATION,
+        "persistence": KillChainPhase.INSTALLATION,
+        "privesc": KillChainPhase.INSTALLATION,
+        # C2 / lateral movement
+        "lateral_movement": KillChainPhase.COMMAND_CONTROL,
+        "c2_channel": KillChainPhase.COMMAND_CONTROL,
+        "pivot": KillChainPhase.COMMAND_CONTROL,
+        # Impact
+        "data_exfil": KillChainPhase.ACTIONS_ON_OBJECTIVES,
+        "ransomware": KillChainPhase.ACTIONS_ON_OBJECTIVES,
+        "cloud_account_takeover": KillChainPhase.ACTIONS_ON_OBJECTIVES,
+        "domain_admin": KillChainPhase.ACTIONS_ON_OBJECTIVES,
+    }
+
+    # Phase unlock rules: which CONFIRMED finding types unlock the next phase
+    PHASE_UNLOCK_RULES: Dict['KillChainPhase', List[str]] = {
+        KillChainPhase.DELIVERY:              ["port_scan", "subdomain", "tech_stack"],
+        KillChainPhase.EXPLOITATION:          ["XSS", "open_redirect", "SSRF"],
+        KillChainPhase.INSTALLATION:          ["SSRF", "SQLi", "SSTI", "CMDI", "LFI", "auth_bypass"],
+        KillChainPhase.COMMAND_CONTROL:       ["rce", "reverse_shell", "privesc"],
+        KillChainPhase.ACTIONS_ON_OBJECTIVES: ["lateral_movement", "pivot", "c2_channel"],
+    }
+
     def __init__(self, memory: PentestMemory):
         self.memory = memory
         self._progress: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
-            phase.value: {"status": "not_started", "findings": [], "tools_used": []}
+            phase.value: {
+                "status": "not_started",
+                "findings": [],
+                "tools_used": [],
+                "confirmed_count": 0,   # only CONFIRMED/EXPLOITED findings
+                "evidence_graph_ids": [],
+            }
             for phase in KillChainPhase
         })
 
-    def advance_phase(self, target: str, phase: KillChainPhase, tool: str, findings: List[str]):
-        """Record progress in a kill chain phase"""
+    def advance_phase(self, target: str, phase: KillChainPhase, tool: str,
+                      findings: List[str],
+                      evidence_status: str = "OBSERVED",
+                      evidence_graph_id: Optional[str] = None):
+        """Record progress in a kill chain phase.
+
+        Improvements vs original:
+        - Only CONFIRMED/EXPLOITED findings increment confirmed_count
+        - Evidence graph ID linked for traceability
+        - status='completed' requires at least 1 confirmed finding
+        """
         p = self._progress[target][phase.value]
-        p["status"] = "in_progress" if not findings else "completed"
         p["tools_used"].append(tool)
         p["findings"].extend(findings)
         p["timestamp"] = datetime.datetime.now().isoformat()
-        logger.info(f"[KILLCHAIN] {target} → {phase.value}: {len(findings)} findings via {tool}")
+
+        if evidence_status in ("CONFIRMED", "EXPLOITED"):
+            p["confirmed_count"] += len(findings)
+            if evidence_graph_id:
+                p["evidence_graph_ids"].append(evidence_graph_id)
+            p["status"] = "completed"
+            logger.info(f"[KILLCHAIN] ✓ {target} → {phase.value}: {len(findings)} CONFIRMED via {tool}")
+        else:
+            # Observed/suspected only → in_progress, not completed
+            if p["status"] == "not_started":
+                p["status"] = "in_progress"
+            logger.info(f"[KILLCHAIN] ~ {target} → {phase.value}: {len(findings)} signals (unconfirmed) via {tool}")
+
+    def advance_from_finding(self, target: str, finding_type: str, tool: str,
+                              evidence_status: str, evidence_graph_id: Optional[str] = None):
+        """Auto-advance kill chain based on finding type + evidence status.
+
+        Called after evidence graph is built, allowing the kill chain to
+        reflect only proven facts, not signals.
+        """
+        phase = self.FINDING_PHASE_MAP.get(finding_type)
+        if phase is None:
+            logger.debug(f"[KILLCHAIN] No phase mapping for finding_type={finding_type}")
+            return
+        self.advance_phase(
+            target=target,
+            phase=phase,
+            tool=tool,
+            findings=[f"{finding_type}:{evidence_status}"],
+            evidence_status=evidence_status,
+            evidence_graph_id=evidence_graph_id,
+        )
+        # Check if this confirmed finding unlocks the next phase as "ready"
+        self._check_unlock_next_phase(target, finding_type)
+
+    def _check_unlock_next_phase(self, target: str, confirmed_finding_type: str):
+        """Mark next phases as 'unlocked' when prerequisites are confirmed."""
+        for phase, required_types in self.PHASE_UNLOCK_RULES.items():
+            if confirmed_finding_type in required_types:
+                p = self._progress[target][phase.value]
+                if p["status"] == "not_started":
+                    p["status"] = "unlocked"   # ready to execute, not yet started
+                    logger.info(f"[KILLCHAIN] 🔓 {target}: phase {phase.value} unlocked by {confirmed_finding_type}")
 
     def get_progress(self, target: str) -> Dict:
-        """Get full kill chain progress for a target"""
+        """Get full kill chain progress for a target."""
         progress = dict(self._progress[target])
-        completed = sum(1 for p in progress.values() if p["status"] == "completed")
-        total = len(KillChainPhase)
+        completed  = sum(1 for p in progress.values() if p["status"] == "completed")
+        in_prog    = sum(1 for p in progress.values() if p["status"] == "in_progress")
+        unlocked   = sum(1 for p in progress.values() if p["status"] == "unlocked")
+        total      = len(KillChainPhase)
+        confirmed_total = sum(p.get("confirmed_count", 0) for p in progress.values())
         return {
             "target": target,
             "phases": progress,
             "completion": f"{completed}/{total}",
             "completion_pct": round(completed / total * 100, 1),
+            "in_progress_count": in_prog,
+            "unlocked_count": unlocked,
+            "confirmed_findings_total": confirmed_total,
             "next_phase": self._suggest_next_phase(target),
+            "attack_narrative": self._build_attack_narrative(target),
         }
 
     def _suggest_next_phase(self, target: str) -> Dict:
-        """Suggest the next kill chain phase to pursue"""
+        """Suggest the next kill chain phase — unlocked phases take priority."""
+        # Prioritize unlocked phases (prerequisites met)
+        for phase in KillChainPhase:
+            state = self._progress[target][phase.value]
+            if state["status"] == "unlocked":
+                mapping = self.MITRE_MAPPING[phase]
+                return {
+                    "phase": phase.value,
+                    "priority": "HIGH — prerequisites confirmed",
+                    "description": mapping["description"],
+                    "recommended_tools": mapping["tools"],
+                    "mitre_techniques": mapping["techniques"][:4],
+                }
+        # Fall back: next not-started phase
         for phase in KillChainPhase:
             state = self._progress[target][phase.value]
             if state["status"] == "not_started":
                 mapping = self.MITRE_MAPPING[phase]
                 return {
                     "phase": phase.value,
+                    "priority": "NORMAL",
                     "description": mapping["description"],
                     "recommended_tools": mapping["tools"],
                     "mitre_techniques": mapping["techniques"][:4],
                 }
-        return {"phase": "complete", "description": "All kill chain phases executed"}
+        return {"phase": "complete", "priority": "DONE",
+                "description": "All kill chain phases executed"}
+
+    def _build_attack_narrative(self, target: str) -> List[str]:
+        """Build a human-readable attack narrative from confirmed phases."""
+        narrative = []
+        for phase in KillChainPhase:
+            state = self._progress[target][phase.value]
+            if state["status"] == "completed" and state.get("confirmed_count", 0) > 0:
+                findings_str = ", ".join(state["findings"][:3])
+                narrative.append(
+                    f"[{phase.value.upper()}] {state['confirmed_count']} confirmed finding(s) "
+                    f"via {', '.join(set(state['tools_used']))} → {findings_str}"
+                )
+        return narrative
 
 
 class DeepOutputParser:
