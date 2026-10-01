@@ -2711,6 +2711,234 @@ class EvidenceGraph:
 
 
 # ============================================================================
+# LAYER 5.3 — EVIDENCE STATUS DERIVATION (TASK 5.3)
+# ============================================================================
+
+def evidence_status_from_graph(graph: 'EvidenceGraph') -> 'FindingStatus':
+    """Derive FindingStatus from a built EvidenceGraph.
+
+    Rules (spec §5.3):
+    - confirmed_proofs present → CONFIRMED
+    - unconfirmed_signals present (no proofs) → OBSERVED
+    - neither → NOT_TESTED
+
+    confidence_score is already populated by build(); this function just
+    returns the status field, keeping a single source of truth.
+
+    Args:
+        graph: EvidenceGraph produced by EvidenceGraph.build()
+
+    Returns:
+        FindingStatus enum value
+    """
+    if graph.confirmed_proofs:
+        return FindingStatus.CONFIRMED
+    if graph.unconfirmed_signals:
+        return FindingStatus.OBSERVED
+    return FindingStatus.NOT_TESTED
+
+
+# ============================================================================
+# LAYER 7 — EVIDENCE POLICY ENFORCEMENT (TASKS 7.1, 7.3, 7.4, 7.5)
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# 7.1 — Status validation: no CONFIRMED without proof
+# ---------------------------------------------------------------------------
+
+def validate_finding_status(finding: 'StandardFinding',
+                             graph: 'EvidenceGraph') -> 'StandardFinding':
+    """Cap finding status to what the evidence graph actually supports.
+
+    Rules (spec §7.1):
+    - status == CONFIRMED but no proofs → cap to OBSERVED
+    - status == EXPLOITED but no PoC present → cap to CONFIRMED (or lower)
+    Logs a warning whenever the status is reduced.
+
+    Args:
+        finding: StandardFinding to validate (modified in-place).
+        graph:   EvidenceGraph for this finding.
+
+    Returns:
+        The same finding, with status potentially lowered.
+    """
+    import logging
+    _log = logging.getLogger("kali_mcp.policy")
+
+    n_proofs = len(graph.confirmed_proofs)
+    poc = getattr(finding, 'proof_of_concept', None)
+
+    if finding.status == FindingStatus.EXPLOITED:
+        if not poc:
+            _log.warning(
+                "Policy 7.1: status EXPLOITED but proof_of_concept empty "
+                "→ capping to CONFIRMED (finding_type=%s)", finding.finding_type
+            )
+            finding.status = FindingStatus.CONFIRMED if n_proofs > 0 else FindingStatus.OBSERVED
+
+    if finding.status == FindingStatus.CONFIRMED and n_proofs == 0:
+        _log.warning(
+            "Policy 7.1: status CONFIRMED but 0 proofs "
+            "→ capping to OBSERVED (finding_type=%s)", finding.finding_type
+        )
+        finding.status = FindingStatus.OBSERVED
+
+    return finding
+
+
+# ---------------------------------------------------------------------------
+# 7.3 — Evidence status consistency invariants
+# ---------------------------------------------------------------------------
+
+class EvidenceConsistencyError(Exception):
+    """Raised when an evidence graph violates a consistency invariant."""
+
+
+def validate_evidence_consistency(finding: 'StandardFinding',
+                                  graph: 'EvidenceGraph') -> bool:
+    """Validate consistency invariants between finding status and evidence.
+
+    Invariants (spec §7.3):
+    - (status=CONFIRMED)  ⟹  proofs.length > 0
+    - (status=OBSERVED)   ⟹  proofs.length == 0 AND signals.length > 0
+
+    Args:
+        finding: StandardFinding whose status to check.
+        graph:   EvidenceGraph built for this finding.
+
+    Returns:
+        True if all invariants hold.
+
+    Raises:
+        EvidenceConsistencyError: if an invariant is violated.
+    """
+    n_proofs  = len(graph.confirmed_proofs)
+    n_signals = len(graph.unconfirmed_signals) + n_proofs  # total signals seen
+
+    if finding.status == FindingStatus.CONFIRMED and n_proofs == 0:
+        raise EvidenceConsistencyError(
+            f"Invariant violated: status=CONFIRMED but 0 proofs "
+            f"(finding_type={finding.finding_type})"
+        )
+
+    if finding.status == FindingStatus.OBSERVED:
+        # proofs must be absent, signals must be present
+        if n_proofs > 0:
+            raise EvidenceConsistencyError(
+                f"Invariant violated: status=OBSERVED but {n_proofs} proofs present "
+                f"(finding_type={finding.finding_type}) — should be CONFIRMED"
+            )
+        total_signals = len(graph.unconfirmed_signals)
+        if total_signals == 0:
+            raise EvidenceConsistencyError(
+                f"Invariant violated: status=OBSERVED but 0 signals "
+                f"(finding_type={finding.finding_type})"
+            )
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 7.4 — Status history with monotonic enforcement
+# ---------------------------------------------------------------------------
+
+# Global status registry: finding_id → List[FindingStatus]
+_STATUS_HISTORY: Dict[str, List['FindingStatus']] = {}
+
+# Ordered scale (lower index = less mature)
+_STATUS_ORDER = [
+    FindingStatus.NOT_TESTED,
+    FindingStatus.TESTED,
+    FindingStatus.OBSERVED,
+    FindingStatus.SUSPECTED,
+    FindingStatus.CONFIRMED,
+    FindingStatus.EXPLOITED,
+]
+
+
+def _status_rank(status: 'FindingStatus') -> int:
+    try:
+        return _STATUS_ORDER.index(status)
+    except ValueError:
+        return -1
+
+
+def update_finding_status(finding_id: str,
+                          new_status: 'FindingStatus') -> 'FindingStatus':
+    """Update a finding's status, enforcing monotonic progression.
+
+    Rules (spec §7.4):
+    - Allowed transitions: NOT_TESTED → TESTED → OBSERVED → SUSPECTED
+                           → CONFIRMED → EXPLOITED
+    - If new_status < current status, log warning and keep current status.
+
+    Args:
+        finding_id: UUID string identifying the finding.
+        new_status: Proposed new FindingStatus.
+
+    Returns:
+        The accepted status (either new_status or the kept current one).
+    """
+    import logging
+    _log = logging.getLogger("kali_mcp.policy")
+
+    history = _STATUS_HISTORY.setdefault(finding_id, [FindingStatus.NOT_TESTED])
+    current = history[-1]
+
+    if _status_rank(new_status) < _status_rank(current):
+        _log.warning(
+            "Policy 7.4: rejected status regression %s → %s for finding %s; "
+            "keeping %s", current.value, new_status.value, finding_id, current.value
+        )
+        history.append(current)   # record the attempt but keep current
+        return current
+
+    history.append(new_status)
+    return new_status
+
+
+def get_status_history(finding_id: str) -> List['FindingStatus']:
+    """Return the status history for a finding (oldest first).
+
+    Args:
+        finding_id: UUID string identifying the finding.
+
+    Returns:
+        List of FindingStatus values in chronological order.
+        Returns [NOT_TESTED] if finding was never tracked.
+    """
+    return list(_STATUS_HISTORY.get(finding_id, [FindingStatus.NOT_TESTED]))
+
+
+# ---------------------------------------------------------------------------
+# 7.5 — Signal-proof correlation (enforced inside build(), exposed here)
+# ---------------------------------------------------------------------------
+
+def signals_confirmed_by_proofs(graph: 'EvidenceGraph') -> List['EvidenceNode']:
+    """Return only the signal nodes that have a matching proof.
+
+    A signal is 'confirmed' when its type matches a key in finding.evidence,
+    i.e., it is NOT in graph.unconfirmed_signals.
+
+    This is a read-only query; the correlation logic lives in build().
+
+    Args:
+        graph: EvidenceGraph produced by EvidenceGraph.build()
+
+    Returns:
+        List of EvidenceNode (SIGNAL type) that were confirmed by proofs.
+    """
+    unconfirmed_ids = {n.node_id for n in graph.unconfirmed_signals}
+    return [
+        n for n in graph.nodes.values()
+        if n.evidence_type == EvidenceType.SIGNAL
+        and n.metadata.get("role") != "root_hypothesis"
+        and n.node_id not in unconfirmed_ids
+    ]
+
+
+# ============================================================================
 # SESSION MANAGER
 # ============================================================================
 
