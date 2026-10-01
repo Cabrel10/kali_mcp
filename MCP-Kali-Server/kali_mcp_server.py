@@ -2465,6 +2465,13 @@ class EvidenceGraph:
         self.edges: Dict[str, EvidenceEdge] = {}
         self.created_timestamp: datetime.datetime = datetime.datetime.utcnow()
         self.frozen_after: Optional[datetime.datetime] = None
+        # Task 5.2 fields — populated by build()
+        self.finding_type: str = ""
+        self.root_hypothesis: Optional[str] = None   # node_id of hypothesis node
+        self.confirmed_proofs: List[EvidenceNode] = []
+        self.unconfirmed_signals: List[EvidenceNode] = []
+        self.evidence_status: FindingStatus = FindingStatus.NOT_TESTED
+        self.confidence_score: float = 0.0
     
     def add_node(self, node: EvidenceNode) -> None:
         """Add an evidence node to the graph.
@@ -2562,163 +2569,144 @@ class EvidenceGraph:
         self.frozen_after = datetime.datetime.utcnow()
     
     @staticmethod
-    def build(findings: List['StandardFinding'], 
-              tool_outputs: Optional[Dict[str, Any]] = None,
-              scoring_results: Optional[Dict[str, Any]] = None) -> 'EvidenceGraph':
-        """Construct an EvidenceGraph from findings and proof chains.
-        
-        This static method builds a complete evidence graph by:
-        1. Creating a SIGNAL node for each signal in findings
-        2. Creating a PROOF node for each proof in findings
-        3. Creating edges from SIGNAL nodes to CLASSIFICATION node with relationship='confirms'
-        4. Creating edges from PROOF nodes to CLASSIFICATION node with relationship='supports'
-        5. Computing edge strength based on proof confidence
-        6. Creating a terminal CLASSIFICATION node if finding.status != UNKNOWN
-        
-        The returned graph is NOT frozen, allowing for later additions. Multiple calls
-        with identical inputs produce equivalent graphs (idempotent).
-        
+    def build(finding: 'StandardFinding', signals: List['Signal']) -> 'EvidenceGraph':
+        """Construct an EvidenceGraph from a single finding and its signals.
+
+        Implements the proof-chain construction required by task 5.2:
+        1. Create a root HYPOTHESIS node representing the finding type.
+        2. For each signal: create a SIGNAL node and an edge toward the hypothesis
+           with weight = signal.confidence.
+        3. For each evidence item in finding.evidence: create a PROOF node and an
+           edge toward the hypothesis with weight = 1.0; add to confirmed_proofs.
+        4. Signals without a corresponding proof key are added to unconfirmed_signals.
+        5. Compute evidence_status and confidence_score.
+
         Args:
-            findings: List of StandardFinding objects to build graphs for
-            tool_outputs: Optional dict mapping finding_id to raw tool output
-            scoring_results: Optional dict mapping finding_id to {'proof_confidence': float, ...}
-            
+            finding: StandardFinding to model (uses finding_type, status,
+                     confidence, evidence dict).
+            signals: List[Signal] detected for this finding.
+
         Returns:
-            EvidenceGraph with nodes and edges fully constructed
-            
-        Raises:
-            ValueError: If findings list is empty
-            TypeError: If findings elements are not StandardFinding instances
+            EvidenceGraph with all nodes/edges constructed. NOT frozen.
         """
-        if not findings:
-            raise ValueError("findings list cannot be empty")
-        
         graph = EvidenceGraph()
-        
-        # Process each finding and add nodes/edges
-        for finding in findings:
-            if not isinstance(finding, StandardFinding):
-                raise TypeError(f"Expected StandardFinding, got {type(finding)}")
-            
-            finding_id = getattr(finding, 'finding_id', str(uuid.uuid4()))
-            
-            # Get scoring results for this finding if available
-            proof_confidence = 1.0
-            if scoring_results and finding_id in scoring_results:
-                proof_confidence = scoring_results[finding_id].get('proof_confidence', 1.0)
-            
-            # --- Create SIGNAL nodes ---
-            signals = getattr(finding, 'signals', [])
-            signal_nodes = []
-            
-            for i, signal in enumerate(signals):
-                signal_node_id = f"{finding_id}_signal_{i}"
-                signal_node = EvidenceNode(
-                    node_id=signal_node_id,
-                    evidence_type=EvidenceType.SIGNAL,
-                    source_tool=getattr(signal, 'source_tool', 'unknown'),
-                    finding_id=finding_id,
-                    data={
-                        'type': getattr(signal, 'type', 'unknown'),
-                        'description': getattr(signal, 'description', ''),
-                        'value': getattr(signal, 'value', None)
-                    },
-                    timestamp=getattr(signal, 'timestamp', datetime.datetime.utcnow()),
-                    confidence=getattr(signal, 'confidence', 0.5),
-                    metadata={
-                        'signal_index': i,
-                        'finding_id': finding_id
-                    }
-                )
-                graph.add_node(signal_node)
-                signal_nodes.append(signal_node)
-            
-            # --- Create PROOF nodes ---
-            proofs = getattr(finding, 'proofs', [])
-            proof_nodes = []
-            
-            for j, proof in enumerate(proofs):
-                proof_node_id = f"{finding_id}_proof_{j}"
-                proof_node = EvidenceNode(
-                    node_id=proof_node_id,
-                    evidence_type=EvidenceType.PROOF,
-                    source_tool=getattr(proof, 'tool_name', 'unknown'),
-                    finding_id=finding_id,
-                    data={
-                        'type': getattr(proof, 'type', 'unknown'),
-                        'description': getattr(proof, 'description', ''),
-                        'confidence': getattr(proof, 'confidence', 1.0)
-                    },
-                    timestamp=datetime.datetime.utcnow(),
-                    confidence=getattr(proof, 'confidence', 1.0),
-                    metadata={
-                        'proof_index': j,
-                        'finding_id': finding_id
-                    }
-                )
-                graph.add_node(proof_node)
-                proof_nodes.append(proof_node)
-            
-            # --- Create CLASSIFICATION node if finding.status is not UNKNOWN ---
-            classification_node_id = f"{finding_id}_classification"
-            finding_status = getattr(finding, 'status', FindingStatus.OBSERVED)
-            
-            if finding_status != FindingStatus.NOT_TESTED:
-                classification_node = EvidenceNode(
-                    node_id=classification_node_id,
-                    evidence_type=EvidenceType.CLASSIFICATION,
-                    source_tool='orchestrator',
-                    finding_id=finding_id,
-                    data={
-                        'status': finding_status.value if isinstance(finding_status, FindingStatus) else str(finding_status),
-                        'finding_type': getattr(finding, 'finding_type', 'unknown')
-                    },
-                    timestamp=datetime.datetime.utcnow(),
-                    confidence=getattr(finding, 'confidence', 0.5),
-                    metadata={
-                        'finding_id': finding_id,
-                        'terminal_node': True
-                    }
-                )
-                graph.add_node(classification_node)
-                
-                # --- Create edges from SIGNAL nodes to CLASSIFICATION ---
-                for signal_node in signal_nodes:
-                    # Edge strength based on signal confidence
-                    strength = getattr(signal_node, 'confidence', 0.5)
-                    edge = EvidenceEdge(
-                        edge_id=str(uuid.uuid4()),
-                        source_node_id=signal_node.node_id,
-                        target_node_id=classification_node_id,
-                        relationship='confirms',
-                        strength=strength,
-                        metadata={
-                            'signal_index': signal_node.metadata.get('signal_index', 0),
-                            'basis': 'signal_detection'
-                        }
-                    )
-                    graph.add_edge(edge)
-                
-                # --- Create edges from PROOF nodes to CLASSIFICATION ---
-                for proof_node in proof_nodes:
-                    # Edge strength: 0.8 if proof_confidence > 0.7, else 0.5
-                    proof_conf = proof_confidence if scoring_results else getattr(proof_node, 'confidence', 1.0)
-                    strength = 0.8 if proof_conf > 0.7 else 0.5
-                    
-                    edge = EvidenceEdge(
-                        edge_id=str(uuid.uuid4()),
-                        source_node_id=proof_node.node_id,
-                        target_node_id=classification_node_id,
-                        relationship='supports',
-                        strength=strength,
-                        metadata={
-                            'proof_index': proof_node.metadata.get('proof_index', 0),
-                            'proof_confidence': proof_conf,
-                            'basis': 'direct_evidence'
-                        }
-                    )
-                    graph.add_edge(edge)
-        
+        finding_id = getattr(finding, 'finding_id', str(uuid.uuid4()))
+        graph.finding_type = finding.finding_type
+
+        # ---- Root hypothesis node ----------------------------------------
+        hypothesis_node_id = f"{finding_id}_hypothesis"
+        hypothesis_node = EvidenceNode(
+            node_id=hypothesis_node_id,
+            evidence_type=EvidenceType.SIGNAL,   # closest existing type
+            source_tool="orchestrator",
+            finding_id=finding_id,
+            data={
+                "hypothesis_class": finding.finding_type,
+                "initial_status": finding.status.value,
+            },
+            timestamp=datetime.datetime.utcnow(),
+            confidence=finding.confidence,
+            metadata={"role": "root_hypothesis", "finding_id": finding_id},
+        )
+        graph.add_node(hypothesis_node)
+        graph.root_hypothesis = hypothesis_node_id
+
+        # ---- Signal nodes --------------------------------------------------
+        signal_nodes: List[EvidenceNode] = []
+        for i, sig in enumerate(signals):
+            sig_node_id = f"{finding_id}_signal_{i}"
+            sig_node = EvidenceNode(
+                node_id=sig_node_id,
+                evidence_type=EvidenceType.SIGNAL,
+                source_tool=sig.source_tool or "unknown",
+                finding_id=finding_id,
+                data={
+                    "type": sig.type,
+                    "description": sig.description,
+                    "value": sig.value,
+                },
+                timestamp=sig.timestamp,
+                confidence=sig.confidence,
+                metadata={"signal_id": sig.signal_id, "signal_index": i},
+            )
+            graph.add_node(sig_node)
+            signal_nodes.append(sig_node)
+
+            # Edge: signal → hypothesis
+            graph.add_edge(EvidenceEdge(
+                edge_id=str(uuid.uuid4()),
+                source_node_id=sig_node_id,
+                target_node_id=hypothesis_node_id,
+                relationship="confirms",
+                strength=sig.confidence,
+                metadata={"basis": "signal_detection", "signal_index": i},
+            ))
+
+        # ---- Proof nodes (from finding.evidence) ---------------------------
+        evidence_dict = finding.evidence if isinstance(finding.evidence, dict) else {}
+        proof_nodes: List[EvidenceNode] = []
+        for j, (proof_key, proof_data) in enumerate(evidence_dict.items()):
+            proof_node_id = f"{finding_id}_proof_{j}"
+            proof_confidence = (
+                proof_data.get("confidence", 1.0)
+                if isinstance(proof_data, dict)
+                else 1.0
+            )
+            proof_node = EvidenceNode(
+                node_id=proof_node_id,
+                evidence_type=EvidenceType.PROOF,
+                source_tool=(
+                    proof_data.get("tool_name", "unknown")
+                    if isinstance(proof_data, dict)
+                    else "unknown"
+                ),
+                finding_id=finding_id,
+                data={
+                    "proof_type": proof_key,
+                    "proof_data": proof_data,
+                },
+                timestamp=datetime.datetime.utcnow(),
+                confidence=proof_confidence,
+                metadata={"proof_key": proof_key, "proof_index": j},
+            )
+            graph.add_node(proof_node)
+            proof_nodes.append(proof_node)
+            graph.confirmed_proofs.append(proof_node)
+
+            # Edge: proof → hypothesis (weight 1.0 = direct evidence)
+            graph.add_edge(EvidenceEdge(
+                edge_id=str(uuid.uuid4()),
+                source_node_id=proof_node_id,
+                target_node_id=hypothesis_node_id,
+                relationship="proves",
+                strength=1.0,
+                metadata={"proof_key": proof_key, "basis": "direct_evidence"},
+            ))
+
+        # ---- Identify unconfirmed signals ----------------------------------
+        # A signal is unconfirmed when no proof key matches its type.
+        proof_types = {pk for pk in evidence_dict.keys()}
+        for sig_node in signal_nodes:
+            sig_type = sig_node.data.get("type", "")
+            if sig_type not in proof_types:
+                graph.unconfirmed_signals.append(sig_node)
+
+        # ---- Compute status & confidence -----------------------------------
+        n_proofs = len(graph.confirmed_proofs)
+        n_signals = len(signal_nodes)
+        denominator = n_proofs + n_signals
+
+        if n_proofs > 0:
+            graph.evidence_status = FindingStatus.CONFIRMED
+        elif n_signals > 0:
+            graph.evidence_status = FindingStatus.OBSERVED
+        else:
+            graph.evidence_status = FindingStatus.NOT_TESTED
+
+        graph.confidence_score = (
+            n_proofs / denominator if denominator > 0 else 0.0
+        )
+
         return graph
 
 
