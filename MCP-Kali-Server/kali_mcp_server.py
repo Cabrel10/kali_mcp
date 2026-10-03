@@ -11204,7 +11204,137 @@ set LPORT {lport}
 #   - Cookie/session hijacking simulation
 # ============================================================================
 
-@mcp.tool
+# ============================================================================
+# BROWSER RESOLVER — détection automatique des navigateurs installés
+# ============================================================================
+
+import shutil as _shutil
+import subprocess as _subprocess
+
+def _detect_browser() -> dict:
+    """Détecte les navigateurs disponibles sur le système.
+
+    Ordre de préférence pour Playwright/pentest :
+      1. Google Chrome (meilleur fingerprint réaliste)
+      2. Chromium système (Kali stock, headless robuste)
+      3. Firefox-ESR (fallback, protocole Playwright différent)
+    Pour Selenium/CDP :
+      4. chromedriver (API WebDriver)
+
+    Returns dict avec clés :
+      playwright_chromium   : (executable_path, browser_type_name)
+      playwright_firefox    : (executable_path, browser_type_name) or None
+      selenium_driver       : (chrome_binary, driver_path) or None
+      best_label            : description lisible
+    """
+    result = {
+        "playwright_chromium": None,
+        "playwright_firefox": None,
+        "selenium_driver": None,
+        "best_label": "none",
+    }
+
+    # Chrome / Chromium candidates (Playwright chromium protocol)
+    chromium_candidates = [
+        ("/usr/bin/google-chrome-stable", "Google Chrome stable"),
+        ("/usr/bin/google-chrome",        "Google Chrome"),
+        ("/usr/bin/chromium",             "Chromium"),
+        ("/usr/bin/chromium-browser",     "Chromium browser"),
+    ]
+    for path, label in chromium_candidates:
+        if _shutil.which(path.split("/")[-1]) or __import__("os").path.exists(path):
+            result["playwright_chromium"] = (path, "chromium")
+            result["best_label"] = label
+            break
+
+    # Firefox candidates (Playwright firefox protocol)
+    # NOTE: system firefox-esr + playwright = protocol mismatch → skip,
+    #       only use if playwright's own firefox bundle is present.
+    pw_firefox_bundle = __import__("os").path.expanduser(
+        "~/.cache/ms-playwright/firefox-1497/firefox/firefox"
+    )
+    if __import__("os").path.exists(pw_firefox_bundle):
+        result["playwright_firefox"] = (pw_firefox_bundle, "firefox")
+
+    # Selenium / chromedriver
+    driver_path = _shutil.which("chromedriver") or "/usr/bin/chromedriver"
+    chrome_bin   = (
+        _shutil.which("google-chrome-stable") or
+        _shutil.which("google-chrome") or
+        _shutil.which("chromium") or
+        "/usr/bin/chromium"
+    )
+    if __import__("os").path.exists(driver_path):
+        result["selenium_driver"] = (chrome_bin, driver_path)
+
+    return result
+
+
+# Singleton résolu au démarrage
+_BROWSER_INFO = _detect_browser()
+logger.info(f"[BROWSER] Detected: {_BROWSER_INFO['best_label']} | "
+            f"chromium_path={_BROWSER_INFO['playwright_chromium']} | "
+            f"selenium={'yes' if _BROWSER_INFO['selenium_driver'] else 'no'}")
+
+
+async def _make_playwright_browser(p_obj, proxy_config, headless=True):
+    """Crée un browser Playwright en utilisant le binaire système détecté.
+
+    Essaie dans l'ordre :
+      1. Chromium/Chrome système (playwright chromium protocol)
+      2. Selenium/chromedriver comme fallback CDP
+
+    Args:
+        p_obj:        Objet playwright (async_playwright().__aenter__ result)
+        proxy_config: dict proxy pour Playwright, ou None
+        headless:     bool
+
+    Returns:
+        browser object (playwright Browser)
+    """
+    launch_args = [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
+    chromium_info = _BROWSER_INFO.get("playwright_chromium")
+    if chromium_info:
+        exe_path, _btype = chromium_info
+        try:
+            browser = await p_obj.chromium.launch(
+                headless=headless,
+                executable_path=exe_path,
+                args=launch_args,
+                **({"proxy": proxy_config} if proxy_config else {}),
+            )
+            logger.debug(f"[BROWSER] Launched via playwright+chromium: {exe_path}")
+            return browser
+        except Exception as e:
+            logger.warning(f"[BROWSER] playwright+chromium failed ({e}), trying next")
+
+    # Fallback: playwright without executable_path (uses cache if available)
+    try:
+        browser = await p_obj.chromium.launch(
+            headless=headless,
+            args=launch_args,
+            **({"proxy": proxy_config} if proxy_config else {}),
+        )
+        logger.debug("[BROWSER] Launched via playwright cache chromium")
+        return browser
+    except Exception as e:
+        raise RuntimeError(
+            f"No usable browser found. Tried system chrome/chromium + playwright cache. "
+            f"Last error: {e}"
+        )
+
+
+
+@mcp.tool()
 async def web_interactor(
     url: str,
     actions: str = "navigate",
@@ -11321,10 +11451,7 @@ async def web_interactor(
             from playwright.async_api import async_playwright
 
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
-                )
+                browser = await _make_playwright_browser(p, proxy_config, headless=True)
                 context_args = {
                     "user_agent": browser_config["user_agent"],
                     "viewport": browser_config["viewport"],
@@ -11778,6 +11905,321 @@ async def web_interactor(
     except Exception as e:
         session_manager.complete_execution(execution, {"error": str(e)}, "failed")
         return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+
+# ============================================================================
+# WEB RESEARCH ENGINE — recherche + fetch + extraction sans saturer le contexte
+# ============================================================================
+# Dépendances : duckduckgo-search, trafilatura, readability-lxml,
+#               beautifulsoup4, markdownify, httpx, diskcache (déjà présents)
+# ============================================================================
+
+import hashlib as _hashlib
+import textwrap as _textwrap
+import time as _time
+import re as _re_wr
+
+# Cache disque partagé (TTL 1h par défaut)
+_WR_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "kali_mcp_webresearch")
+_wr_cache = __import__("diskcache").Cache(_WR_CACHE_DIR)
+
+_WR_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/149.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+def _wr_cache_key(*parts: str) -> str:
+    return _hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _wr_extract_content(html: str, url: str, max_chars: int = 8000) -> str:
+    """Extrait le contenu textuel propre depuis du HTML brut.
+
+    Stratégie :
+    1. trafilatura  (article extraction, meilleure qualité)
+    2. readability  (fallback : mode lecture Firefox)
+    3. BeautifulSoup strip tags (dernier recours)
+    """
+    # 1. trafilatura
+    try:
+        import trafilatura
+        text = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False,
+            favor_precision=True,
+        )
+        if text and len(text) > 200:
+            return text[:max_chars]
+    except Exception:
+        pass
+
+    # 2. readability
+    try:
+        from readability import Document
+        doc = Document(html)
+        raw = doc.summary()
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw, "lxml")
+        text = soup.get_text(" ", strip=True)
+        if text and len(text) > 100:
+            return text[:max_chars]
+    except Exception:
+        pass
+
+    # 3. BS4 brut
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        text = soup.get_text(" ", strip=True)
+        return _re_wr.sub(r'\s{3,}', '\n\n', text)[:max_chars]
+    except Exception:
+        pass
+
+    return html[:max_chars]
+
+
+def _wr_to_markdown(html: str, max_chars: int = 8000) -> str:
+    """Convertit HTML → Markdown compact."""
+    try:
+        import markdownify
+        md = markdownify.markdownify(html, heading_style="ATX", strip=["script", "style"])
+        md = _re_wr.sub(r'\n{3,}', '\n\n', md).strip()
+        return md[:max_chars]
+    except Exception:
+        return _wr_extract_content(html, "", max_chars)
+
+
+async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
+    """Fetch HTTP async. Retourne (html, content_type)."""
+    import httpx
+    async with httpx.AsyncClient(
+        headers=_WR_HEADERS,
+        follow_redirects=True,
+        timeout=timeout,
+        verify=False,
+    ) as client:
+        r = await client.get(url)
+        ct = r.headers.get("content-type", "text/html")
+        return r.text, ct
+
+
+# ── outil MCP ────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def web_research(
+    query: str,
+    mode: str = "search",
+    url: str = "",
+    max_results: int = 8,
+    max_chars: int = 6000,
+    output_format: str = "markdown",
+    cache_ttl: int = 3600,
+    safe_search: str = "off",
+) -> str:
+    """Recherche web intelligente et fetch sans saturer le contexte.
+
+    Modes :
+      search       — DuckDuckGo multi-résultats, résumés courts
+      fetch        — récupère et extrait une URL unique
+      fetch_bulk   — fetch + extraction de plusieurs URLs (séparées par virgule)
+      deep_search  — search + fetch des top-3 résultats, synthèse consolidée
+      news         — actualités DuckDuckGo (7 derniers jours)
+      cache_stats  — statistiques du cache local
+
+    Args :
+      query        — requête de recherche (modes search/news/deep_search)
+      mode         — search | fetch | fetch_bulk | deep_search | news | cache_stats
+      url          — URL cible (modes fetch / fetch_bulk)
+      max_results  — nombre de résultats (search/news, défaut 8, max 20)
+      max_chars    — taille max du contenu extrait par page (défaut 6000)
+      output_format— markdown | text | json
+      cache_ttl    — durée de cache en secondes (défaut 3600 = 1h, 0 = désactivé)
+      safe_search  — on | moderate | off
+
+    Sorties :
+      - Résultats numérotés avec titre, URL, extrait
+      - Contenu extrait propre (trafilatura → readability → BS4)
+      - Jamais de HTML brut dans le contexte
+    """
+    execution = session_manager.start_execution("web_research", query or url,
+                                                 {"mode": mode, "query": query})
+    try:
+        max_results = min(max(1, max_results), 20)
+        max_chars   = min(max(500, max_chars), 20000)
+        results     = {"mode": mode, "query": query, "url": url, "data": {}}
+
+        # ── cache_stats ──────────────────────────────────────────────────
+        if mode == "cache_stats":
+            results["data"] = {
+                "entries": len(_wr_cache),
+                "size_mb": round(_wr_cache.volume() / 1024 / 1024, 2),
+                "directory": _WR_CACHE_DIR,
+            }
+            session_manager.complete_execution(execution, results)
+            return json.dumps(results, indent=2)
+
+        # ── fetch (URL unique) ───────────────────────────────────────────
+        if mode == "fetch":
+            if not url:
+                return json.dumps({"error": "mode=fetch requires url parameter"})
+            ck = _wr_cache_key("fetch", url, output_format)
+            cached = _wr_cache.get(ck) if cache_ttl > 0 else None
+            if cached:
+                results["data"] = cached
+                results["data"]["cache_hit"] = True
+            else:
+                html, ct = await _wr_fetch_url(url)
+                if "json" in ct:
+                    content = html[:max_chars]
+                elif output_format == "markdown":
+                    content = _wr_to_markdown(html, max_chars)
+                else:
+                    content = _wr_extract_content(html, url, max_chars)
+                entry = {
+                    "url": url,
+                    "content_type": ct,
+                    "chars": len(content),
+                    "content": content,
+                    "cache_hit": False,
+                }
+                if cache_ttl > 0:
+                    _wr_cache.set(ck, entry, expire=cache_ttl)
+                results["data"] = entry
+            session_manager.complete_execution(execution, results)
+            return json.dumps(results, indent=2, ensure_ascii=False)
+
+        # ── fetch_bulk (URLs multiples) ──────────────────────────────────
+        if mode == "fetch_bulk":
+            urls = [u.strip() for u in (url or query).split(",") if u.strip()]
+            if not urls:
+                return json.dumps({"error": "Fournir les URLs dans url= ou query= séparées par virgule"})
+            fetched = []
+            for u in urls[:10]:
+                ck = _wr_cache_key("fetch", u, output_format)
+                cached = _wr_cache.get(ck) if cache_ttl > 0 else None
+                if cached:
+                    fetched.append({**cached, "cache_hit": True})
+                    continue
+                try:
+                    html, ct = await _wr_fetch_url(u)
+                    if output_format == "markdown":
+                        content = _wr_to_markdown(html, max_chars)
+                    else:
+                        content = _wr_extract_content(html, u, max_chars)
+                    entry = {"url": u, "chars": len(content), "content": content}
+                    if cache_ttl > 0:
+                        _wr_cache.set(ck, entry, expire=cache_ttl)
+                    fetched.append(entry)
+                except Exception as e:
+                    fetched.append({"url": u, "error": str(e)})
+            results["data"] = {"pages": fetched, "count": len(fetched)}
+            session_manager.complete_execution(execution, results)
+            return json.dumps(results, indent=2, ensure_ascii=False)
+
+        # ── search ───────────────────────────────────────────────────────
+        if mode in ("search", "news", "deep_search"):
+            if not query:
+                return json.dumps({"error": "mode=search/news/deep_search requires query parameter"})
+            ck = _wr_cache_key(mode, query, str(max_results))
+            cached_search = _wr_cache.get(ck) if cache_ttl > 0 else None
+
+            if cached_search:
+                search_hits = cached_search
+            else:
+                from ddgs import DDGS
+                search_hits = []
+                with DDGS() as ddgs:
+                    if mode == "news":
+                        raw = ddgs.news(
+                            query,
+                            max_results=max_results,
+                            safesearch=safe_search,
+                        )
+                    else:
+                        raw = ddgs.text(
+                            query,
+                            max_results=max_results,
+                            safesearch=safe_search,
+                        )
+                    for i, r in enumerate(raw or []):
+                        search_hits.append({
+                            "n":      i + 1,
+                            "title":  r.get("title", ""),
+                            "url":    r.get("href", r.get("url", "")),
+                            "snippet": _textwrap.shorten(
+                                r.get("body", r.get("excerpt", "")), 300, placeholder="…"
+                            ),
+                            "date":   r.get("date", ""),
+                        })
+                if cache_ttl > 0:
+                    _wr_cache.set(ck, search_hits, expire=cache_ttl)
+
+            # simple search → résumés seulement
+            if mode in ("search", "news"):
+                if output_format == "json":
+                    results["data"] = {"hits": search_hits}
+                else:
+                    lines = [f"**{h['n']}. [{h['title']}]({h['url']})**"]
+                    for h in search_hits:
+                        ts = f" _{h['date']}_" if h.get("date") else ""
+                        lines.append(f"{h['n']}. **[{h['title']}]({h['url']})**{ts}\n   {h['snippet']}")
+                    results["data"] = {"formatted": "\n\n".join(lines), "hits": search_hits}
+                session_manager.complete_execution(execution, results)
+                return json.dumps(results, indent=2, ensure_ascii=False)
+
+            # deep_search → fetch + extraction des top-3
+            if mode == "deep_search":
+                pages = []
+                for hit in search_hits[:3]:
+                    page_url = hit.get("url", "")
+                    if not page_url:
+                        continue
+                    pck = _wr_cache_key("fetch", page_url, "text")
+                    cached_page = _wr_cache.get(pck) if cache_ttl > 0 else None
+                    if cached_page:
+                        pages.append(cached_page)
+                        continue
+                    try:
+                        html, _ = await _wr_fetch_url(page_url, timeout=12)
+                        content = _wr_extract_content(html, page_url, max_chars // 2)
+                        entry = {
+                            "title":   hit["title"],
+                            "url":     page_url,
+                            "snippet": hit["snippet"],
+                            "content": content,
+                        }
+                        if cache_ttl > 0:
+                            _wr_cache.set(pck, entry, expire=cache_ttl)
+                        pages.append(entry)
+                    except Exception as e:
+                        pages.append({"url": page_url, "error": str(e), "snippet": hit["snippet"]})
+
+                results["data"] = {
+                    "search_hits":    search_hits,
+                    "fetched_pages":  pages,
+                    "total_hits":     len(search_hits),
+                    "pages_fetched":  len(pages),
+                }
+                session_manager.complete_execution(execution, results)
+                return json.dumps(results, indent=2, ensure_ascii=False)
+
+        return json.dumps({"error": f"mode inconnu: {mode}. Valeurs: search, fetch, fetch_bulk, deep_search, news, cache_stats"})
+
+    except Exception as e:
+        session_manager.complete_execution(execution, {"error": str(e)}, "failed")
+        return json.dumps({"error": str(e), "traceback": __import__("traceback").format_exc()})
 
 
 # ============================================================================
