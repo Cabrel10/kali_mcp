@@ -12008,23 +12008,56 @@ def _wr_to_markdown(html: str, max_chars: int = 8000) -> str:
         return _wr_extract_content(html, "", max_chars)
 
 
-async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
-    """Fetch HTTP async avec headers réalistes et détection de blocage."""
+# Domaines connus comme lents — timeout étendu automatiquement
+_WR_SLOW_DOMAINS = [
+    "thehackernews.com", "bleepingcomputer.com", "arstechnica.com",
+    "wired.com", "krebsonsecurity.com", "darkreading.com",
+]
+
+def _wr_timeout_for_url(url: str, default: int = 10) -> int:
+    """Timeout plus généreux pour les sites connus comme lents."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        for slow in _WR_SLOW_DOMAINS:
+            if slow in host:
+                return max(default, 20)
+        return default
+    except Exception:
+        return default
+
+
+async def _wr_fetch_url(url: str, timeout: int = 15, retries: int = 1) -> tuple[str, str]:
+    """Fetch HTTP async avec retry/backoff et détection WAF/rate-limit."""
     import httpx
-    async with httpx.AsyncClient(
-        headers=_WR_HEADERS,
-        follow_redirects=True,
-        timeout=timeout,
-        verify=False,
-    ) as client:
-        r = await client.get(url)
-        if r.status_code in (403, 429):
-            raise RuntimeError(
-                f"HTTP {r.status_code} — WAF/rate-limit détecté sur {url}. "
-                "Essaie via Tor: active stealth_ops(level=2)."
-            )
-        ct = r.headers.get("content-type", "text/html")
-        return r.text, ct
+    import asyncio as _aio
+    last_exc: Exception = RuntimeError("fetch failed")
+    effective_timeout = max(timeout, _wr_timeout_for_url(url, timeout))
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(
+                headers=_WR_HEADERS,
+                follow_redirects=True,
+                timeout=effective_timeout,
+                verify=False,
+            ) as client:
+                r = await client.get(url)
+                if r.status_code in (403, 429):
+                    raise RuntimeError(
+                        f"HTTP {r.status_code} — WAF/rate-limit sur {url}. "
+                        "Conseil: stealth_ops(level=2) pour Tor."
+                    )
+                ct = r.headers.get("content-type", "text/html")
+                return r.text, ct
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_exc = e
+            if attempt < retries:
+                await _aio.sleep(1.5 * (attempt + 1))
+                continue
+            raise last_exc from e
+        except Exception:
+            raise
+    raise last_exc
 
 
 # ── outil MCP ────────────────────────────────────────────────────────────────
@@ -12032,7 +12065,7 @@ async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
 @mcp.tool()
 async def web_research(
     query: str = "",
-    mode: str = "search",
+    mode: str = "deep_search",
     url: str = "",
     max_results: int = 8,
     max_chars: int = 6000,
@@ -12214,38 +12247,54 @@ async def web_research(
                 session_manager.complete_execution(execution, results)
                 return json.dumps(results, indent=2, ensure_ascii=False)
 
-            # deep_search → fetch + extraction des top-3
+            # deep_search → fetch PARALLÈLE des top-3 (asyncio.gather)
             if mode == "deep_search":
-                pages = []
-                for hit in search_hits[:3]:
+                import asyncio as _aio
+
+                async def _fetch_one(hit: dict) -> dict:
                     page_url = hit.get("url", "")
                     if not page_url:
-                        continue
+                        return {}
                     pck = _wr_cache_key("fetch", page_url, "text")
                     cached_page = _wr_cache.get(pck) if cache_ttl > 0 else None
                     if cached_page:
-                        pages.append(cached_page)
-                        continue
+                        return {**cached_page, "cache_hit": True}
                     try:
-                        html, _ = await _wr_fetch_url(page_url, timeout=12)
+                        html, _ = await _wr_fetch_url(
+                            page_url,
+                            timeout=_wr_timeout_for_url(page_url, 12),
+                            retries=1,
+                        )
                         content = _wr_extract_content(html, page_url, max_chars // 2)
                         entry = {
-                            "title":   hit["title"],
-                            "url":     page_url,
-                            "snippet": hit["snippet"],
-                            "content": content,
+                            "title":    hit["title"],
+                            "url":      page_url,
+                            "snippet":  hit["snippet"],
+                            "content":  content,
+                            "cache_hit": False,
                         }
                         if cache_ttl > 0:
                             _wr_cache.set(pck, entry, expire=cache_ttl)
-                        pages.append(entry)
+                        return entry
                     except Exception as e:
-                        pages.append({"url": page_url, "error": str(e), "snippet": hit["snippet"]})
+                        return {
+                            "url":     page_url,
+                            "snippet": hit["snippet"],
+                            "error":   str(e)[:200],
+                        }
+
+                # Lance les 3 fetchs EN PARALLÈLE — 3×12s → ~12s au lieu de 36s
+                raw_pages = await _aio.gather(
+                    *[_fetch_one(h) for h in search_hits[:3]]
+                )
+                pages = [p for p in raw_pages if p]
 
                 results["data"] = {
-                    "search_hits":    search_hits,
-                    "fetched_pages":  pages,
-                    "total_hits":     len(search_hits),
-                    "pages_fetched":  len(pages),
+                    "search_hits":   search_hits,
+                    "fetched_pages": pages,
+                    "total_hits":    len(search_hits),
+                    "pages_fetched": len([p for p in pages if "content" in p]),
+                    "backend_used":  backend_used,
                 }
                 session_manager.complete_execution(execution, results)
                 return json.dumps(results, indent=2, ensure_ascii=False)
