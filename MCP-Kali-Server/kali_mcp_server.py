@@ -11926,12 +11926,19 @@ _wr_cache = __import__("diskcache").Cache(_WR_CACHE_DIR)
 
 _WR_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/149.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) "
+        "Gecko/20100101 Firefox/128.0"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+    "Connection": "keep-alive",
 }
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -12002,7 +12009,7 @@ def _wr_to_markdown(html: str, max_chars: int = 8000) -> str:
 
 
 async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
-    """Fetch HTTP async. Retourne (html, content_type)."""
+    """Fetch HTTP async avec headers réalistes et détection de blocage."""
     import httpx
     async with httpx.AsyncClient(
         headers=_WR_HEADERS,
@@ -12011,6 +12018,11 @@ async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
         verify=False,
     ) as client:
         r = await client.get(url)
+        if r.status_code in (403, 429):
+            raise RuntimeError(
+                f"HTTP {r.status_code} — WAF/rate-limit détecté sur {url}. "
+                "Essaie via Tor: active stealth_ops(level=2)."
+            )
         ct = r.headers.get("content-type", "text/html")
         return r.text, ct
 
@@ -12019,7 +12031,7 @@ async def _wr_fetch_url(url: str, timeout: int = 15) -> tuple[str, str]:
 
 @mcp.tool()
 async def web_research(
-    query: str,
+    query: str = "",
     mode: str = "search",
     url: str = "",
     max_results: int = 8,
@@ -12137,32 +12149,55 @@ async def web_research(
 
             if cached_search:
                 search_hits = cached_search
+                backend_used = "cache"
             else:
                 from ddgs import DDGS
+                # Rotation de backends — du plus fiable au moins fiable
+                BACKENDS = ["google", "brave", "mojeek", "startpage",
+                            "duckduckgo", "bing", "yahoo"]
                 search_hits = []
-                with DDGS() as ddgs:
-                    if mode == "news":
-                        raw = ddgs.news(
-                            query,
-                            max_results=max_results,
-                            safesearch=safe_search,
-                        )
-                    else:
-                        raw = ddgs.text(
-                            query,
-                            max_results=max_results,
-                            safesearch=safe_search,
-                        )
-                    for i, r in enumerate(raw or []):
-                        search_hits.append({
-                            "n":      i + 1,
-                            "title":  r.get("title", ""),
-                            "url":    r.get("href", r.get("url", "")),
-                            "snippet": _textwrap.shorten(
-                                r.get("body", r.get("excerpt", "")), 300, placeholder="…"
-                            ),
-                            "date":   r.get("date", ""),
-                        })
+                backend_used = None
+                last_error = None
+                for backend in BACKENDS:
+                    try:
+                        with DDGS(timeout=10) as ddgs:
+                            if mode == "news":
+                                raw = list(ddgs.news(
+                                    query,
+                                    max_results=max_results,
+                                    safesearch=safe_search,
+                                    backend=backend,
+                                ))
+                            else:
+                                raw = list(ddgs.text(
+                                    query,
+                                    max_results=max_results,
+                                    safesearch=safe_search,
+                                    backend=backend,
+                                ))
+                        if raw:
+                            backend_used = backend
+                            for i, r in enumerate(raw):
+                                search_hits.append({
+                                    "n":      i + 1,
+                                    "title":  r.get("title", ""),
+                                    "url":    r.get("href", r.get("url", "")),
+                                    "snippet": _textwrap.shorten(
+                                        r.get("body", r.get("excerpt", "")),
+                                        300, placeholder="…"
+                                    ),
+                                    "date":   r.get("date", ""),
+                                })
+                            break
+                    except Exception as e:
+                        last_error = f"{backend}: {e}"
+                        continue
+                if not search_hits:
+                    return json.dumps({
+                        "error": "Tous les backends ont échoué",
+                        "last_error": last_error,
+                        "hint": "Rate-limit probable. Attends 60s ou active stealth_ops(level=2) pour Tor.",
+                    }, indent=2)
                 if cache_ttl > 0:
                     _wr_cache.set(ck, search_hits, expire=cache_ttl)
 
