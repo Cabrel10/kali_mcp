@@ -12171,7 +12171,7 @@ async def web_research(
                 if output_format == "json":
                     results["data"] = {"hits": search_hits}
                 else:
-                    lines = [f"**{h['n']}. [{h['title']}]({h['url']})**"]
+                    lines = []
                     for h in search_hits:
                         ts = f" _{h['date']}_" if h.get("date") else ""
                         lines.append(f"{h['n']}. **[{h['title']}]({h['url']})**{ts}\n   {h['snippet']}")
