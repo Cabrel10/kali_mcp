@@ -12073,34 +12073,64 @@ async def web_research(
     cache_ttl: int = 3600,
     safe_search: str = "off",
 ) -> str:
-    """Recherche web intelligente et fetch sans saturer le contexte.
+    """Recherche web + fetch intelligent, sans saturer le contexte.
 
-    Modes :
-      search       — DuckDuckGo multi-résultats, résumés courts
-      fetch        — récupère et extrait une URL unique
-      fetch_bulk   — fetch + extraction de plusieurs URLs (séparées par virgule)
-      deep_search  — search + fetch des top-3 résultats, synthèse consolidée
-      news         — actualités DuckDuckGo (7 derniers jours)
-      cache_stats  — statistiques du cache local
+    QUAND UTILISER QUEL MODE :
+
+    - mode="deep_search" (DÉFAUT, recommandé)
+      → Cherche sur le web ET récupère le contenu des top-3 pages.
+      → Utilise ce mode si tu veux une réponse complète sur un sujet.
+      → La réponse contient fetched_pages[i].content : utilise-le directement.
+      → NE re-fais PAS de fetch toi-même sur les URLs retournées.
+      → Si next_action dit "CONTENU DISPONIBLE" → utilise fetched_pages[].content
+      → Si next_action dit "AUCUN CONTENU" → utilise les snippets des search_hits
+
+    - mode="search"
+      → Cherche uniquement, retourne titres + URLs + snippets (pas le contenu).
+      → Utilise si tu veux juste une liste de sources à présenter.
+
+    - mode="fetch"
+      → Récupère UNE URL précise et extrait son contenu (pas de recherche).
+      → Utilise si tu connais déjà l'URL exacte.
+      → query est optionnel en mode fetch.
+
+    - mode="auto"
+      → Choisit automatiquement selon la requête (URL → fetch, sinon deep_search).
+
+    - mode="news"   → Actualités des 7 derniers jours.
+    - mode="fetch_bulk" → Fetch plusieurs URLs (séparées par virgule dans url=).
+    - mode="cache_stats" → Diagnostic du cache local.
 
     Args :
-      query        — requête de recherche (modes search/news/deep_search)
-      mode         — search | fetch | fetch_bulk | deep_search | news | cache_stats
+      query        — requête de recherche (optionnel pour fetch)
+      mode         — auto | deep_search | search | fetch | fetch_bulk | news | cache_stats
       url          — URL cible (modes fetch / fetch_bulk)
-      max_results  — nombre de résultats (search/news, défaut 8, max 20)
+      max_results  — nombre de résultats (défaut 8, max 20)
       max_chars    — taille max du contenu extrait par page (défaut 6000)
       output_format— markdown | text | json
-      cache_ttl    — durée de cache en secondes (défaut 3600 = 1h, 0 = désactivé)
+      cache_ttl    — durée de cache en secondes (défaut 3600, 0 = désactivé)
       safe_search  — on | moderate | off
 
-    Sorties :
-      - Résultats numérotés avec titre, URL, extrait
-      - Contenu extrait propre (trafilatura → readability → BS4)
-      - Jamais de HTML brut dans le contexte
+    IMPORTANT : jamais de HTML brut dans la sortie.
+    Si fetched_pages[].content est présent → ne pas re-fetcher les URLs.
     """
     execution = session_manager.start_execution("web_research", query or url,
                                                  {"mode": mode, "query": query})
     try:
+        # ── mode=auto : choix intelligent selon la requête ───────────────
+        if mode == "auto":
+            target = query or url
+            if target.startswith(("http://", "https://")):
+                mode = "fetch"
+                if not url:
+                    url = target
+            elif any(kw in target.lower() for kw in
+                     ["comment", "pourquoi", "explique", "trouve", "cherche",
+                      "how", "what", "why", "find", "search", "best", "top"]):
+                mode = "deep_search"
+            else:
+                mode = "deep_search"   # par défaut si doute
+
         max_results = min(max(1, max_results), 20)
         max_chars   = min(max(500, max_chars), 20000)
         results     = {"mode": mode, "query": query, "url": url, "data": {}}
@@ -12289,13 +12319,42 @@ async def web_research(
                 )
                 pages = [p for p in raw_pages if p]
 
+                pages_ok     = [p for p in pages if "content" in p]
+                pages_failed = [p for p in pages if "error" in p]
+
+                if pages_ok:
+                    next_action = (
+                        f"CONTENU DISPONIBLE — utilise directement fetched_pages[i].content. "
+                        f"{len(pages_ok)}/{len(pages)} pages récupérées. "
+                        f"Ne re-fetche PAS les URLs, le contenu est déjà extrait et nettoyé."
+                    )
+                    fallback_reason = None
+                else:
+                    next_action = (
+                        f"AUCUN CONTENU — les {len(pages_failed)} fetchs ont échoué "
+                        f"(timeout/WAF/réseau restreint). "
+                        f"Les URLs dans search_hits sont valides. "
+                        f"Utilise uniquement les snippets pour répondre."
+                    )
+                    fallback_reason = (
+                        f"deep_search a échoué à fetcher les pages — retour au niveau search. "
+                        f"Causes typiques : timeout réseau, WAF/Cloudflare, sandbox restrictif. "
+                        f"Solution : utilise mode=fetch sur UNE URL précise, "
+                        f"ou relance depuis un réseau sans restriction."
+                    )
+
                 results["data"] = {
-                    "search_hits":   search_hits,
-                    "fetched_pages": pages,
-                    "total_hits":    len(search_hits),
-                    "pages_fetched": len([p for p in pages if "content" in p]),
-                    "backend_used":  backend_used,
+                    "search_hits":    search_hits,
+                    "fetched_pages":  pages,
+                    "total_hits":     len(search_hits),
+                    "pages_fetched":  len(pages_ok),
+                    "pages_failed":   len(pages_failed),
+                    "backend_used":   backend_used,
+                    "next_action":    next_action,
                 }
+                if fallback_reason:
+                    results["data"]["fallback_reason"] = fallback_reason
+
                 session_manager.complete_execution(execution, results)
                 return json.dumps(results, indent=2, ensure_ascii=False)
 
