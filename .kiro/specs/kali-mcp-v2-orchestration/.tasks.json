@@ -1,0 +1,165 @@
+{
+  "metadata": {
+    "specId": "kali-mcp-v2-orchestration",
+    "workflowType": "design-first",
+    "totalTasks": 33,
+    "totalWaves": 15,
+    "estimatedEffortDays": 18,
+    "techStack": {
+      "executionModel": "sync (ThreadPoolExecutor)",
+      "graphLibrary": "networkx",
+      "httpClient": "requests",
+      "testFramework": "pytest",
+      "storageBackend": "in-memory dict + JSON export"
+    }
+  },
+  "waves": [
+    {
+      "waveId": 0,
+      "name": "Foundational Data Structures",
+      "tasks": [
+        {
+          "id": "TASK-TR-01",
+          "title": "Define Tool, Capability, Parameter, HealthStatus Data Structures",
+          "layer": "Tool Registry",
+          "description": "Implement @dataclass Tool with fields: id, name, category, capabilities, required_params, optional_params, timeout_seconds, rate_limit_delay_ms, max_concurrent_instances, health_status, version, etc.",
+          "subtasks": [
+            "Implement @dataclass Tool",
+            "Implement @dataclass Capability",
+            "Implement @dataclass Parameter",
+            "Implement @enum HealthStatus",
+            "Verify all structures compile and are instantiable"
+          ],
+          "acceptanceCriteria": [
+            "All data structures defined as @dataclass",
+            "Tool has at least 1 Capability",
+            "Parameter has type validation (STRING, INTEGER, BOOLEAN, ENUM, FILE_PATH)",
+            "HealthStatus enum has 3 values (HEALTHY, DEGRADED, OFFLINE)",
+            "All structures instantiable with test data"
+          ],
+          "verificationSteps": [
+            "python3 -c 'from kali_mcp_server import Tool, Capability, Parameter, HealthStatus; t = Tool(...); assert t.id is not None'",
+            "Verify Parameter validation_regex works",
+            "Create Tool with 3 capabilities"
+          ],
+          "estimatedHours": 2,
+          "priority": "CRITICAL",
+          "dependencies": [],
+          "requirements": ["REQ-TR-01"],
+          "status": "NOT_STARTED"
+        },
+        {
+          "id": "TASK-CE-01",
+          "title": "Define CapabilityQuery, CapabilityMatch, and Supporting Enums",
+          "layer": "Capability Engine",
+          "description": "Implement @dataclass CapabilityQuery, CapabilityMatch, and enums (TargetType, ObjectiveType, QueryConstraints, ExecutionCost)",
+          "subtasks": [
+            "Implement @dataclass CapabilityQuery",
+            "Implement @dataclass CapabilityMatch",
+            "Implement @enum TargetType (WEB_APP, API, NETWORK, CLOUD, etc.)",
+            "Implement @enum ObjectiveType (RECON, VULN_ASSESS, EXPLOIT, etc.)",
+            "Implement @dataclass QueryConstraints",
+            "Implement @dataclass ExecutionCost"
+          ],
+          "acceptanceCriteria": [
+            "CapabilityQuery contains target_type, detected_tech_stack, objective, constraints",
+            "CapabilityMatch contains tool_id, matching_capabilities, relevance_score (0.0-1.0), evidence_potential",
+            "TargetType and ObjectiveType enums have all required values",
+            "All structures instantiable"
+          ],
+          "verificationSteps": [
+            "python3 -c 'from kali_mcp_server import CapabilityQuery, TargetType, ObjectiveType; q = CapabilityQuery(...)'",
+            "Verify relevance_score in [0.0, 1.0]",
+            "Create query with multiple objectives"
+          ],
+          "estimatedHours": 2,
+          "priority": "CRITICAL",
+          "dependencies": [],
+          "requirements": ["REQ-CE-01"],
+          "status": "NOT_STARTED"
+        }
+      ]
+    },
+    {
+      "waveId": 1,
+      "name": "Core Registry and Capability Matching",
+      "tasks": [
+        {
+          "id": "TASK-TR-02",
+          "title": "Implement ToolRegistry Class and Core Methods",
+          "layer": "Tool Registry",
+          "description": "Create ToolRegistry with registration and querying",
+          "subtasks": [
+            "Create ToolRegistry class with internal registry dict",
+            "Implement register(tool: Tool) → success|error",
+            "Implement get_tool_by_id(tool_id: UUID) → Tool|error",
+            "Implement query_tools_by_capability_type()",
+            "Implement query_tools_by_tech_stack()",
+            "Implement query_tools_with_evidence_level()"
+          ],
+          "acceptanceCriteria": [
+            "Tools registerable without duplicates",
+            "Duplicate ID check returns error",
+            "Queries return correct subsets",
+            "get_tool_by_id() completes in < 1ms (constant time)"
+          ],
+          "verificationSteps": [
+            "Register 10 tools, query each by capability, verify filtering",
+            "Register tool with same UUID twice, verify error",
+            "Test 1000 queries on 50 tools, verify all < 1ms"
+          ],
+          "estimatedHours": 4,
+          "priority": "CRITICAL",
+          "dependencies": ["TASK-TR-01"],
+          "requirements": ["REQ-TR-01", "REQ-TR-02"],
+          "status": "NOT_STARTED"
+        },
+        {
+          "id": "TASK-CE-02",
+          "title": "Implement CapabilityEngine Scoring and get_applicable_tools()",
+          "layer": "Capability Engine",
+          "description": "Implement get_applicable_tools() with relevance scoring",
+          "subtasks": [
+            "Create CapabilityEngine class with ToolRegistry reference",
+            "Implement get_applicable_tools(query) → sorted List[CapabilityMatch]",
+            "Implement scoring formula: (tech_stack * 0.3) + (objective * 0.4) + (evidence * 0.3)",
+            "Filter by health_status != OFFLINE",
+            "Filter by relevance_score > 0.2",
+            "Sort by relevance_score descending",
+            "Apply max_tools constraint"
+          ],
+          "acceptanceCriteria": [
+            "Tools ranked 0.0-1.0",
+            "Scoring weights correct (0.3, 0.4, 0.3)",
+            "OFFLINE tools filtered out",
+            "Results sorted descending",
+            "max_tools limit respected"
+          ],
+          "verificationSteps": [
+            "Query NETWORK_RECON on WEB_APP (Java, Spring) → recon tools rank higher",
+            "Query with max_tools=3 → return max 3 tools",
+            "Query with all OFFLINE tools → return empty list"
+          ],
+          "estimatedHours": 4,
+          "priority": "CRITICAL",
+          "dependencies": ["TASK-TR-02", "TASK-CE-01"],
+          "requirements": ["REQ-CE-02", "REQ-CE-04"],
+          "status": "NOT_STARTED"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "byPriority": {
+      "CRITICAL": 14,
+      "HIGH": 12,
+      "MEDIUM": 7
+    },
+    "byPhase": {
+      "phase1_layers1-4": 19,
+      "phase2_layers5-6": 13,
+      "phase3_layers7-8": 1
+    },
+    "criticalPath": ["TASK-TR-01", "TASK-TR-02", "TASK-CE-02", "TASK-ORCH-01", "TASK-ORCH-02", "TASK-BE-02", "TASK-BE-04", "TASK-EG-02", "TASK-OS-01", "TASK-INT-01"]
+  }
+}

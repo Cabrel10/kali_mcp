@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "kali-mcp-server": {
+      "command": "/home/morningstar/miniconda3/envs/trading_env/bin/python3",
+      "args": [
+        "MCP-Kali-Server/kali_mcp_server.py"
+      ],
+      "cwd": "/home/morningstar/Bureau/kali_mcp",
+      "timeout": 900000,
+      "trust": true,
+      "autoApprove": [
+        "session_ops",
+        "recon_engine",
+        "web_assault",
+        "injection_matrix",
+        "credential_cracker",
+        "network_dominator",
+        "wireless_audit",
+        "cloud_siege",
+        "ad_annihilator",
+        "api_breaker",
+        "vuln_scanner_ultra",
+        "exploit_engine",
+        "auth_destroyer",
+        "ssrf_hunter",
+        "crypto_forensics",
+        "osint_harvester",
+        "post_exploit_ops",
+        "reporting_engine",
+        "autopilot_commander",
+        "payload_factory",
+        "forensics_engine",
+        "race_condition_tester",
+        "protocol_deep_scan",
+        "smart_fuzz_engine",
+        "honeypot_detector",
+        "auto_exploit",
+        "web_interactor",
+        "web_health_check",
+        "extract_api_routes",
+        "verify_vulnerability",
+        "auto_curl_suggestion"
+      ]
+    }
+  }
+}
